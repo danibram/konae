@@ -386,7 +386,7 @@ pub fn operator_command() -> Result<bool> {
         mcp.busy_timeout(std::time::Duration::from_secs(5))?;
         revoke_delegations(&mut mcp, &owner)?;
     }
-    super::recovery::record_offline(&root, super::recovery::Entry::new("clerk-owner", None, &owner, "suspended"))?;
+    super::super::recovery::record_offline(&root, super::super::recovery::Entry::new("clerk-owner", None, &owner, "suspended"))?;
     pending.finish()?;
     println!(
         "Suspended owner {owner}. Projects and app accounts remain available to the installation operator."
@@ -441,7 +441,7 @@ mod tests {
             ISSUER.into(),
             vec![ORIGIN.into()],
             vec!["user_alice".into(), "user_bob".into()],
-            include_str!("../../test-fixtures/clerk/jwks.json"),
+            include_str!("../../../test-fixtures/clerk/jwks.json"),
         )
         .unwrap()
     }
@@ -457,7 +457,7 @@ mod tests {
     }
     fn signed(header: Value, claims: Value) -> String {
         let key =
-            RsaKeyPair::from_pkcs8(include_bytes!("../../test-fixtures/clerk/test-key.pk8")).unwrap();
+            RsaKeyPair::from_pkcs8(include_bytes!("../../../test-fixtures/clerk/test-key.pk8")).unwrap();
         let message = format!(
             "{}.{}",
             encode(header.to_string().as_bytes()),
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn configuration_rejects_unsafe_origins_and_ambiguous_keys() {
-        let jwks = include_str!("../../test-fixtures/clerk/jwks.json");
+        let jwks = include_str!("../../../test-fixtures/clerk/jwks.json");
         for issuer in [
             "http://issuer.example",
             "https://issuer.example/",

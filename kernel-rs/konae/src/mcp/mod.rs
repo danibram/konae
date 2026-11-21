@@ -1,7 +1,14 @@
 use super::*;
 use super::runtime::*;
-use super::transfers::{ADMIN_CHUNK, ADMIN_MCP_BODY_BYTES, MAX_TRANSFER, download, transfer, transfer_call, transfer_path};
+use super::transfers::{ADMIN_CHUNK, ADMIN_MCP_BODY_BYTES, MAX_TRANSFER, transfer, transfer_call, transfer_path};
 use rusqlite::params;
+use crate::projects::sources::{ensure_no_component, validate_sources};
+#[cfg(test)]
+use crate::projects::release::source_revision_refusal;
+#[cfg(test)]
+use crate::projects::release::restore_import_after_release_failure;
+#[cfg(test)]
+use crate::projects::sources::merge_source_delta;
 
 
 fn admin_body_refused() -> String {
@@ -31,51 +38,6 @@ pub fn routes() -> Router<Konae> {
         .route("/_konae/owner/session", get(owner_session))
         .route("/_konae/owner/clerk", post(owner_clerk))
 }
-
-/// Remembers which export each project imported, so a retried import
-/// returns its first receipt.
-fn install_imports(db: &Connection) -> Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS package_imports(package_id TEXT NOT NULL, project TEXT NOT NULL, plan TEXT NOT NULL, PRIMARY KEY(package_id, project));",
-    )?;
-    Ok(())
-}
-
-
-/// A second `release_plan` with an export this project already imported
-/// gets the first plan and its receipt instead of a refusal.
-fn replay_import(state: &Konae, owner: &Owner, project: &str, package_id: &str) -> Result<Option<Value>> {
-    let db = store(state)?;
-    let replay: Option<(String, String)> = db
-        .query_row(
-            "SELECT i.plan, p.receipt FROM package_imports i JOIN plans p ON p.id=i.plan
-             WHERE i.package_id=?1 AND i.project=?2 AND p.owner=?3 AND p.receipt IS NOT NULL",
-            params![package_id, project, owner.id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    Ok(match replay {
-        Some((plan, receipt)) => Some(json!({
-            "planId": plan,
-            "projectId": project,
-            "applied": true,
-            "packageId": package_id,
-            "receipt": serde_json::from_str::<Value>(&receipt)?,
-        })),
-        None => None,
-    })
-}
-
-
-fn remember_import(state: &Konae, package_id: &str, project: &str, plan: &str) -> Result<()> {
-    store(state)?.execute(
-        "INSERT INTO package_imports(package_id,project,plan) VALUES(?1,?2,?3)
-         ON CONFLICT(package_id,project) DO UPDATE SET plan=excluded.plan",
-        params![package_id, project, plan],
-    )?;
-    Ok(())
-}
-
 
 /// Tools that change nothing a paused app serves. Every other tool that
 /// names a paused Deployment, its project or one of its plans is refused.
@@ -221,10 +183,6 @@ pub(super) fn store(state: &Konae) -> Result<Connection> {
     store_at(&state.data_root)
 }
 
-fn source_revision_refusal(observed: u64) -> anyhow::Error {
-    super::refusal::refuse("sources.revision-conflict", format!("Sources changed since revision {observed}. Run konae pull --dir <folder>, then publish again.")).into()
-}
-
 fn store_at(root: &Path) -> Result<Connection> {
     let db = Connection::open(root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -277,8 +235,8 @@ fn store_at(root: &Path) -> Result<Connection> {
     let has_cleanup_uploads = db.prepare("PRAGMA table_info(plans)")?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?.iter().any(|name| name == "cleanup_uploads");
     if !has_cleanup_uploads { db.execute("ALTER TABLE plans ADD COLUMN cleanup_uploads TEXT NOT NULL DEFAULT '[]'", [])?; }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
-    super::oauth::install(&db)?;
-    install_imports(&db)?;
+    super::owners::oauth::install(&db)?;
+    super::projects::release::install_imports(&db)?;
     Ok(db)
 }
 
@@ -309,7 +267,7 @@ impl Owner {
 
 
 pub(super) fn authenticate_owner(state: &Konae, headers: &HeaderMap) -> Result<Option<Owner>> {
-    let clerk = super::clerk::ClerkConfig::from_env()?;
+    let clerk = super::owners::clerk::ClerkConfig::from_env()?;
     if let Some(token) = bearer(headers) {
         let record: Option<(String, String, String, u64, Option<String>)> = store(state)?
             .query_row(
@@ -328,7 +286,7 @@ pub(super) fn authenticate_owner(state: &Konae, headers: &HeaderMap) -> Result<O
             .map(|r| {
                 if let Some(config) = &clerk {
                     let db = Connection::open(state.data_root.join("owners.sqlite"))?;
-                    anyhow::ensure!(super::clerk::owner_allowed(&db, config, &r.0)?, "Owner is not admitted.");
+                    anyhow::ensure!(super::owners::clerk::owner_allowed(&db, config, &r.0)?, "Owner is not admitted.");
                 } else {
                     anyhow::ensure!(super::owners::creator_store(state)?.is_active(&r.0)?, "Owner is not active.");
                 }
@@ -345,7 +303,7 @@ pub(super) fn authenticate_owner(state: &Konae, headers: &HeaderMap) -> Result<O
     let cookie = cookie_value(headers, owner_cookie_name(state));
     let user = if let Some(config) = &clerk {
         let db = Connection::open(state.data_root.join("owners.sqlite"))?;
-        super::clerk::authenticate(&db, config, cookie.as_deref(), (now_ms() / 1000) as i64)?
+        super::owners::clerk::authenticate(&db, config, cookie.as_deref(), (now_ms() / 1000) as i64)?
     } else {
         super::owners::creator_store(state)?.authenticate(cookie.as_deref())?
     };
@@ -392,7 +350,7 @@ fn owner_unauthorized(state: &Konae, headers: &HeaderMap) -> Response {
     else {
         return refused;
     };
-    let login = format!("{}{}", origin(state, headers), super::oauth::owner_login_path());
+    let login = format!("{}{}", origin(state, headers), super::owners::oauth::owner_login_path());
     let when = kernel::notify::format_now(expires);
     let message = if client.is_some() {
         format!("This Konae sign-in expired at {when}. Run konae login --browser for the CLI, or reconnect your MCP client; either opens {login}.")
@@ -504,179 +462,6 @@ async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
     }
 }
 
-fn validate_sources(source: &Value, id: &str) -> Result<()> {
-    let string = |value: &Value, max: usize| value.as_str().is_some_and(|s| s.len() <= max);
-    anyhow::ensure!(source["id"] == id && string(&source["name"], 80)
-        && source["name"].as_str().is_some_and(|s| !s.trim().is_empty())
-        && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
-    anyhow::ensure!(source["files"].is_object(), "Invalid project files. Send files as an object of each path inside app/ and its contents.");
-    super::sources::check_files(&super::sources::decode_document(source)?)?;
-    let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
-    anyhow::ensure!(directories.len() <= super::sources::MAX_FILES && directories.iter().all(|entry| entry.as_str().is_some_and(super::sources::holds)), "Invalid project directories.");
-    let manifest = &source["manifest"];
-    anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or("")), "Invalid project manifest. Send version 1 and visibility \"public\" or \"private\".");
-    Ok(())
-}
-
-
-
-fn merge_source_delta(current: &Value, delta: &Value, id: &str) -> Result<Value> {
-    anyhow::ensure!(delta["format"] == "delta", "Invalid source update format.");
-    let mut merged = current.clone();
-    let mut files = merged["files"].as_object().cloned().ok_or_else(|| anyhow::anyhow!("Saved project files are unavailable."))?;
-    let mut encodings = merged["encodings"].as_object().cloned().unwrap_or_default();
-    let changed = delta["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid changed project files."))?;
-    let changed_encodings = delta["encodings"].as_object();
-    if let Some(encodings) = changed_encodings {
-        anyhow::ensure!(encodings.iter().all(|(path, encoding)| changed.contains_key(path) && encoding == "base64"), "Invalid changed project file encoding.");
-    }
-    for (path, contents) in changed {
-        anyhow::ensure!(contents.is_string(), "Invalid changed project file.");
-        files.insert(path.clone(), contents.clone());
-        if changed_encodings.is_some_and(|items| items.get(path).is_some()) {
-            encodings.insert(path.clone(), json!("base64"));
-        } else {
-            encodings.remove(path);
-        }
-    }
-    let removals = delta["removedPaths"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid removed project paths."))?;
-    for path in removals {
-        let path = path.as_str().ok_or_else(|| anyhow::anyhow!("Invalid removed project path."))?;
-        files.remove(path);
-        encodings.remove(path);
-    }
-    merged["files"] = Value::Object(files);
-    if encodings.is_empty() { merged.as_object_mut().unwrap().remove("encodings"); }
-    else { merged["encodings"] = Value::Object(encodings); }
-    let metadata = delta["metadata"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project metadata update."))?;
-    for key in ["name", "slug", "directories", "manifest", "updatedAt"] {
-        let value = metadata.get(key).ok_or_else(|| anyhow::anyhow!("Source metadata is missing {key}."))?;
-        merged[key] = value.clone();
-    }
-    merged["id"] = json!(id);
-    Ok(merged)
-}
-
-
-
-fn ensure_no_component(upload: &Value) -> Result<()> {
-    match upload["component"].as_str() {
-        Some(component) => anyhow::bail!("This upload names the {component} component of an export. Upload sources and releases without a component."),
-        None => Ok(()),
-    }
-}
-
-
-
-async fn release_bytes(state: &Konae, upload: &Value, transfer_id: &str) -> Result<Vec<u8>> {
-    ensure_no_component(upload)?;
-    let size = upload["size"].as_u64().unwrap_or(0) as usize;
-    anyhow::ensure!(size <= super::size::RELEASE_BYTES, "{}", super::size::release_refused(size));
-    Ok(tokio::fs::read(transfer_path(state, transfer_id)?).await?)
-}
-
-
-
-async fn release_upload_ids(
-    state: &Konae,
-    principal: &str,
-    release_id: &str,
-    sources_id: Option<&str>,
-) -> Result<Vec<String>> {
-    let mut ids = Vec::new();
-    if let Ok(upload) = transfer(state, principal, &json!({"transferId": release_id})) {
-        let payload: Value = serde_json::from_slice(&release_bytes(state, &upload, release_id).await?)?;
-        if let Some(components) = payload["initialPackage"]["components"].as_object() {
-            ids.extend(components.values().filter_map(Value::as_str).map(str::to_owned));
-        }
-    }
-    if let Some(sources) = sources_id {
-        ids.push(sources.to_owned());
-    }
-    ids.push(release_id.to_owned());
-    Ok(ids)
-}
-
-async fn cleanup_release_uploads(state: &Konae, owner: &Owner, principal: &str, plan_id: &str) -> Result<()> {
-    let (release_id, sources_id, recorded_ids): (String, Option<String>, String) = {
-        let db = store(state)?;
-        db.query_row("SELECT transfer,sources,cleanup_uploads FROM plans WHERE id=?1 AND owner=?2", params![plan_id, owner.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-    };
-
-
-    let mut ids: Vec<String> = serde_json::from_str(&recorded_ids)?;
-    if ids.is_empty() {
-        ids = release_upload_ids(state, principal, &release_id, sources_id.as_deref()).await?;
-    }
-    for transfer_id in ids {
-        let still_available = super::transfers::completed_upload(&state.kernel, principal, &transfer_id)?;
-        if still_available {
-            transfer_call(state, principal, "transfer_cancel", &json!({"transferId":transfer_id}), false).await?;
-        }
-    }
-    Ok(())
-}
-
-fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, transfer_id: &str) -> Result<(Option<String>, bool)> {
-    if let Some(upload) = super::transfers::owned_transfer(&state.kernel, principal, &json!({"transferId":transfer_id}))? {
-        return Ok((upload["projectId"].as_str().map(str::to_owned), true));
-    }
-    let db = store(state)?;
-    let mut query = db.prepare("SELECT project,transfer,sources,cleanup_uploads FROM plans WHERE owner=?1")?;
-    let plans = query.query_map([&owner.id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (project, release_id, sources_id, cleanup_json) in plans {
-        let cleanup_ids: Vec<String> = serde_json::from_str(&cleanup_json)?;
-        if release_id == transfer_id || sources_id.as_deref() == Some(transfer_id) || cleanup_ids.iter().any(|id| id == transfer_id) {
-            return Ok((Some(project), false));
-        }
-    }
-    Ok((None, false))
-}
-
-
-#[derive(serde::Deserialize)]
-struct ReleaseSources {
-    files: HashMap<String, String>,
-    #[serde(default)]
-    encodings: HashMap<String, String>,
-    #[serde(default)]
-    directories: Vec<String>,
-}
-
-
-
-
-
-
-async fn release_input(state: &Konae, principal: &str, transfer_id: &str, sources_id: Option<&str>, artifact_id: Option<&str>) -> Result<DeployInput> {
-    let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
-    anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload", "Upload is not complete.");
-    let mut payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
-    if let Some(artifact_id) = artifact_id {
-        anyhow::ensure!(payload.get("artifact").is_none(), "Send artifact in the release JSON or artifactTransferId, not both.");
-        let project_id = payload["project"]["id"].as_str().ok_or_else(|| anyhow::anyhow!("Release has no project ID."))?;
-        let artifact_upload = transfer(state, principal, &json!({"transferId": artifact_id}))?;
-        anyhow::ensure!(artifact_upload["complete"] == true && artifact_upload["direction"] == "upload" && artifact_upload["projectId"] == project_id, "Completed artifact upload for this project required.");
-        ensure_no_component(&artifact_upload)?;
-        payload["artifact"] = serde_json::from_slice(&tokio::fs::read(transfer_path(state, artifact_id)?).await?)?;
-    }
-    let mut input: DeployInput = kernel::functions::parse_deploy_input(payload)?;
-    anyhow::ensure!(upload["projectId"] == input.project.id, "Artifact belongs to another project.");
-    if let Some(sources_id) = sources_id {
-        anyhow::ensure!(input.project.files.is_empty() && input.project.encodings.is_empty(), "Send the files of app/ in sourcesTransferId or in project.files, not in both.");
-        let upload = transfer(state, principal, &json!({"transferId": sources_id}))?;
-        anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == input.project.id, "Completed upload of the sources for this project required.");
-        ensure_no_component(&upload)?;
-        let bytes = tokio::fs::read(transfer_path(state, sources_id)?).await?;
-        let sources: ReleaseSources = serde_json::from_slice(&bytes).map_err(|error_value| anyhow::anyhow!("The sources upload must be the JSON {{ files, encodings }}: {error_value}"))?;
-        input.project.files = sources.files;
-        input.project.encodings = sources.encodings;
-        input.project.directories = sources.directories;
-    }
-    Ok(input)
-}
-
 pub(super) async fn owned_deployment(
     state: &Konae,
     owner: &Owner,
@@ -765,7 +550,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"projectId":text}), &["projectId"], true),
         tool("modules_read", "Read every module's state and options. Read back module_set with this tool.", json!({"projectId":text}), &["projectId"], true),
     ]);
-    let module_registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json")).expect("module registry is valid JSON");
+    let module_registry: Value = serde_json::from_str(include_str!("../../../kernel/src/modules.json")).expect("module registry is valid JSON");
     if owner.scopes.iter().any(|scope| module_registry["modules"].as_object().into_iter().flatten().any(|(_, module)| module["switch"] == true && module["permission"] == scope.as_str())) {
         tools.push(tool("module_set", "Turn a module on or off, or change its options. Pass the state returned by modules_read as expected. Read the result back with modules_read.", json!({"projectId":text,"module":text,"on":{"type":"boolean"},"options":{"type":"object"},"expected":{"type":"object"}}), &["projectId", "module"], false));
     }
@@ -1043,7 +828,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             "Cross-origin or unrecognized-host MCP request rejected.",
         );
     }
-    if !super::oauth::valid_owner_host(&state, &headers).await {
+    if !super::owners::oauth::valid_owner_host(&state, &headers).await {
         return error(
             StatusCode::FORBIDDEN,
             "Administration is unavailable on app hosts.",
@@ -1146,7 +931,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 let (project, live_transfer) = if name == "transfer_begin" {
                     (arguments["projectId"].as_str().map(str::to_owned), false)
                 } else if name == "transfer_cancel" {
-                    transfer_project_for_owner(&state, &owner, &principal, arguments["transferId"].as_str().unwrap_or_default()).unwrap_or((None, false))
+                    super::projects::release::transfer_project_for_owner(&state, &owner, &principal, arguments["transferId"].as_str().unwrap_or_default()).unwrap_or((None, false))
                 } else {
                     (transfer(&state, &principal, &arguments)
                         .ok()
@@ -1201,7 +986,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             };
             if name == "release_apply" && result.is_ok() {
                 if let Some(plan_id) = arguments["planId"].as_str() {
-                    if let Err(error_value) = cleanup_release_uploads(&state, &owner, &principal, plan_id).await {
+                    if let Err(error_value) = super::projects::release::cleanup_release_uploads(&state, &owner, &principal, plan_id).await {
                         result = Err(error_value);
                     }
                 }
@@ -1526,114 +1311,8 @@ async fn admin_call(
             let sources_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"deployment":deployment}))
         }
-        "project_sources_read" => {
-            let id = a["projectId"].as_str().unwrap();
-            owned_project(state, owner, id, "read")?;
-            let request_id = a["requestId"].as_str();
-            let cancel_request_id = a["cancelRequestId"].as_str();
-            anyhow::ensure!(request_id.is_none() || cancel_request_id.is_none(), "Choose requestId or cancelRequestId.");
-            for request_id in request_id.into_iter().chain(cancel_request_id) {
-                anyhow::ensure!(
-                    !request_id.is_empty() && request_id.len() <= 64 && request_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
-                    "Invalid source read request ID."
-                );
-            }
-            let owner_principal = format!("owner:{}", owner.id);
-            if let Some(request_id) = cancel_request_id {
-                let _guard = database_lock(state, &format!("project:{id}")).await;
-                let db = store(state)?;
-                db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
-                let existing: Option<(String, Option<String>)> = db
-                    .query_row(
-                        "SELECT project,transfer FROM source_read_requests WHERE owner=?1 AND request_id=?2",
-                        params![owner.id, request_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .optional()?;
-                if let Some((project, transfer_id)) = existing {
-                    anyhow::ensure!(project == id, "Source read request ID belongs to another project.");
-                    if let Some(transfer_id) = transfer_id {
-                        let _ = transfer_call(state, &owner_principal, "transfer_cancel", &json!({"transferId":transfer_id}), false).await;
-                    }
-                }
-                db.execute(
-                    "INSERT INTO source_read_requests(owner,request_id,project,transfer,cancelled,expires) VALUES(?1,?2,?3,NULL,1,?4) ON CONFLICT(owner,request_id) DO UPDATE SET cancelled=1,expires=excluded.expires",
-                    params![owner.id, request_id, id, now_ms().saturating_add(300_000)],
-                )?;
-                return Ok(json!({"cancelled":true}));
-            }
-
-            let _guard = database_lock(state, &format!("project:{id}")).await;
-            let db = store(state)?;
-            db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
-            let revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
-            if a["metadataOnly"] == true {
-                return match super::sources::read_metadata(&state.data_root, id).await? {
-                    Some(project) => Ok(json!({"revision":revision,"project":project,"transfer":null})),
-                    None => Ok(json!({"revision":0,"transfer":null})),
-                };
-            }
-            if let Some(request_id) = request_id {
-                let existing: Option<(String, bool)> = db
-                    .query_row(
-                        "SELECT project,cancelled FROM source_read_requests WHERE owner=?1 AND request_id=?2",
-                        params![owner.id, request_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .optional()?;
-                if let Some((project, cancelled)) = existing {
-                    anyhow::ensure!(project == id, "Source read request ID belongs to another project.");
-                    if cancelled { return Ok(json!({"revision":revision,"transfer":null,"cancelled":true})); }
-                    anyhow::bail!("Source read request ID is already active.");
-                }
-            }
-            match super::sources::read(&state.data_root, id).await? {
-                Some(source) => {
-                    let transfer = download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?;
-                    if let Some(request_id) = request_id {
-                        db.execute(
-                            "INSERT INTO source_read_requests(owner,request_id,project,transfer,cancelled,expires) VALUES(?1,?2,?3,?4,0,?5)",
-                            params![owner.id, request_id, id, transfer["transferId"].as_str(), now_ms().saturating_add(300_000)],
-                        )?;
-                    }
-                    Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":transfer}))
-                }
-                None => Ok(json!({"revision":0,"transfer":null})),
-            }
-        }
-        "project_sources_save" => {
-            let id = a["projectId"].as_str().unwrap();
-            let transfer_id = a["transferId"].as_str().unwrap();
-            let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
-            anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == id, "Completed upload for this project required.");
-            ensure_no_component(&upload)?;
-            let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
-            let update: Value = serde_json::from_slice(&bytes)?;
-            let _guard = database_lock(state, &format!("project:{id}")).await;
-            owned_project(state, owner, id, "write")?;
-            let current: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
-            anyhow::ensure!(current == a["expectedRevision"].as_u64().unwrap(), "Source revision conflict. Reload the saved project before writing.");
-            let previous = super::sources::read(&state.data_root, id).await?;
-            let source = if update["format"] == "delta" {
-                let saved = previous.clone().ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
-                merge_source_delta(&saved, &update, id)?
-            } else {
-                update
-            };
-            anyhow::ensure!(current == 0 || previous.is_some(), "Saved project sources are unavailable.");
-            validate_sources(&source, id)?;
-            let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
-            let pending = super::sources::stage_write(&state.data_root, id, &source).await?;
-            let update_result = store(state).and_then(|db| db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision]).map_err(Into::into));
-            if let Err(error) = update_result {
-                if let Err(restore) = pending.rollback().await {
-                    anyhow::bail!("Saving sources failed: {error}. Restoring the saved sources failed: {restore:#}");
-                }
-                return Err(error.into());
-            }
-            pending.commit().await?;
-            Ok(json!({"revision":revision}))
-        }
+        "project_sources_read" => crate::projects::sources::read(state, owner, principal, &a).await,
+        "project_sources_save" => crate::projects::sources::save(state, owner, principal, &a).await,
         "project_delete" => {
             let id = a["projectId"].as_str().unwrap();
             owner.require("write", Some(id))?;
@@ -1669,7 +1348,7 @@ async fn admin_call(
             let token = format!("lb_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
             let hash = digest(token.as_bytes());
             let ttl = a["ttlSeconds"].as_u64().unwrap_or(86400);
-            let ttl = if super::clerk::ClerkConfig::from_env()?.is_some() { ttl.min(3600) } else { ttl };
+            let ttl = if super::owners::clerk::ClerkConfig::from_env()?.is_some() { ttl.min(3600) } else { ttl };
             let expires = now_ms() + ttl * 1000;
             store(state)?.execute("INSERT INTO credentials(hash,owner,scopes,projects,expires) VALUES(?1,?2,?3,?4,?5)",params![hash,owner.id,a["scopes"].to_string(),serde_json::to_string(&projects)?,expires])?;
             Ok(json!({"token":token,"tokenId":hash,"expiresAt":expires}))
@@ -1773,7 +1452,7 @@ async fn admin_call(
         "module_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();
             let module = a["module"].as_str().unwrap_or_default();
-            let registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json"))?;
+            let registry: Value = serde_json::from_str(include_str!("../../../kernel/src/modules.json"))?;
             let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::Error::new(kernel::refusal::refuse("module.unknown", format!("Unknown module {module}."))))?;
             let deployment = owned_deployment(state, owner, id, scope).await?;
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
@@ -1838,103 +1517,10 @@ async fn admin_call(
             }
             Ok(answer)
         }
-        "project_export" => {
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "export_data").await?;
-            super::package::export(state, deployment, principal, |deployment| {
-                let (_, published) = owned_project(state, owner, &deployment.project_id, "export_data")?;
-                let sources: Option<u64> = store(state)?
-                    .query_row("SELECT sources FROM projects WHERE id=?1", [&deployment.project_id], |r| r.get(0))
-                    .optional()?
-                    .filter(|saves: &u64| *saves > 0);
-                Ok(super::package::Revisions { published, sources })
-            })
-            .await
-        }
-        "release_plan" => {
-            let transfer_id = a["transferId"].as_str().unwrap();
-            let sources_id = a["sourcesTransferId"].as_str();
-            let input = release_input(state, principal, transfer_id, sources_id, None).await?;
-            let artifact_sha256 = transfer(state, principal, &json!({"transferId": transfer_id}))?["sha256"].clone();
-            let _guard = database_lock(state, &format!("project:{}", input.project.id)).await;
-            let (_, revision) = owned_project(state, owner, &input.project.id, "publish")?;
-            let source_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [&input.project.id], |r| r.get(0))?;
-            let has_deployment = find_project_deployment(&*state.deployments.read().await, &input.project.id).is_some();
-            let observed = a["observedSourcesRevision"].as_u64();
-            if (has_deployment || source_revision > 0) && observed != Some(source_revision) {
-                return Err(source_revision_refusal(observed.unwrap_or(0)));
-            }
-            if let Some(package) = input.initial_package.as_ref() {
-
-                if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
-                    return Ok(replay);
-                }
-                super::package::verify(state, principal, &input.project.id, package).await?;
-            }
-            let schema = validate_release(state, &input, None).await?;
-
-
-            let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
-            let (hostname, first_release) = match existing {
-                Some(deployment) => (Some(deployment.hostname), false),
-                None => (super::hostname::planned(state, &input.project.slug, &input.project.id).await, true),
-            };
-            let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
-            let id = Uuid::new_v4().to_string();
-            let expires = now_ms() + 900_000;
-
-
-            let cleanup_uploads = release_upload_ids(state, principal, transfer_id, sources_id).await?;
-            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources,source_revision,cleanup_uploads) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id,source_revision,serde_json::to_string(&cleanup_uploads)?])?;
-            if let Some(package) = input.initial_package.as_ref() {
-                remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
-            }
-            Ok(
-                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"expectedSourcesRevision":source_revision,"artifactSha256":artifact_sha256,"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
-            )
-        }
-        "release_apply" => crate::copies::Pending::through_catalogue(async {
-            let id = a["planId"].as_str().unwrap();
-            let row: (String,u64,String,u64,Option<String>,Option<String>,u64)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt,sources,source_revision FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)))?;
-            let _guard = database_lock(state, &format!("project:{}", row.0)).await;
-            let (mut metadata, revision) = owned_project(state, owner, &row.0, "publish")?;
-            let receipt: Option<String> =
-                store(state)?
-                    .query_row("SELECT receipt FROM plans WHERE id=?1", [id], |r| r.get(0))?;
-            if let Some(receipt) = receipt {
-                return Ok(serde_json::from_str(&receipt)?);
-            }
-            anyhow::ensure!(row.3 > now_ms(), "Release plan expired.");
-            anyhow::ensure!(
-                revision == row.1,
-                "Project revision changed. Create a new release plan."
-            );
-            let source_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [&row.0], |r| r.get(0))?;
-            if source_revision != row.6 {
-                return Err(source_revision_refusal(row.6));
-            }
-            let mut input = release_input(state, principal, &row.2, row.5.as_deref(), None).await?;
-            anyhow::ensure!(input.project.id == row.0, "Artifact belongs to another project.");
-
-            input.contact_email = contact_email(state, owner, &row.0, input.contact_email.as_deref()).await?;
-
-
-            input.schema_confirmation = a["confirmSchema"].as_str().map(str::to_owned);
-            metadata["name"] = json!(input.project.name);
-            metadata["slug"] = json!(input.project.slug);
-            metadata["manifest"] = input.project.manifest.clone();
-            let receipt = response_value(deploy_input(state, input).await).await?;
-            let mut db = store(state)?;
-            let tx = db.transaction()?;
-            tx.execute("UPDATE projects SET revision=revision+1,sources=sources+1,body=?4 WHERE id=?1 AND owner=?2 AND revision=?3 AND sources=?5",params![row.0,owner.id,revision,metadata.to_string(),source_revision])?;
-            tx.execute(
-                "UPDATE plans SET receipt=?1 WHERE id=?2",
-                params![receipt.to_string(), id],
-            )?;
-            tx.commit()?;
-            drop(db);
-            Ok(receipt)
-        }).await,
-        "project_import" => crate::copies::Pending::through_catalogue(project_import(state, owner, principal, &a)).await?,
+        "project_export" => crate::projects::release::export(state, owner, principal, &a).await,
+        "release_plan" => crate::projects::release::plan(state, owner, principal, &a).await,
+        "release_apply" => crate::projects::release::apply(state, owner, principal, &a).await,
+        "project_import" => crate::copies::Pending::through_catalogue(crate::projects::release::import(state, owner, principal, &a)).await?,
         "app_user_enter" => {
             anyhow::ensure!(owner.session, "app_user_enter signs a browser in to the app, so it takes the owner's own browser session. A delegated token cannot call it.");
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
@@ -1975,150 +1561,10 @@ async fn admin_call(
     }
 }
 
-const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
-
-
-
-
-
-
-
-// A refused release can leave a complete app after its import is reversed.
-// The outer result tells the copy journal whether the catalogue is consistent.
-async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Result<Value>> {
-    use super::import::{Outcome, Target};
-    let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
-    let replace = a["replace"].as_str().unwrap_or_default();
-    let (data, sources) = match replace {
-        "sources" => (false, true),
-        "data" => (true, false),
-        "both" => (true, true),
-        _ => anyhow::bail!(IMPORT_REPLACE),
-    };
-    anyhow::ensure!(data == a.get("package").is_some(), "Pass package exactly when replace is data or both.");
-    anyhow::ensure!(sources == a.get("transferId").is_some(), "Pass transferId exactly when replace is sources or both.");
-    anyhow::ensure!(!a.get("sourcesTransferId").is_some() || sources, "Pass sourcesTransferId only when replace is sources or both.");
-    anyhow::ensure!(!a.get("artifactTransferId").is_some() || sources, "Pass artifactTransferId only when replace is sources or both.");
-    let package: Option<super::package::InitialPackage> = a.get("package").map(|value| serde_json::from_value(value.clone())).transpose()?;
-    let confirmation = a["confirmSchema"].as_str();
-    let project = deployment.project_id.clone();
-    let _guard = database_lock(state, &format!("project:{project}")).await;
-    let _release_guard = kernel::named_lock(state, &format!("publish:{}", deployment.id), true).await;
-    let (mut metadata, revision) = owned_project(state, owner, &project, "publish")?;
-    if let Some(package) = &package {
-        super::package::verify(state, principal, &project, package).await?;
-    }
-    let release = match a["transferId"].as_str() {
-        Some(transfer_id) => {
-            let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
-            anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == project.as_str(), "Completed upload for this project required.");
-            let mut payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
-            let input = release_input(state, principal, transfer_id, a["sourcesTransferId"].as_str(), a["artifactTransferId"].as_str()).await?;
-            payload["project"]["files"] = json!(&input.project.files);
-            payload["project"]["encodings"] = json!(&input.project.encodings);
-            payload["artifact"] = json!({
-                "version": input.artifact.version,
-                "entrypoint": input.artifact.entrypoint,
-                "files": input.artifact.files,
-                "encodings": input.artifact.encodings,
-            });
-            anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
-            let against = match &package {
-                Some(package) => super::package::component_paths(state, &project, package)?.into_iter().find(|(name, _)| name == "database").map(|(_, path)| path),
-                None => None,
-            };
-            let change = kernel::runtime::validate_import_release(state, &input, against.as_deref()).await?;
-            anyhow::ensure!(
-                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none() && input.initial_modules.is_none(),
-                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
-            );
-            if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
-                return Ok(Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()})));
-            }
-            Some((payload, change))
-        }
-        None => None,
-    };
-
-    let resolved_contact_email = match &release {
-        Some((payload, _)) => Some(contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?),
-        None => None,
-    };
-    let (backup, change) = match &package {
-        Some(package) => {
-            let target = match &release {
-                Some((payload, _)) => Target::release(&serde_json::from_value::<DeployInput>(payload.clone())?)?,
-                None => Target::live(state, &deployment)?,
-            };
-            match super::import::import_data(state, &deployment, package, &target, confirmation, sources).await? {
-                Outcome::NeedsConfirmation(change) => return Ok(Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}))),
-                Outcome::Imported { backup, change } => (backup, change),
-            }
-        }
-        None => (super::import::backup_sources(state, &deployment).await?, release.as_ref().map(|(_, change)| change.clone()).unwrap_or_default()),
-    };
-    let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
-    if let Some((mut payload, _)) = release {
-        payload["contactEmail"] = resolved_contact_email.flatten().map_or(Value::Null, Value::String);
-        payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
-        for key in ["name", "slug", "manifest"] {
-            if let Some(value) = payload["project"].get(key) {
-                metadata[key] = value.clone();
-            }
-        }
-        let receipt = match response_value(kernel::deploy_import_held(state, kernel::functions::parse_deploy_input(payload.clone())?).await).await {
-            Ok(receipt) => receipt,
-            Err(error) => return restore_import_after_release_failure(state, &deployment, package.is_some(), &backup, error).await,
-        };
-        store(state)?.execute(
-            "UPDATE projects SET revision=revision+1, sources=sources+1, body=?3 WHERE id=?1 AND revision=?2",
-            params![project, revision, metadata.to_string()],
-        )?;
-        answer["deployment"] = receipt;
-    }
-    Ok(Ok(answer))
-}
-
-
-async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Result<Value>> {
-    if !has_package {
-        return Err(error);
-    }
-    let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
-    let path = crate::layout::backups(&state.data_root, &deployment.id).join(format!("{id}.json"));
-    let record: super::DatabaseBackup = serde_json::from_slice(&tokio::fs::read(path).await?)?;
-    let _data = database_lock(state, &deployment.id).await;
-    super::import::restore_held(&state.kernel, deployment, &record).await
-        .map_err(|restore| anyhow::anyhow!("Import failed: {error:#}. Restoring its backup failed: {restore:#}"))?;
-    Ok(Err(error))
-}
-
-
-
-
-
 pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
-}
-
-async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
-    let given = given.map(|given| super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))).transpose()?;
-    let deployment = find_project_deployment(&*state.deployments.read().await, project);
-    if deployment.is_none() && given.is_some() {
-        return Ok(given);
-    }
-    let kept = deployment.and_then(|deployment| deployment.contact_email);
-    Ok(kept.or(given).or_else(|| owner_email(state, &owner.id)))
-}
-
-
-
-fn owner_email(state: &Konae, owner: &str) -> Option<String> {
-    let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
-    db.query_row("SELECT email FROM app_users WHERE id = ?1 AND state = 'active'", [owner], |row| row.get(0)).optional().ok().flatten()
 }
 
 const METHODS_INVALID: &str = "Name the methods as password and google.";
@@ -2165,7 +1611,7 @@ const GOOGLE_CLIENT_MISSING: &str = "This app asks for Google sign-in, but its G
 
 
 fn project_template(id: Option<&str>) -> Result<Value> {
-    let all: Value = serde_json::from_str(include_str!("project-templates.json"))?;
+    let all: Value = serde_json::from_str(include_str!("../project-templates.json"))?;
     let id = id.or(all["default"].as_str()).unwrap_or_default();
     let template = &all["templates"][id];
     anyhow::ensure!(template.is_object(), "Unknown template {id}.");
@@ -2173,8 +1619,8 @@ fn project_template(id: Option<&str>) -> Result<Value> {
 }
 
 async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Response {
-    if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
-    match super::clerk::ClerkConfig::from_env() {
+    if !super::owners::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
+    match super::owners::clerk::ClerkConfig::from_env() {
         Ok(Some(config)) => Json(json!({"mode":"clerk","publishableKey":config.publishable_key})).into_response(),
         Ok(None) => {
 
@@ -2185,7 +1631,7 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
 
             let local = url::Url::parse(&state.public_origin).ok().and_then(|u| u.host_str().map(crate::is_local_host)).unwrap_or(false);
             let default_key = local && state.setup_key == crate::DEFAULT_SETUP_KEY;
-            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"emailVerificationRequired":state.accounts.verification == auth::Verification::Required,"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
+            Json(json!({"mode":"local","admission":super::owners::admission::mode(&state).as_str(),"emailVerificationRequired":state.accounts.verification == auth::Verification::Required,"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
         }
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }
@@ -2195,7 +1641,7 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
 
 
 pub(super) async fn owner_session(State(state): State<Konae>, headers: HeaderMap) -> Response {
-    if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
+    if !super::owners::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     let owner = match authenticate_owner(&state, &headers) {
         Ok(owner) => owner,
         Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not available."),
@@ -2211,13 +1657,13 @@ pub(super) async fn owner_session(State(state): State<Konae>, headers: HeaderMap
 
 async fn owner_clerk(State(state): State<Konae>, request: Request) -> Response {
     let headers = request.headers().clone();
-    if !same_origin(&headers) || !super::oauth::valid_owner_host(&state, &headers).await {
+    if !same_origin(&headers) || !super::owners::oauth::valid_owner_host(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Cross-origin sign-in rejected.");
     }
     let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else {
         return error(StatusCode::FORBIDDEN, "Sign-in origin is required.");
     };
-    let config = match super::clerk::ClerkConfig::from_env() {
+    let config = match super::owners::clerk::ClerkConfig::from_env() {
         Ok(Some(config)) => config,
         _ => return error(StatusCode::SERVICE_UNAVAILABLE, "Clerk sign-in is not configured."),
     };
@@ -2227,7 +1673,7 @@ async fn owner_clerk(State(state): State<Konae>, request: Request) -> Response {
     let body: Value = match serde_json::from_slice(&bytes) { Ok(body) => body, Err(_) => return error(StatusCode::BAD_REQUEST, "Invalid sign-in request.") };
     let Some(token) = body["token"].as_str() else { return error(StatusCode::BAD_REQUEST, "Sign-in token required."); };
     let mut db = match Connection::open(state.data_root.join("owners.sqlite")) { Ok(db) => db, Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
-    let session = match super::clerk::exchange(&mut db, &config, token, origin, (now_ms() / 1000) as i64) {
+    let session = match super::owners::clerk::exchange(&mut db, &config, token, origin, (now_ms() / 1000) as i64) {
         Ok(session) => session,
         Err(_) => return error(StatusCode::UNAUTHORIZED, "Sign-in failed or this account has not been admitted to the beta."),
     };
@@ -2247,7 +1693,7 @@ pub(super) async fn owner_signup(State(state): State<Konae>, request: Request) -
 }
 
 async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
-    match super::clerk::ClerkConfig::from_env() {
+    match super::owners::clerk::ClerkConfig::from_env() {
         Ok(None) => {},
         Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "Local owner sign-in is disabled on this installation."),
         Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
@@ -2258,7 +1704,7 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|info| info.0);
     if !same_origin(&headers)
-        || !super::oauth::valid_owner_host(&state, &headers).await
+        || !super::owners::oauth::valid_owner_host(&state, &headers).await
     {
         return error(
             StatusCode::FORBIDDEN,
@@ -2289,7 +1735,7 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
 
 
     let admission = if signup {
-        match super::admission::read(&state, &a) {
+        match super::owners::admission::read(&state, &a) {
             Ok(admission) => Some(admission),
             Err(e) => return auth_error(e),
         }
@@ -2299,9 +1745,9 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
     let email = a["email"].as_str().unwrap_or("").to_owned();
     let password = a["password"].as_str().unwrap_or("").to_owned();
     if let Some(admission) = admission.clone().filter(|_| state.accounts.verification == auth::Verification::Required) {
-        let page = super::admission::login_page(
+        let page = super::owners::admission::login_page(
             &origin(&state, &headers),
-            super::admission::return_to(&a).as_deref(),
+            super::owners::admission::return_to(&a).as_deref(),
         );
         return match super::owners::signup_creator(&state, &email, &page, admission, client).await {
             Ok(created) => {
@@ -2320,7 +1766,7 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
             Ok(account) => {
                 let guard = database_lock(&state, "owner-auth").await;
                 let auth = super::owners::creator_store(&state);
-                let admit = super::admission::admit(admission);
+                let admit = super::owners::admission::admit(admission);
                 (blocking(move || auth?.create_account_admitted(account, admit)).await, Some(guard))
             }
             Err(error_value) => (Err(error_value), None),
@@ -2388,14 +1834,14 @@ pub(super) fn owner_session_response(state: &Konae, session: auth::AuthSession) 
 
 async fn owner_logout(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !same_origin(&headers)
-        || !super::oauth::valid_owner_host(&state, &headers).await
+        || !super::owners::oauth::valid_owner_host(&state, &headers).await
     {
         return error(StatusCode::FORBIDDEN, "Cross-origin logout rejected.");
     }
     let cookie_name = owner_cookie_name(&state);
-    if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() {
+    if super::owners::clerk::ClerkConfig::from_env().ok().flatten().is_some() {
         if let Ok(db) = Connection::open(state.data_root.join("owners.sqlite")) {
-            let _ = super::clerk::revoke(&db, cookie_value(&headers, cookie_name).as_deref());
+            let _ = super::owners::clerk::revoke(&db, cookie_value(&headers, cookie_name).as_deref());
         }
     }
     if let Ok(auth) = super::owners::creator_store(&state) {
@@ -2411,7 +1857,7 @@ async fn owner_logout(State(state): State<Konae>, headers: HeaderMap) -> Respons
 }
 
 async fn owner_page(State(state): State<Konae>, headers: HeaderMap) -> Response {
-    if !super::oauth::valid_owner_host(&state, &headers).await {
+    if !super::owners::oauth::valid_owner_host(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
     (
@@ -2419,7 +1865,7 @@ async fn owner_page(State(state): State<Konae>, headers: HeaderMap) -> Response 
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        super::owner_page::LOGIN.as_str(),
+        super::owners::owner_page::LOGIN.as_str(),
     )
         .into_response()
 }
@@ -2430,7 +1876,7 @@ mod tests {
 
     #[test]
     fn source_revision_conflicts_match_the_shared_case() {
-        let fixture: Value = serde_json::from_str(include_str!("../../kernel/src/source-revision-cases.json")).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!("../../../kernel/src/source-revision-cases.json")).unwrap();
         for case in fixture["cases"].as_array().unwrap() {
             let refusal = source_revision_refusal(case["observed"].as_u64().unwrap());
             let refusal = refusal.downcast_ref::<super::super::refusal::Refusal>().unwrap();
@@ -2448,7 +1894,7 @@ mod tests {
         assert!(!root.join("owners.sqlite").exists());
         db.execute("INSERT INTO projects(id,owner,body) VALUES('notes','fixture','{}')", []).unwrap();
         let owners = Connection::open(root.join("owners.sqlite")).unwrap();
-        super::super::clerk::install(&owners).unwrap();
+        super::super::owners::clerk::install(&owners).unwrap();
         assert!(check_restored_catalog(&root).unwrap_err().to_string().contains("no matching owner"));
         owners.execute("INSERT INTO creator_identities(owner,provider,subject) VALUES('fixture','lab','person')", []).unwrap();
         check_restored_catalog(&root).unwrap();
@@ -3209,7 +2655,7 @@ mod tests {
         assert!(!names(&publisher).iter().any(|name| name.starts_with("app_")));
         let manager = Owner { scopes: vec!["read".into(), "manage_users".into()], ..reader };
         assert!(names(&manager).contains(&"module_set".to_owned()));
-        let registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json")).unwrap();
+        let registry: Value = serde_json::from_str(include_str!("../../../kernel/src/modules.json")).unwrap();
         assert_eq!(registry["modules"]["auth"]["permission"], "manage_users");
         for removed in ["signup_policy_set", "sign_in_methods_set", "sign_in_methods_read"] { assert!(!names(&manager).contains(&removed.to_owned())); }
         for tool in ["app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
@@ -3219,7 +2665,7 @@ mod tests {
 
     #[test]
     fn the_google_client_cases_refuse_with_their_sentence_and_code() {
-        let file: Value = serde_json::from_str(include_str!("../../kernel/src/google-client-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../../../kernel/src/google-client-cases.json")).unwrap();
         let (client_id, client_secret) = (file["context"]["clientId"].as_str().unwrap(), file["context"]["clientSecret"].as_str().unwrap());
         for case in file["cases"].as_array().unwrap() {
             let name = case["case"].as_str().unwrap();
@@ -3432,7 +2878,7 @@ mod tests {
         let state = Konae::for_test(AppState::for_test(&root));
         let owner = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
         let guide = admin_call(&state, &owner, "owner:o", "platform_guide", json!({"topic":"sdk"})).await.unwrap();
-        let rendered: Value = serde_json::from_str(include_str!("sdk-guide.json")).unwrap();
+        let rendered: Value = serde_json::from_str(include_str!("../sdk-guide.json")).unwrap();
         assert_eq!(guide, rendered);
         let names = |tools: Vec<Value>| tools.iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
         let served = names(runtime_tools());

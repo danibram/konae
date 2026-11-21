@@ -24,7 +24,7 @@ const UNUSED_CLIENT_TTL_MS: u64 = 60 * 60 * 1000;
 const IDLE_CLIENT_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 const MAX_UNUSED_CLIENTS: u64 = 1000;
 
-pub(super) fn install(db: &Connection) -> Result<()> {
+pub(crate) fn install(db: &Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS oauth_clients(id TEXT PRIMARY KEY, body TEXT NOT NULL, created INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS oauth_codes(hash TEXT PRIMARY KEY, body TEXT NOT NULL, expires INTEGER NOT NULL);")?;
     let columns = db
@@ -56,7 +56,7 @@ pub(super) fn install(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn valid_owner_host(state: &Konae, headers: &HeaderMap) -> bool {
+pub(crate) async fn valid_owner_host(state: &Konae, headers: &HeaderMap) -> bool {
     if super::path::on_path_host(state, headers) {
         return false;
     }
@@ -253,7 +253,7 @@ fn authorization(
     Ok(client)
 }
 
-pub(super) fn owner_login_path() -> &'static str {
+pub(crate) fn owner_login_path() -> &'static str {
     if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_konae/owner/login" }
 }
 
@@ -535,7 +535,7 @@ async fn token(
             let owners = Connection::open(state.data_root.join("owners.sqlite"))?;
             anyhow::ensure!(super::clerk::owner_allowed(&owners, &config, code["owner"].as_str().unwrap_or(""))?, "Owner is not admitted.");
         } else {
-            anyhow::ensure!(super::owners::creator_store(&state)?.is_active(code["owner"].as_str().unwrap_or(""))?, "Owner is not active.");
+            anyhow::ensure!(super::creator_store(&state)?.is_active(code["owner"].as_str().unwrap_or(""))?, "Owner is not active.");
         }
         anyhow::ensure!(
             code["client_id"] == get("client_id")
@@ -679,11 +679,11 @@ mod tests {
             assert!(csp.contains(directive));
         }
         assert!(!csp.contains("script-src"));
-        assert!(csp.contains(&format!("style-src {}", *crate::owner_page::STYLE_HASH)));
+        assert!(csp.contains(&format!("style-src {}", *crate::owners::owner_page::STYLE_HASH)));
         let html = String::from_utf8(
             axum::body::to_bytes(consent.into_body(), usize::MAX).await.unwrap().to_vec(),
         ).unwrap();
-        assert!(html.contains(&format!("<style>{}</style>", crate::owner_page::CSS)));
+        assert!(html.contains(&format!("<style>{}</style>", crate::owners::owner_page::CSS)));
         assert!(html.contains("<code>www.cursor.com</code>"));
         assert!(html.contains("<meta name=referrer content=same-origin>") && !html.contains("no-referrer"));
         let csrf = html.split("name=csrf value=\"").nth(1).unwrap().split('"').next().unwrap();

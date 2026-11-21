@@ -3,6 +3,11 @@ use super::*;
 use super::accounts::{ChallengeAnswer, Delivery, RecoveryRequest, issue_and_send, link_sent, mail, read_body};
 use auth::{AuthSession, NewPassword, Purpose, Verification};
 
+pub(crate) mod admission;
+pub(crate) mod clerk;
+pub(crate) mod oauth;
+pub(crate) mod owner_page;
+
 pub(crate) const CREATOR_SCOPE: &str = "creator";
 
 pub fn routes() -> Router<Konae> {
@@ -38,7 +43,7 @@ pub(crate) async fn signup_creator(
     state: &Konae,
     email: &str,
     page: &str,
-    admission: super::admission::Admission,
+    admission: admission::Admission,
     client: std::net::IpAddr,
 ) -> Result<Option<String>, AuthError> {
     let email = auth::normalize_email(email)?;
@@ -47,7 +52,7 @@ pub(crate) async fn signup_creator(
     let auth = creator_store(state)?;
     let lookup = email.clone();
     let delivery = creator_delivery(&email, client, page);
-    let issue = move |outbox: Option<&dyn auth::ChallengeOutbox>| auth.request_signup_with(&lookup, outbox, super::admission::admit(admission));
+    let issue = move |outbox: Option<&dyn auth::ChallengeOutbox>| auth.request_signup_with(&lookup, outbox, admission::admit(admission));
     if !issue_and_send(mail, delivery, issue).await? {
         return Ok(None);
     }
@@ -111,7 +116,7 @@ async fn creator_recover(State(state): State<Konae>, request: Request) -> Respon
         let _guard = database_lock(&state, "owner-auth").await;
         let auth = creator_store(&state)?;
         let email = input.email.clone();
-        let delivery = creator_delivery(&email, client, &super::admission::login_page(&origin, None));
+        let delivery = creator_delivery(&email, client, &admission::login_page(&origin, None));
         issue_and_send(mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
         Ok::<(), AuthError>(())
     }
@@ -124,7 +129,7 @@ async fn creator_recover(State(state): State<Konae>, request: Request) -> Respon
 
 
 async fn creator_host(state: &Konae, headers: &HeaderMap) -> bool {
-    super::oauth::valid_owner_host(state, headers).await && matches!(super::clerk::ClerkConfig::from_env(), Ok(None))
+    oauth::valid_owner_host(state, headers).await && matches!(clerk::ClerkConfig::from_env(), Ok(None))
 }
 
 

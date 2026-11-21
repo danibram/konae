@@ -484,7 +484,7 @@ mod tests {
 
         fn verify(&self, link: &str) -> std::result::Result<auth::AuthSession, AuthError> {
             let token = link.split_once("#verification=").unwrap().1;
-            super::owners::creator_store(&self.state).unwrap().complete_challenge(
+            super::creator_store(&self.state).unwrap().complete_challenge(
                 Purpose::Verification,
                 token,
                 NewPassword::prepare(PASSWORD).unwrap(),
@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn operator_commands_leave_the_kernels_verification_mode_alone() {
         let fixture = fixture(Verification::Required, KEY);
-        super::owners::creator_store(&fixture.state).unwrap();
+        super::creator_store(&fixture.state).unwrap();
         fixture.cli(&["owner-code-create"]).unwrap();
         fixture.cli(&["owner-code-list"]).unwrap();
         let recorded: String = Connection::open(owners_path(&fixture.root))
@@ -631,7 +631,7 @@ mod tests {
         let fixture = fixture(Verification::Required, KEY);
         let supplied = "password that signup must discard";
         assert_eq!(fixture.signup(json!({"email": "ada@example.test", "password": supplied, "setupKey": KEY})).await.status(), StatusCode::ACCEPTED);
-        let auth = super::owners::creator_store(&fixture.state).unwrap();
+        let auth = super::creator_store(&fixture.state).unwrap();
         assert!(matches!(auth.login("ada@example.test", supplied), Err(AuthError::InvalidCredentials)));
 
         fixture.verify(&fixture.last_link()).unwrap();

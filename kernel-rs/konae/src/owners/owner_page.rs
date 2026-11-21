@@ -10,21 +10,21 @@ use axum::{
 };
 use sha2::{Digest, Sha256};
 
-use super::state::Konae;
+use crate::state::Konae;
 
-pub(super) const CSS: &str = include_str!("owner-page/owner.css");
+pub(crate) const CSS: &str = include_str!("login.css");
 
-pub(super) static STYLE_HASH: LazyLock<String> = LazyLock::new(|| {
+pub(crate) static STYLE_HASH: LazyLock<String> = LazyLock::new(|| {
     use base64::Engine;
     format!("'sha256-{}'", base64::engine::general_purpose::STANDARD.encode(Sha256::digest(CSS.as_bytes())))
 });
 
-pub(super) const ICON: &str = r#"<link rel=icon href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect x=%273%27 y=%273%27 width=%2726%27 height=%2726%27 fill=%27%23c8f34a%27 stroke=%27%2320231c%27 stroke-width=%273%27/%3E%3C/svg%3E">"#;
+pub(crate) const ICON: &str = r#"<link rel=icon href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect x=%273%27 y=%273%27 width=%2726%27 height=%2726%27 fill=%27%23c8f34a%27 stroke=%27%2320231c%27 stroke-width=%273%27/%3E%3C/svg%3E">"#;
 
-pub(super) const HEADER: &str = "<header class=header><a class=brand href=/_konae/owner/login><span class=brand-mark aria-hidden=true><svg width=16 height=16 viewBox=\"0 0 24 24\" fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"/><path d=\"m3.3 7 8.7 5 8.7-5\"/><path d=\"M12 22V12\"/></svg></span>konae</a></header>";
+pub(crate) const HEADER: &str = "<header class=header><a class=brand href=/_konae/owner/login><span class=brand-mark aria-hidden=true><svg width=16 height=16 viewBox=\"0 0 24 24\" fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"/><path d=\"m3.3 7 8.7 5 8.7-5\"/><path d=\"M12 22V12\"/></svg></span>konae</a></header>";
 
-pub(super) static LOGIN: LazyLock<String> = LazyLock::new(|| {
-    include_str!("owner-login.html")
+pub(crate) static LOGIN: LazyLock<String> = LazyLock::new(|| {
+    include_str!("login.html")
         .replace("/*OWNER_CSS*/", CSS)
         .replace("<!--OWNER_HEADER-->", HEADER)
         .replace("<!--OWNER_ICON-->", ICON)

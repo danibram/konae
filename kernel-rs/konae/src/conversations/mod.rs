@@ -245,7 +245,7 @@ async fn owner_request(
     if !kernel::same_origin(&headers)
         || !kernel::runtime::valid_host(&state.kernel, &headers)
         || super::security::from_app_origin(state, &headers).await
-        || !super::oauth::valid_owner_host(&state, &headers).await
+        || !super::owners::oauth::valid_owner_host(&state, &headers).await
     {
         return Err(fail(
             StatusCode::FORBIDDEN,
