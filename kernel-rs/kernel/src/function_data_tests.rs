@@ -1,6 +1,9 @@
 use super::*;
 use serde_json::json;
-use std::{thread, time::Instant};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 struct Fixture {
     root: PathBuf,
@@ -134,7 +137,7 @@ fn same_output(left: &Output, right: &Output) {
 }
 
 #[test]
-fn commits_all_named_actions_and_complete_http_receipt_together() {
+fn commits_all_named_actions_and_receipt_marker_together() {
     let fixture = Fixture::new();
     let mut invocation = fixture.run("commit");
     assert_eq!(
@@ -151,10 +154,79 @@ fn commits_all_named_actions_and_complete_http_receipt_together() {
     same_output(&invocation.finish(expected.clone()).unwrap(), &expected);
     assert_eq!(fixture.state(), (7, 1, 0));
     assert_eq!(fixture.receipts(), 1);
+    let stored: String = Connection::open(&fixture.path)
+        .unwrap()
+        .query_row(
+            "SELECT response_json FROM __konae_function_receipts LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, RECEIPT_RESPONSE_MARKER);
     match admit(fixture.config("POST", "commit"), budget()).unwrap() {
-        Admission::Replay(replayed) => same_output(&replayed, &expected),
+        Admission::Replay(error) => {
+            assert_eq!(error.code, IDEMPOTENCY_REPLAY_CODE);
+            assert_eq!(error.status, 409);
+        }
         _ => panic!("expected replay"),
     }
+}
+
+#[test]
+fn legacy_response_receipt_is_read_without_migration_or_response_replay() {
+    let fixture = Fixture::new();
+    let mut invocation = fixture.run("legacy");
+    change(&mut invocation);
+    invocation.finish(output(201)).unwrap();
+    let legacy_response = serde_json::to_string(&output(201)).unwrap();
+    let db = Connection::open(&fixture.path).unwrap();
+    db.execute(
+        "UPDATE __konae_function_receipts SET response_json=?1 WHERE idempotency_key='legacy'",
+        [&legacy_response],
+    )
+    .unwrap();
+    drop(db);
+
+    let fingerprint = lookup_receipt(&fixture.path, Some("alice"), "orders", "legacy", &budget())
+        .unwrap()
+        .unwrap();
+    assert_eq!(fingerprint, fixture.config("POST", "legacy").fingerprint);
+    assert!(matches!(
+        admit(fixture.config("POST", "legacy"), budget()).unwrap(),
+        Admission::Replay(error) if error.code == IDEMPOTENCY_REPLAY_CODE
+    ));
+    let preserved: String = Connection::open(&fixture.path)
+        .unwrap()
+        .query_row(
+            "SELECT response_json FROM __konae_function_receipts LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(preserved, legacy_response);
+    assert_eq!(fixture.state(), (7, 1, 0));
+}
+
+#[test]
+fn transaction_recheck_refuses_a_receipt_after_row_access_changes() {
+    let fixture = Fixture::new();
+    let mut invocation = fixture.run("revoked-row");
+    change(&mut invocation);
+    invocation.finish(output(201)).unwrap();
+    Connection::open(&fixture.path)
+        .unwrap()
+        .execute("UPDATE orders SET owner_id='bob' WHERE id=1", [])
+        .unwrap();
+
+    let replay = admit(fixture.config("POST", "revoked-row"), budget()).unwrap();
+    let Admission::Replay(error) = replay else {
+        panic!("expected a replay refusal");
+    };
+    assert_eq!(error.code, IDEMPOTENCY_REPLAY_CODE);
+    assert_eq!(error.status, 409);
+    assert!(error.message.contains("authorized read"));
+    assert_eq!(fixture.state(), (7, 1, 0));
+    assert_eq!(fixture.receipts(), 1);
 }
 
 #[test]
@@ -185,7 +257,7 @@ fn abort_or_drop_after_update_reverts_every_action() {
 }
 
 #[test]
-fn error_response_rolls_back_but_redirect_commits_and_replays() {
+fn error_response_rolls_back_but_redirect_commits_once() {
     let fixture = Fixture::new();
     let mut invocation = fixture.run("status400");
     change(&mut invocation);
@@ -201,7 +273,7 @@ fn error_response_rolls_back_but_redirect_commits_and_replays() {
     invocation.finish(redirect.clone()).unwrap();
     assert_eq!(fixture.state(), (7, 1, 0));
     match admit(fixture.config("POST", "status303"), budget()).unwrap() {
-        Admission::Replay(value) => same_output(&value, &redirect),
+        Admission::Replay(error) => assert_eq!(error.code, IDEMPOTENCY_REPLAY_CODE),
         _ => panic!("expected redirect replay"),
     }
 }
@@ -377,6 +449,20 @@ fn deadline_before_commit_rolls_back_and_after_commit_is_unknown() {
 }
 
 #[test]
+fn receipt_lookup_respects_budget_while_its_connection_is_locked() {
+    let fixture = Fixture::new();
+    let locked = Connection::open(&fixture.path).unwrap();
+    locked
+        .execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;")
+        .unwrap();
+
+    let budget = Budget::new(Duration::from_millis(25));
+    let error =
+        lookup_receipt(&fixture.path, Some("alice"), "orders", "locked", &budget).unwrap_err();
+    assert_eq!(error.code, "deadline_exceeded");
+}
+
+#[test]
 fn expired_budget_refuses_receipt_and_write_lock_wait_is_bounded() {
     let fixture = Fixture::new();
     let mut invocation = fixture.run("existing");
@@ -436,7 +522,7 @@ fn invalid_output_does_not_commit() {
         (
             "size",
             Output {
-                body: "x".repeat(MAX_RECEIPT_BYTES),
+                body: "x".repeat(MAX_RESPONSE_BYTES),
                 ..output(200)
             },
         ),
@@ -586,7 +672,7 @@ fn row_budget_and_statement_validation_use_kernel_helpers() {
 }
 
 #[test]
-fn concurrent_identical_post_replays_before_running_second_worker() {
+fn concurrent_identical_post_is_admitted_as_a_replay_without_mutating_again() {
     let fixture = Fixture::new();
     let mut first = fixture.run("concurrent");
     change(&mut first);

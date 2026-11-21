@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { buildProjectEntries, buildProjectEntriesFromDisk } from "./build-project";
+import { buildProjectEntries } from "./build-project";
+import { buildProjectEntriesFromDisk } from "./build-project-disk";
 
 const manifest = (files: string[]) => JSON.stringify({ version: 1, files });
 const source = (files: string[]) => ({ files: {

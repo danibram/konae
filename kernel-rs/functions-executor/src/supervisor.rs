@@ -20,6 +20,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const CANCEL_GRACE: Duration = Duration::from_millis(50);
+
 struct BufferedBody {
     bytes: Vec<u8>,
     offset: usize,
@@ -101,6 +103,7 @@ pub struct Worker {
     generation: String,
     request: u64,
     busy: bool,
+    synchronized: bool,
     shutdown_invoked: bool,
     containment: Containment,
     oom_kills_at_spawn: Option<u64>,
@@ -272,6 +275,7 @@ impl Worker {
             generation: generation.clone(),
             request: 0,
             busy: false,
+            synchronized: true,
             shutdown_invoked: false,
             containment,
             oom_kills_at_spawn,
@@ -331,6 +335,9 @@ impl Worker {
     }
     pub fn shutdown_invoked(&self) -> bool {
         self.shutdown_invoked
+    }
+    pub fn is_synchronized(&self) -> bool {
+        self.synchronized && self.child.is_some()
     }
     fn memory_check(&self) -> Result<()> {
         let pid = self.pid().ok_or_else(|| fail("worker_failed"))?;
@@ -476,8 +483,11 @@ impl Worker {
             return Err(fail("worker_busy"));
         }
         self.busy = true;
+        self.synchronized = false;
+        let mut can_resynchronize = false;
         let result = (|| {
             self.send(&message, budget)?;
+            can_resynchronize = true;
             let mut sequence = 0u64;
             let mut body_sequence = 0u64;
             let mut native_error: Option<String> = None;
@@ -490,32 +500,50 @@ impl Worker {
                         args,
                     } => {
                         if received != capability || seq != sequence + 1 {
+                            can_resynchronize = false;
                             return Err(fail("capability_expired"));
                         }
                         sequence = seq;
                         if sequence > self.limits.operation_limit as u64 {
+                            can_resynchronize = false;
                             return Err(fail("operation_limit"));
                         }
                         if !protocol::operation_fits(&operation, &args) {
+                            can_resynchronize = false;
                             return Err(fail("operation_too_large"));
                         }
-                        remaining(budget)?;
-                        let reply = if let Some(code) = &native_error {
+                        let mut interrupted = remaining(budget).err();
+                        let mut reply = if let Some(error) = &interrupted {
+                            Err(error_code(error).to_owned())
+                        } else if let Some(code) = &native_error {
                             Err(code.clone())
                         } else {
                             callback(&operation, args)
                         };
+                        if interrupted.is_none() {
+                            interrupted = remaining(budget).err();
+                        }
+                        if let Some(error) = &interrupted {
+                            reply = Err(error_code(error).to_owned());
+                        }
                         if let Err(code) = &reply {
                             native_error.get_or_insert_with(|| code.clone());
                         }
-                        self.send(
-                            &ParentMessage::OperationResult {
-                                capability: capability.clone(),
-                                sequence,
-                                result: reply,
-                            },
-                            budget,
-                        )?;
+                        let response = ParentMessage::OperationResult {
+                            capability: capability.clone(),
+                            sequence,
+                            result: reply,
+                        };
+                        let emergency = Until(Instant::now() + CANCEL_GRACE);
+                        if interrupted.is_some() {
+                            can_resynchronize = false;
+                            self.send(&response, &emergency)?;
+                            can_resynchronize = true;
+                            return Err(interrupted.unwrap());
+                        }
+                        can_resynchronize = false;
+                        self.send(&response, budget)?;
+                        can_resynchronize = true;
                     }
                     ChildMessage::BodyRead {
                         capability: received,
@@ -527,11 +555,13 @@ impl Worker {
                             || maximum == 0
                             || maximum > protocol::BODY_CHUNK_BYTES
                         {
+                            can_resynchronize = false;
                             return Err(fail("worker_protocol_error"));
                         }
                         body_sequence = seq;
                         remaining(budget)?;
                         let chunk = body.read_chunk(maximum).map_err(|code| fail(&code))?;
+                        can_resynchronize = false;
                         self.send(
                             &ParentMessage::BodyChunk {
                                 capability: capability.clone(),
@@ -542,6 +572,7 @@ impl Worker {
                             },
                             budget,
                         )?;
+                        can_resynchronize = true;
                     }
                     ChildMessage::Reply {
                         capability: received,
@@ -550,6 +581,7 @@ impl Worker {
                         if received != capability {
                             return Err(fail("capability_expired"));
                         }
+                        self.synchronized = true;
                         if let Some(code) = native_error {
                             return Err(fail(&code));
                         }
@@ -561,26 +593,51 @@ impl Worker {
                         capability: Some(received),
                         code,
                     } if received == capability => {
+                        self.synchronized = true;
                         return Err(fail(native_error.as_deref().unwrap_or(&code)));
                     }
                     _ => return Err(fail("worker_protocol_error")),
                 }
             }
         })();
-        self.busy = false;
         if result.is_err() {
-            // La cooperación nunca amplía el deadline absoluto de la petición.
-            let until = Until(
-                budget
-                    .deadline()
-                    .min(Instant::now() + Duration::from_millis(10)),
-            );
-            let _ = self.send(&ParentMessage::Cancel { capability }, &until);
-            if error_code(result.as_ref().err().unwrap()) == "cancelled" {
-                let _ = self.receive(&until);
+            let code = error_code(result.as_ref().err().unwrap());
+            let interrupted = matches!(code, "deadline_exceeded" | "cancelled");
+            if interrupted && can_resynchronize && !self.synchronized {
+                let grace = Until(Instant::now() + CANCEL_GRACE);
+                if self
+                    .send(
+                        &ParentMessage::Cancel {
+                            capability: capability.clone(),
+                        },
+                        &grace,
+                    )
+                    .is_ok()
+                {
+                    if let Ok(message) = self.receive(&grace) {
+                        match message {
+                            ChildMessage::Failure {
+                                capability: Some(received),
+                                ..
+                            } if received == capability => self.synchronized = true,
+                            ChildMessage::Reply {
+                                capability: received,
+                                output,
+                            } if received == capability
+                                && validate_output(&output, &self.limits).is_ok() =>
+                            {
+                                self.synchronized = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
-            self.stop();
+            if !interrupted || !self.synchronized {
+                self.stop();
+            }
         }
+        self.busy = false;
         result
     }
     pub fn shutdown(&mut self, grace: Duration) -> Result<()> {
@@ -614,6 +671,7 @@ impl Worker {
         result
     }
     fn stop(&mut self) -> bool {
+        self.synchronized = false;
         self.containment.kill();
         if let Some(mut child) = self.child.take() {
             // El hijo pertenece al grupo que creó este supervisor.

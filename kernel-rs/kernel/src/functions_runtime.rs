@@ -414,7 +414,13 @@ impl Lease {
             Ok(output)
         })();
         self.progress.lock().unwrap().finished = Some(Instant::now());
-        if output.is_err() {
+        let can_reuse_cancelled_worker = output.as_ref().is_err_and(|error| {
+            matches!(
+                konae_functions_executor::error_code(error),
+                "deadline_exceeded" | "cancelled" | "mutation_outcome_unknown"
+            ) && self.worker.as_ref().is_some_and(Worker::is_synchronized)
+        });
+        if output.is_err() && !can_reuse_cancelled_worker {
             if let Some(mut worker) = self.worker.take() {
                 let _ = worker.shutdown(SHUTDOWN);
             }
@@ -741,6 +747,7 @@ mod tests {
                 r#"
 let count = 0;
 export function handle(request, context) {
+    if (new URL(request.url).pathname === '/spin') while (true) {}
     if (new URL(request.url).pathname === '/fail') throw new Error('test failure');
     return new Response(`${++count}:${context.actor.userId}`);
 }
@@ -774,7 +781,17 @@ export function handle(request, context) {
         actor: &str,
         path: &str,
     ) -> (RunResult, Option<u32>) {
-        let budget = budget();
+        run_with_budget(runtime, key, directory, actor, path, Duration::from_secs(5)).await
+    }
+    async fn run_with_budget(
+        runtime: &Arc<Runtime>,
+        key: &str,
+        directory: &Path,
+        actor: &str,
+        path: &str,
+        timeout: Duration,
+    ) -> (RunResult, Option<u32>) {
+        let budget = Budget::new(timeout);
         let mut lease = runtime.lease(key.to_owned(), &budget).await.unwrap();
         let directory = directory.to_owned();
         let input = input(actor, path);
@@ -802,9 +819,27 @@ export function handle(request, context) {
         assert!(first.cold);
         let pid = pid.unwrap();
         let (second, second_pid) = run(&runtime, "app:example:v1", &fixture.0, "bob", "").await;
-        assert_eq!(second.output.unwrap().body, "2:bob");
+        assert_eq!(second.output.unwrap().body, "1:bob");
         assert!(!second.cold);
         assert_eq!(second_pid, Some(pid));
+        let (spun, spin_pid) = run_with_budget(
+            &runtime,
+            "app:example:v1",
+            &fixture.0,
+            "alice",
+            "spin",
+            Duration::from_millis(100),
+        )
+        .await;
+        assert_eq!(
+            konae_functions_executor::error_code(spun.output.as_ref().unwrap_err()),
+            "deadline_exceeded"
+        );
+        assert_eq!(spin_pid, Some(pid));
+        let (after_spin, after_spin_pid) =
+            run(&runtime, "app:example:v1", &fixture.0, "carol", "").await;
+        assert_eq!(after_spin.output.unwrap().body, "1:carol");
+        assert_eq!(after_spin_pid, Some(pid));
         let (failed, failed_pid) =
             run(&runtime, "app:example:v1", &fixture.0, "alice", "fail").await;
         assert!(failed.output.is_err());

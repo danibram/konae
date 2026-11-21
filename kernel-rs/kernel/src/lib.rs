@@ -4164,7 +4164,7 @@ pub const MAX_APP_DATABASE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Caps the database file behind this connection. SQLite keeps the setting per
 /// connection, so every connection that may write needs it.
-pub fn limit_database_size(db: &Connection, max_bytes: u64) -> Result<()> {
+pub fn limit_database_size(db: &Connection, max_bytes: u64) -> rusqlite::Result<()> {
     let page_size: u64 = db.query_row("PRAGMA page_size", [], |row| row.get(0))?;
     let pages = (max_bytes / page_size.max(1)).max(1);
     db.query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))?;
@@ -4189,17 +4189,18 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     configure_database_limits(db)?;
     arm_deadline(db)?;
-    install_database_authorizer(db, None)
+    install_database_authorizer(db, None)?;
+    Ok(())
 }
 
-pub(crate) fn restrict_function_database(db: &Connection, receipts: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
+pub(crate) fn restrict_function_database(db: &Connection, receipts: Arc<std::sync::atomic::AtomicBool>) -> rusqlite::Result<()> {
     db.busy_timeout(std::time::Duration::ZERO)?;
     db.pragma_update(None, "foreign_keys", true)?;
     configure_database_limits(db)?;
     install_database_authorizer(db, Some(receipts))
 }
 
-fn configure_database_limits(db: &Connection) -> Result<()> {
+fn configure_database_limits(db: &Connection) -> rusqlite::Result<()> {
     db.pragma_update(None, "synchronous", "NORMAL")?;
     use_wal(db);
 
@@ -4214,7 +4215,7 @@ fn configure_database_limits(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn install_database_authorizer(db: &Connection, receipts: Option<Arc<std::sync::atomic::AtomicBool>>) -> Result<()> {
+fn install_database_authorizer(db: &Connection, receipts: Option<Arc<std::sync::atomic::AtomicBool>>) -> rusqlite::Result<()> {
     let function_connection = receipts.is_some();
     let reserved = move |name: &str, accessor: Option<&str>| {
         schema_transform::is_internal_table(name)

@@ -12,6 +12,7 @@
   "function.definition-invalid": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.count-over": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.bundle-size": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
+  "function.bundle-contract": { "fix": "capsule", "remedy": "Rebuild the Server Artifact so each bundle exports handle and has no module imports." },
   "function.artifact-size": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.artifact-missing": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.artifact-manifest": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },

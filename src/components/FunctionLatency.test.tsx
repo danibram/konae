@@ -25,7 +25,7 @@ describe("function latency in Usage", () => {
     expect(html).toContain("p99 105 ms");
     expect(html).toContain("2 timeouts");
     expect(html).toContain("1 write with an unconfirmed result");
-    expect(html).toContain("4 retries answered from a saved result");
+    expect(html).toContain("4 identical retries returned 409");
     expect(html).toContain("Stage percentiles do not add up");
     expect(html).toContain('aria-label="orders p95 time limit used"');
   });

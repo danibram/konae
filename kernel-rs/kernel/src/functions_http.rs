@@ -294,6 +294,10 @@ enum Prepared {
     Replay(Timed),
     Run(PreparedRun),
 }
+enum ReceiptPrelookup {
+    Continue(Body),
+    Replay(Timed),
+}
 impl Timed {
     fn refusal(response: Response, elapsed: Duration) -> Self {
         Self {
@@ -305,6 +309,62 @@ impl Timed {
             outcome: FunctionOutcome::Refused,
         }
     }
+}
+
+async fn prelookup_receipt(
+    database: &PathBuf,
+    actor: Option<&str>,
+    function_name: &str,
+    key: &str,
+    method: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: Body,
+    budget: &Budget,
+    started: Instant,
+) -> Result<ReceiptPrelookup, Response> {
+    let candidate = function_data::lookup_receipt(database, actor, function_name, key, budget)
+        .map_err(|error| failure(error.status, error.code, &error.message))?;
+    let Some(stored_fingerprint) = candidate else {
+        return Ok(ReceiptPrelookup::Continue(body));
+    };
+    let legacy = !stored_fingerprint.starts_with("v3:");
+    let (body_len, body_digest, legacy_body, _permits) =
+        read_replay_body(body, legacy, budget).await?;
+    if legacy && legacy_body.is_none() {
+        return Err(failure(
+            409,
+            "idempotency_conflict",
+            "Idempotency-Key was already used with a different request.",
+        ));
+    }
+    let fingerprint = if legacy {
+        function_data::request_fingerprint(
+            method,
+            path,
+            legacy_body.as_deref().unwrap_or_default(),
+            headers,
+        )
+    } else {
+        function_data::request_fingerprint_v3(method, path, body_len, &body_digest, headers)
+    }
+    .map_err(|error| failure(error.status, error.code, &error.message))?;
+    if fingerprint != stored_fingerprint {
+        return Err(failure(
+            409,
+            "idempotency_conflict",
+            "Idempotency-Key was already used with a different request.",
+        ));
+    }
+    let replay = function_data::Failure::replay();
+    Ok(ReceiptPrelookup::Replay(Timed {
+        response: failure(replay.status, replay.code, &replay.message),
+        queue: started.elapsed(),
+        initialization: Duration::ZERO,
+        execution: Duration::ZERO,
+        cold: false,
+        outcome: FunctionOutcome::Replayed,
+    }))
 }
 
 fn failure(status: u16, code: &str, message: &str) -> Response {
@@ -360,6 +420,7 @@ fn outcome(code: &str) -> FunctionOutcome {
     match code {
         "deadline_exceeded" | "cancelled" => FunctionOutcome::DeadlineExceeded,
         "mutation_outcome_unknown" => FunctionOutcome::MutationOutcomeUnknown,
+        function_data::IDEMPOTENCY_REPLAY_CODE => FunctionOutcome::Replayed,
         _ => FunctionOutcome::Failed,
     }
 }
@@ -599,6 +660,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             .to_owned();
         let method = request.method().as_str().to_owned();
         let has_data = !function.actions.is_empty();
+        let mut request_body = Some(request.into_body());
         if has_data {
             crate::modules::require_on(&deployment.modules, "actions")
                 .map_err(|refused| crate::refusal_error(&refused))?;
@@ -622,52 +684,22 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 ));
             }
             let database = crate::layout::database(&state.data_root, &deployment.id);
-            let candidate =
-                function_data::lookup_receipt(&database, actor_id.as_deref(), &name, key, &budget)
-                    .map_err(|error| failure(error.status, error.code, &error.message))?;
-            if let Some((stored_fingerprint, output)) = candidate {
-                let legacy = !stored_fingerprint.starts_with("v3:");
-                let (body_len, body_digest, legacy_body, _permits) =
-                    read_replay_body(request.into_body(), legacy, &budget).await?;
-                if legacy && legacy_body.is_none() {
-                    return Err(failure(
-                        409,
-                        "idempotency_conflict",
-                        "Idempotency-Key was already used with a different request.",
-                    ));
-                }
-                let fingerprint = if legacy {
-                    function_data::request_fingerprint(
-                        &method,
-                        &path,
-                        legacy_body.as_deref().unwrap_or_default(),
-                        &headers,
-                    )
-                } else {
-                    function_data::request_fingerprint_v3(
-                        &method,
-                        &path,
-                        body_len,
-                        &body_digest,
-                        &headers,
-                    )
-                }
-                .map_err(|error| failure(error.status, error.code, &error.message))?;
-                if fingerprint != stored_fingerprint {
-                    return Err(failure(
-                        409,
-                        "idempotency_conflict",
-                        "Idempotency-Key was already used with a different request.",
-                    ));
-                }
-                return Ok(Prepared::Replay(Timed {
-                    response: respond(output),
-                    queue: started.elapsed(),
-                    initialization: Duration::ZERO,
-                    execution: Duration::ZERO,
-                    cold: false,
-                    outcome: FunctionOutcome::Replayed,
-                }));
+            match prelookup_receipt(
+                &database,
+                actor_id.as_deref(),
+                &name,
+                key,
+                &method,
+                &path,
+                &headers,
+                request_body.take().unwrap(),
+                &budget,
+                started,
+            )
+            .await?
+            {
+                ReceiptPrelookup::Continue(body) => request_body = Some(body),
+                ReceiptPrelookup::Replay(timed) => return Ok(Prepared::Replay(timed)),
             }
         }
         let cache_key = format!(
@@ -682,7 +714,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             .lease_admitted(cache_key, &budget, admission)
             .await
             .map_err(|code| executor_failure(&code))?;
-        let (body, body_pump) = start_body_pump(request.into_body(), budget.clone());
+        let (body, body_pump) = start_body_pump(request_body.unwrap(), budget.clone());
         let program = Arc::new(crate::action_shape::read(&deployment.actions).map_err(|_| {
             failure(
                 500,
@@ -773,7 +805,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 let queue = began.duration_since(started);
                 let mut native_failure = None;
                 let mut invocation = None;
-                let mut replay = None;
+                let mut replayed = None;
                 let mut config = Some(config);
                 let request_body: Arc<dyn konae_functions_executor::RequestBody> = body.clone();
                 let action_body = body.clone();
@@ -838,9 +870,10 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                             }
                         }
                         match function_data::admit(config, budget.clone()) {
-                            Ok(Admission::Replay(output)) => {
-                                replay = Some(output);
-                                return Err("idempotency_replay".into());
+                            Ok(Admission::Replay(error)) => {
+                                let code = error.code.to_owned();
+                                replayed = Some(error);
+                                return Err(code);
                             }
                             Ok(Admission::Run(value)) => invocation = Some(value),
                             Err(error) => {
@@ -882,7 +915,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         outcome: outcome(&code),
                     };
                 }
-                if run.output.is_err() && invocation.is_none() && replay.is_none() {
+                if run.output.is_err() && invocation.is_none() && replayed.is_none() {
                     let (response, result_outcome) = if let Some(error) = native_failure {
                         (
                             failure(error.status, error.code, &error.message),
@@ -904,7 +937,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         outcome: result_outcome,
                     };
                 }
-                if replay.is_none() && invocation.is_none() {
+                if replayed.is_none() && invocation.is_none() {
                     let (body_len, body_digest) = if request_method == "POST" {
                         let Some(summary) = body.summary() else {
                             return Timed::refusal(
@@ -950,7 +983,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         }
                     }
                     match function_data::admit(config, budget.clone()) {
-                        Ok(Admission::Replay(output)) => replay = Some(output),
+                        Ok(Admission::Replay(error)) => replayed = Some(error),
                         Ok(Admission::Run(value)) => invocation = Some(value),
                         Err(error) => {
                             return Timed::refusal(
@@ -960,9 +993,9 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         }
                     }
                 }
-                if let Some(output) = replay {
+                if let Some(error) = replayed {
                     return Timed {
-                        response: respond(output),
+                        response: failure(error.status, error.code, &error.message),
                         queue,
                         initialization: run.initialization,
                         execution: began.elapsed().saturating_sub(run.initialization),
@@ -1043,12 +1076,12 @@ impl Drop for Bundle {
     }
 }
 fn pinned_bundle(state: &AppState, deployment: &Deployment, name: &str) -> anyhow::Result<Bundle> {
-    let artifact =
-        crate::functions::read_artifact(&crate::layout::server(&state.data_root, &deployment.id))?
-            .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
-    let metadata = crate::functions::validate_artifact(Some(&artifact.manifest), Some(&artifact))?;
+    let (artifact, metadata) = crate::functions::read_artifact_with_metadata(
+        &crate::layout::server(&state.data_root, &deployment.id),
+    )?
+    .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
     anyhow::ensure!(
-        metadata == deployment.server,
+        Some(metadata) == deployment.server,
         "Published server artifact changed"
     );
     let directory = crate::layout::private(&state.data_root, &deployment.id)

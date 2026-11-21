@@ -37,7 +37,7 @@ test("editor builds separate ESM bytes and preview never imports server entry", 
   expect(preview.script).not.toContain("SERVER_PRIVATE_BYTES");
 });
 
-test("local and generated folder builders do not execute top-level server code", async () => {
+test("local and refreshed folder builders run with the old dependency set", async () => {
   const root = await folder();
   const local = await buildLocal(root);
   expect(local.serverArtifact?.bundles.orders).toContain("SERVER_TOP_LEVEL_SENTINEL");
@@ -45,7 +45,9 @@ test("local and generated folder builders do not execute top-level server code",
   expect(JSON.stringify(local.artifact.files)).not.toContain("SERVER_PRIVATE_BYTES");
   const generated = generatedFiles({ settings: { id: project.id, name: project.name, slug: project.slug, visibility: "public", kernel: "0.12.1", manifest: {}, modules: project.modules }, actionsSource: '{"version":1,"actions":{}}', schemaSource: "", runtime: "", staticArtifact: await readFile("src/lib/static-artifact.js", "utf8"), localBuilder: await readFile("src/lib/local-builder.js", "utf8") });
   for (const entry of generated) { await mkdir(path.dirname(path.join(root, entry.path)), { recursive: true }); await writeFile(path.join(root, entry.path), entry.contents); }
-  await symlink(path.resolve("node_modules"), path.join(root, "node_modules"));
+  expect(generated.find((entry) => entry.path === "scripts/build.mjs")?.contents).not.toContain("@babel/parser");
+  await mkdir(path.join(root, "node_modules"));
+  await symlink(path.resolve("node_modules/esbuild"), path.join(root, "node_modules/esbuild"));
   const process = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ exitCode: await process.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
@@ -68,6 +70,25 @@ test("bundler refuses non-self-contained exports and host imports", async () => 
     await writeFile(entry, code);
     await expect(bundleFunctions(path.join(root, "app"), parseFunctions(source))).rejects.toThrow();
   }
+});
+
+test("both builders use the artifact contract refusal without handle", async () => {
+  const root = await folder();
+  const noHandle = "export default () => null;";
+  await writeFile(path.join(root, "app/functions/orders.ts"), noHandle);
+  const refusal = { code: "function.bundle-contract", message: "Function orders bundle must be a self-contained ESM module exporting handle." };
+  await expect(bundleFunctions(path.join(root, "app"), parseFunctions(source))).rejects.toMatchObject(refusal);
+  await expect(buildProjectInBrowser({ ...project, files: { ...files, "functions/orders.ts": noHandle } })).rejects.toMatchObject(refusal);
+});
+
+test("both builders preserve aliased handle, shutdown, and extra exports", async () => {
+  const root = await folder();
+  const source = "const run = () => new Response('ok'); const stop = () => {}; export { run as handle, stop as shutdown }; export const extra = 1;";
+  await writeFile(path.join(root, "app/functions/orders.ts"), source);
+  const local = await buildLocal(root);
+  expect(local.serverArtifact?.bundles.orders).toMatch(/export\s*\{[^}]*handle/);
+  const browser = await buildProjectInBrowser({ ...project, files: { ...files, "functions/orders.ts": source } });
+  expect(browser.serverArtifact?.bundles.orders).toMatch(/export\s*\{[^}]*handle/);
 });
 
 const honoModules = path.resolve("spikes/functions-runtime/app/node_modules");

@@ -1,9 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use anyhow::Result;
+use oxc_allocator::Allocator;
+use oxc_parser::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use oxc_span::SourceType;
+use oxc_syntax::module_record::ExportExportName;
 use crate::refusal::{refuse, Refusal};
 
 pub const ABI: &str = "konae-functions/1";
@@ -214,10 +218,32 @@ pub fn validate_artifact(manifest: Option<&Manifest>, artifact: Option<&ServerAr
     }
     if total > MAX_SERVER { return Err(refuse("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.")); }
     if manifest != Some(&artifact.manifest) { return Err(refuse("function.artifact-manifest", "Server Artifact manifest does not match functions.json.")); }
+    for (name, bundle) in &artifact.bundles {
+        if !valid_bundle(bundle) { return Err(bundle_contract_refusal(name)); }
+    }
     Ok(Some(Published { version: 1, abi: ABI.into(), manifest: artifact.manifest.clone(), hashes }))
 }
 
+fn valid_bundle(source: &str) -> bool {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::mjs()).parse();
+    parsed.errors.is_empty()
+        && parsed.module_record.requested_modules.is_empty()
+        && parsed.module_record.dynamic_imports.is_empty()
+        && parsed.module_record.local_export_entries.iter().any(|entry| {
+            matches!(&entry.export_name, ExportExportName::Name(name) if name.name == "handle")
+        })
+}
+
+fn bundle_contract_refusal(name: &str) -> Refusal {
+    refuse("function.bundle-contract", format!("Function {name} bundle must be a self-contained ESM module exporting handle."))
+}
+
 pub fn read_artifact(directory: &Path) -> Result<Option<ServerArtifact>> {
+    Ok(read_artifact_with_metadata(directory)?.map(|(artifact, _)| artifact))
+}
+
+pub(crate) fn read_artifact_with_metadata(directory: &Path) -> Result<Option<(ServerArtifact, Published)>> {
     if !directory.exists() { return Ok(None); }
     if std::fs::read_dir(directory)?.next().is_none() { return Ok(None); }
     let file = directory.join("manifest.json");
@@ -239,7 +265,7 @@ pub fn read_artifact(directory: &Path) -> Result<Option<ServerArtifact>> {
     anyhow::ensure!(checked == published, "Server Artifact hashes do not match its bundles.");
     let expected: BTreeSet<_> = std::iter::once("manifest.json".to_owned()).chain(published.manifest.functions.keys().map(|name| format!("{name}.mjs"))).collect();
     for entry in std::fs::read_dir(directory)? { anyhow::ensure!(expected.contains(&entry?.file_name().to_string_lossy().into_owned()), "Server directory contains an undeclared file."); }
-    Ok(Some(artifact))
+    Ok(Some((artifact, checked)))
 }
 
 pub async fn stage(root: &Path, artifact: Option<&ServerArtifact>) -> Result<()> {
@@ -299,7 +325,7 @@ pub(crate) mod tests {
 
     #[test]
     fn server_artifact_limits_and_correspondence() {
-        let input: crate::DeployInput = serde_json::from_value(release("limits", "x")).unwrap();
+        let input: crate::DeployInput = serde_json::from_value(release("limits", "export const handle=()=>null;")).unwrap();
         let artifact = input.server_artifact.unwrap();
         let manifest = artifact.manifest.clone();
         assert_eq!(validate_artifact(Some(&manifest), None).unwrap_err().code, "function.artifact-missing");
@@ -308,7 +334,8 @@ pub(crate) mod tests {
         assert_eq!(validate_artifact(Some(&manifest), Some(&changed)).unwrap_err().code, "function.artifact-abi");
         let mut changed = artifact.clone(); changed.bundles.clear();
         assert_eq!(validate_artifact(Some(&manifest), Some(&changed)).unwrap_err().code, "function.artifact-bundles");
-        let mut changed = artifact.clone(); changed.bundles.insert("orders".into(), "x".repeat(MAX_BUNDLE));
+        let full_bundle = format!("export const handle=()=>null;/*{}*/", "x".repeat(MAX_BUNDLE - "export const handle=()=>null;/**/".len()));
+        let mut changed = artifact.clone(); changed.bundles.insert("orders".into(), full_bundle.clone());
         assert!(validate_artifact(Some(&manifest), Some(&changed)).is_ok());
         changed.bundles.get_mut("orders").unwrap().push('x');
         assert_eq!(validate_artifact(Some(&manifest), Some(&changed)).unwrap_err().code, "function.bundle-size");
@@ -316,7 +343,7 @@ pub(crate) mod tests {
         for n in 0..8 {
             let name = format!("f{n}");
             changed.manifest.functions.insert(name.clone(), manifest.functions["orders"].clone());
-            changed.bundles.insert(name, "x".repeat(MAX_BUNDLE));
+            changed.bundles.insert(name, full_bundle.clone());
         }
         assert_eq!(validate_artifact(Some(&changed.manifest), Some(&changed)).unwrap_err().code, "function.artifact-size");
     }
@@ -341,7 +368,7 @@ pub(crate) mod tests {
         let c = crate::folder::open(&state, "functions", None).await.unwrap();
         assert_eq!(b.server, c.server);
         assert_eq!(b.artifact_version, c.artifact_version);
-        std::fs::write(server.join("orders.mjs"), "changed without updating hash").unwrap();
+        std::fs::write(server.join("orders.mjs"), "export function handle() { return new Response('C'); }").unwrap();
         assert!(crate::folder::open(&state, "functions", None).await.err().unwrap().to_string().contains("hashes"));
         let _ = std::fs::remove_dir_all(root);
     }

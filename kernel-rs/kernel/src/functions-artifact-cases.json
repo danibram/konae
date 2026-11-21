@@ -8124,5 +8124,46 @@
     "gate": false,
     "code": "function.manifest-size",
     "message": "Server manifest exceeds 262144 UTF-8 bytes."
+  },
+  {
+    "name": "self-contained ESM keeps handle aliases and extra exports",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"const fn=()=>null; const stop=()=>{}; export { fn as handle, stop as shutdown }; export const extra=1;"}},
+    "ok": true
+  },
+  {
+    "name": "bundle without named handle export",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"export default () => null;"}},
+    "code": "function.bundle-contract",
+    "message": "Function orders bundle must be a self-contained ESM module exporting handle."
+  },
+  {
+    "name": "bundle with static import",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"import './other.mjs'; export const handle=()=>null;"}},
+    "code": "function.bundle-contract",
+    "message": "Function orders bundle must be a self-contained ESM module exporting handle."
+  },
+  {
+    "name": "bundle with sourced reexport",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"const fn=()=>null; export { fn as handle }; export { other } from './other.mjs';"}},
+    "code": "function.bundle-contract",
+    "message": "Function orders bundle must be a self-contained ESM module exporting handle."
+  },
+  {
+    "name": "bundle with nested dynamic import",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"export const handle=()=>({ nested: [() => import('./other.mjs')] });"}},
+    "code": "function.bundle-contract",
+    "message": "Function orders bundle must be a self-contained ESM module exporting handle."
+  },
+  {
+    "name": "bundle with invalid module syntax",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"export const handle = ;"}},
+    "code": "function.bundle-contract",
+    "message": "Function orders bundle must be a self-contained ESM module exporting handle."
   }
 ]

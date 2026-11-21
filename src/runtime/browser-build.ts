@@ -1,4 +1,5 @@
 import { parseFunctions, validateFunctions, validateServerArtifact, FUNCTIONS_ABI, type ServerArtifact } from "../kernel/functions";
+import { refusal } from "../kernel/refusal";
 import * as esbuild from "esbuild-wasm";
 import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
 import type { MiniAppProject } from "../lib/types";
@@ -28,7 +29,7 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
   validateFunctions(manifest, { files: Object.keys(project.files), modules: project.modules, actions, staticPaths: Object.keys(artifact.files) });
   const bundles: Record<string, string> = {};
   for (const [name, fn] of Object.entries(manifest.functions)) {
-    const bundle = await bundleInBrowser(project, textFiles(project), fn.entry, true, true);
+    const bundle = await bundleInBrowser(project, textFiles(project), fn.entry, true, true, name);
     Object.defineProperty(bundles, name, { value: bundle.script, enumerable: true });
   }
   const serverArtifact: ServerArtifact = { version: 1, abi: FUNCTIONS_ABI, manifest, bundles };
@@ -56,7 +57,7 @@ export async function compileProjectInBrowser(project: MiniAppProject, options: 
   return compiled;
 }
 
-async function bundleInBrowser(project: MiniAppProject, files: Record<string, string>, entrypoint: string, release = false, server = false): Promise<{ script: string; styles: string }> {
+async function bundleInBrowser(project: MiniAppProject, files: Record<string, string>, entrypoint: string, release = false, server = false, functionName = entrypoint): Promise<{ script: string; styles: string }> {
   initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true }).catch((error) => {
     initialized = undefined;
     throw error;
@@ -78,7 +79,9 @@ async function bundleInBrowser(project: MiniAppProject, files: Record<string, st
   });
   if (server) {
     const output = Object.entries(result.metafile!.outputs).find(([file]) => file.endsWith(".js"));
-    if (!output || output[1].imports.length || !output[1].exports.includes("handle") || result.outputFiles.length !== 1) throw new Error(`Function ${entrypoint} must build to one self-contained ESM bundle exporting handle.`);
+    if (!output || output[1].imports.length || !output[1].exports.includes("handle") || result.outputFiles.length !== 1) {
+      throw refusal("function.bundle-contract", `Function ${functionName} bundle must be a self-contained ESM module exporting handle.`);
+    }
   }
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (!script) throw new Error("The browser builder did not produce JavaScript.");

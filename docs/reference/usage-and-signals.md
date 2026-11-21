@@ -86,9 +86,9 @@ Nothing else the Kernel refuses is counted. The Kernel writes Usage off the requ
 
 ### Function latency
 
-The experimental function runner adds `functionLatency` to `usage_summary`. The app's Usage page shows one row per function, bundle version and time limit. It compares total p95 with that limit and shows p50, p95, p99, maximum, timeouts, cold starts, refusals, uncertain writes and saved-response replays. `usage_overview` omits this detail.
+The experimental function runner adds `functionLatency` to `usage_summary`. The app's Usage page shows one row per function, bundle version and time limit. It compares total p95 with that limit and shows p50, p95, p99, maximum, timeouts, cold starts, refusals, uncertain writes and identical retries returned as 409. `usage_overview` omits this detail.
 
-The Kernel measures elapsed time from admission to its response decision with a monotonic clock. Total time includes queueing, initialization and native operations. A warm call has zero initialization time. Stage percentiles describe different sets of values and must not be added to obtain the total percentile. These timings exclude the client's network time.
+The Kernel measures elapsed time from admission to its response decision with a monotonic clock. Initialization measures worker process startup. Execution includes creating the isolate, evaluating the bundle and running the handler and its native operations. Stage percentiles describe different sets of values and must not be added to obtain the total percentile. These timings exclude the client's network time.
 
 Each app retains at most 10,000 latency samples and at most 400 days. A summary includes at most the 128 most recently active function/version/limit combinations. `retainedOnly`, `seriesTruncated`, `prunedThrough` and `retainedFrom` describe those limits. Percentiles use the nearest rank among retained samples in the selected period. They do not describe every historical call after samples have been pruned.
 

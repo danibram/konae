@@ -14,6 +14,8 @@ A POST handler with an action allowlist must consume the complete body before it
 
 New idempotency fingerprints use an explicit `v3:` version. V3 hashes the method, path and canonical headers with the complete byte length and streaming SHA-256 body digest. Existing unversioned v2 receipts keep their original length-prefixed raw-body fingerprint. A prelookup identifies those receipts before starting a worker. The legacy replay path buffers at most the old 16 KiB request limit. A larger request cannot match a v2 receipt, so the Kernel counts it through EOF without retaining it and returns an idempotency conflict. Receipts remain part of exported app data.
 
+A matching v2 or v3 receipt returns `409 idempotency_replay`. The caller reads current state through an authorized request, and the Kernel never returns the historical response body. New receipts keep the existing table layout and store `null` in `response_json` as a marker. The Kernel accepts existing exported receipts with their original response values and does not migrate or delete them.
+
 Each serialized action operation has a separate 1 MiB cap measured after JSON escaping. The 64-operation limit, action schemas, SQL bindings, query row and result limits, response cap and file limits stay independent. `request.json()` and `request.text()` retain standard Web behavior, but parsing a 100 MB body requires worker heap and may exceed the default 64 MiB heap or 256 MiB RSS cap. Large-body handlers should consume `Request.body` incrementally.
 
 ## Consequences

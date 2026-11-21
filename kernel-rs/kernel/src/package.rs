@@ -1459,8 +1459,11 @@ mod tests {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(replay.status(), reqwest::StatusCode::OK);
-            assert_eq!(replay.json::<Value>().await.unwrap(), original_rows);
+            assert_eq!(replay.status(), reqwest::StatusCode::CONFLICT);
+            assert_eq!(
+                replay.json::<Value>().await.unwrap()["code"],
+                crate::function_data::IDEMPOTENCY_REPLAY_CODE
+            );
             let response = client
                 .get(format!("http://{address}/api/orders"))
                 .header("host", &imported.hostname)

@@ -1,5 +1,6 @@
 import { refusal } from "./refusal";
 import { checksum } from "../mcp/client";
+import { parse as parseEsm } from "@babel/parser";
 
 export const FUNCTIONS_ABI = "konae-functions/1";
 export type FunctionDefinition = { entry: string; mount: string; methods: ("GET" | "POST")[]; access: "authenticated" | "anonymous"; actions: string[] };
@@ -7,7 +8,69 @@ export type FunctionsManifest = { version: 1; functions: Record<string, Function
 export type ServerArtifact = { version: 1; abi: typeof FUNCTIONS_ABI; manifest: FunctionsManifest; bundles: Record<string, string> };
 export type FunctionsContext = { files: Iterable<string>; modules?: Record<string, { on?: boolean }>; actions?: Record<string, unknown>; staticPaths?: string[] };
 
-function functionsContract(refuse: (code: Parameters<typeof refusal>[0], message: string) => Error = (code, message) => Object.assign(new Error(message), { code })) {
+type BundleAstNode = { type: string; [key: string]: unknown };
+
+function bundleAstNode(value: unknown): value is BundleAstNode {
+  return value !== null && typeof value === "object" && !Array.isArray(value) && typeof (value as { type?: unknown }).type === "string";
+}
+
+function bundleBindingHasHandle(value: unknown): boolean {
+  const pending = [value];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!bundleAstNode(current)) continue;
+    if (current.type === "Identifier" && current.name === "handle") return true;
+    if (current.type === "RestElement") pending.push(current.argument);
+    if (current.type === "AssignmentPattern") pending.push(current.left);
+    if (current.type === "ArrayPattern" && Array.isArray(current.elements)) {
+      for (const element of current.elements) pending.push(element);
+    }
+    if (current.type === "ObjectPattern" && Array.isArray(current.properties)) {
+      for (const property of current.properties) {
+        if (bundleAstNode(property)) pending.push(property.type === "RestElement" ? property.argument : property.value);
+      }
+    }
+  }
+  return false;
+}
+
+function bundleExportedHandle(value: unknown): boolean {
+  if (!bundleAstNode(value) || value.type !== "ExportNamedDeclaration") return false;
+  const declaration = value.declaration;
+  if (bundleAstNode(declaration)) {
+    if ((declaration.type === "FunctionDeclaration" || declaration.type === "ClassDeclaration") && bundleBindingHasHandle(declaration.id)) return true;
+    if (declaration.type === "VariableDeclaration" && Array.isArray(declaration.declarations)
+      && declaration.declarations.some((item) => bundleAstNode(item) && bundleBindingHasHandle(item.id))) return true;
+  }
+  return Array.isArray(value.specifiers) && value.specifiers.some((specifier) => {
+    if (!bundleAstNode(specifier) || !bundleAstNode(specifier.exported)) return false;
+    const exported = specifier.exported;
+    return exported.type === "Identifier" && exported.name === "handle"
+      || exported.type === "StringLiteral" && exported.value === "handle";
+  });
+}
+
+function validServerBundle(source: string): boolean {
+  let program: unknown;
+  try { program = parseEsm(source, { sourceType: "module", createImportExpressions: true }).program; }
+  catch { return false; }
+  let exportsHandle = false;
+  const pending = [program];
+  while (pending.length) {
+    const current = pending.pop();
+    if (Array.isArray(current)) { for (const item of current) pending.push(item); continue; }
+    if (!bundleAstNode(current)) continue;
+    if (current.type === "ImportDeclaration" || current.type === "ExportAllDeclaration"
+      || current.type === "ExportNamedDeclaration" && current.source !== null && current.source !== undefined
+      || current.type === "ImportExpression"
+      || current.type === "CallExpression" && bundleAstNode(current.callee) && current.callee.type === "Import") return false;
+    if (bundleExportedHandle(current)) exportsHandle = true;
+    for (const child of Object.values(current)) pending.push(child);
+  }
+  return exportsHandle;
+}
+
+function functionsContract(refuse: (code: Parameters<typeof refusal>[0], message: string) => Error = (code, message) => Object.assign(new Error(message), { code }), validateBundle: (source: string) => boolean = () => true) {
   const FUNCTIONS_ABI = "konae-functions/1";
   const refusal = refuse;
 function object(value: unknown): value is Record<string, unknown> {
@@ -118,6 +181,9 @@ function validateServerArtifact(manifest: FunctionsManifest | undefined, input: 
   }
   if (total > 8388608) throw refusal("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.");
   if (!manifest || canonical(normalized) !== canonical(manifest)) throw refusal("function.artifact-manifest", "Server Artifact manifest does not match functions.json.");
+  for (const name of Object.keys(bundles)) {
+    if (!validateBundle(bundles[name])) throw refusal("function.bundle-contract", `Function ${name} bundle must be a self-contained ESM module exporting handle.`);
+  }
   return { version: 1, abi: FUNCTIONS_ABI, manifest, bundles };
 }
 
@@ -128,7 +194,7 @@ function serverManifestText(manifest: FunctionsManifest, hashes: Record<string, 
   return { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText };
 }
 
-export const { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText } = functionsContract(refusal);
+export const { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText } = functionsContract(refusal, validServerBundle);
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

@@ -55,7 +55,7 @@ export async function bundleFunctions(app, manifest, development = false) {
     });
     const output = Object.entries(result.metafile.outputs).find(([file]) => file.endsWith(".js"));
     if (!output || output[1].imports.length || !output[1].exports.includes("handle") || result.outputFiles.length !== 1) {
-      throw Error(`Function ${name} must build to one self-contained ESM bundle exporting handle.`);
+      throw Object.assign(new Error(`Function ${name} bundle must be a self-contained ESM module exporting handle.`), { code: "function.bundle-contract" });
     }
     bundles[name] = result.outputFiles[0].text;
   }

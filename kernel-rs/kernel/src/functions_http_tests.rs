@@ -298,6 +298,185 @@ async fn request_body_pump_keeps_a_small_queue_and_enforces_real_byte_eof() {
     );
 }
 
+#[tokio::test]
+async fn receipt_prelookup_refuses_matching_v2_and_v3_without_returning_old_bodies() {
+    let root =
+        std::env::temp_dir().join(format!("konae-function-prelookup-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let database = root.join("database.sqlite");
+    let db = Connection::open(&database).unwrap();
+    db.execute_batch(
+        "CREATE TABLE __konae_function_receipts (actor_scope TEXT NOT NULL, function_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(actor_scope,function_name,idempotency_key)) WITHOUT ROWID;
+         CREATE TABLE orders(id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL);
+         CREATE TABLE audit(id INTEGER PRIMARY KEY);
+         INSERT INTO orders VALUES(1,'bob');
+         INSERT INTO audit VALUES(1);",
+    )
+    .unwrap();
+    let actor_scope = serde_json::to_string(&Some("alice")).unwrap();
+    let body = br#"{"id":1}"#;
+    let path = "/orders/1?view=short";
+    let headers = vec![
+        ("accept".into(), "application/json".into()),
+        ("content-type".into(), "application/json".into()),
+    ];
+    let v2 = function_data::request_fingerprint("POST", path, body, &headers).unwrap();
+    let body_digest: [u8; 32] = Sha256::digest(body).into();
+    let v3 =
+        function_data::request_fingerprint_v3("POST", path, body.len(), &body_digest, &headers)
+            .unwrap();
+    let historical = serde_json::to_string(&Output {
+        status: 200,
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: r#"{"secret":"historical"}"#.into(),
+    })
+    .unwrap();
+    for (key, fingerprint) in [("v2", &v2), ("v3", &v3)] {
+        db.execute(
+            "INSERT INTO __konae_function_receipts VALUES(?1,'orders',?2,?3,?4)",
+            rusqlite::params![actor_scope, key, fingerprint, historical],
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    for key in ["v2", "v3"] {
+        let result = prelookup_receipt(
+            &database,
+            Some("alice"),
+            "orders",
+            key,
+            "POST",
+            path,
+            &headers,
+            Body::from(body.to_vec()),
+            &Budget::new(Duration::from_secs(5)),
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+        let ReceiptPrelookup::Replay(timed) = result else {
+            panic!("expected a matching receipt");
+        };
+        assert!(matches!(timed.outcome, FunctionOutcome::Replayed));
+        assert!(matches!(
+            outcome(function_data::IDEMPOTENCY_REPLAY_CODE),
+            FunctionOutcome::Replayed
+        ));
+        assert_eq!(timed.response.status(), StatusCode::CONFLICT);
+        let value: Value = serde_json::from_slice(
+            &axum::body::to_bytes(timed.response.into_body(), 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["code"], function_data::IDEMPOTENCY_REPLAY_CODE);
+        assert!(!value.to_string().contains("historical"));
+    }
+
+    let continued = prelookup_receipt(
+        &database,
+        Some("alice"),
+        "orders",
+        "missing",
+        "POST",
+        path,
+        &headers,
+        Body::from(body.to_vec()),
+        &Budget::new(Duration::from_secs(5)),
+        Instant::now(),
+    )
+    .await
+    .unwrap();
+    let ReceiptPrelookup::Continue(stream) = continued else {
+        panic!("a new key must continue to the worker");
+    };
+    assert_eq!(
+        axum::body::to_bytes(stream, 1024).await.unwrap().as_ref(),
+        body
+    );
+
+    let oversized_legacy = match prelookup_receipt(
+        &database,
+        Some("alice"),
+        "orders",
+        "v2",
+        "POST",
+        path,
+        &headers,
+        Body::from(vec![b'x'; MAX_LEGACY_FUNCTION_BODY_BYTES + 1]),
+        &Budget::new(Duration::from_secs(5)),
+        Instant::now(),
+    )
+    .await
+    {
+        Err(response) => response,
+        Ok(_) => panic!("an oversized legacy body must conflict"),
+    };
+    assert_eq!(oversized_legacy.status(), StatusCode::CONFLICT);
+    let value: Value = serde_json::from_slice(
+        &axum::body::to_bytes(oversized_legacy.into_body(), 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["code"], "idempotency_conflict");
+
+    let changed = match prelookup_receipt(
+        &database,
+        Some("alice"),
+        "orders",
+        "v3",
+        "POST",
+        path,
+        &headers,
+        Body::from(br#"{"id":2}"#.to_vec()),
+        &Budget::new(Duration::from_secs(5)),
+        Instant::now(),
+    )
+    .await
+    {
+        Err(response) => response,
+        Ok(_) => panic!("a different request must conflict"),
+    };
+    assert_eq!(changed.status(), StatusCode::CONFLICT);
+    let value: Value = serde_json::from_slice(
+        &axum::body::to_bytes(changed.into_body(), 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["code"], "idempotency_conflict");
+
+    let db = Connection::open(&database).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM orders WHERE owner_id='alice' LIMIT 10",
+            [],
+            |row| { row.get::<_, i64>(0) }
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM audit LIMIT 1", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM __konae_function_receipts LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        2
+    );
+    drop(db);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 static BODY_PUMP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -589,6 +768,7 @@ async fn admission_includes_requests_waiting_for_publication_and_releases_on_dro
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires KONAE_TEST_FUNCTION_WORKER pointing to the built external JavaScript worker"]
 async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
+    const DEADLINE_MS: u64 = 3500;
     let executable =
         std::env::var_os("KONAE_TEST_FUNCTION_WORKER").expect("KONAE_TEST_FUNCTION_WORKER");
     if let Some(root) = std::env::var_os("KONAE_TEST_FUNCTION_CGROUP") {
@@ -605,7 +785,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     state.functions = Arc::new(Runtime::configured(
         executable.into(),
         policy,
-        Duration::from_millis(1500),
+        Duration::from_millis(DEADLINE_MS),
         Duration::from_millis(500),
     ));
     let id = "http_functions";
@@ -698,7 +878,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .json()
         .await
         .unwrap();
-    assert_eq!(second["calls"], 2);
+    assert_eq!(second["calls"], 1);
     assert_eq!(second["rows"][0]["id"], 2);
     let post = |key: &str, input: Value| {
         client
@@ -739,29 +919,39 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .json()
         .await
         .unwrap();
-    let large_replay: Value = large_request("large-replay", "x".repeat(70_000))
+    let large_replay = large_request("large-replay", "x".repeat(70_000))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
-    assert_eq!(large_first, large_replay);
+    assert_eq!(large_replay.status(), StatusCode::CONFLICT);
+    let large_replay: Value = large_replay.json().await.unwrap();
+    assert_eq!(large_replay["code"], function_data::IDEMPOTENCY_REPLAY_CODE);
     assert_eq!(large_first["paddingLength"], 70_000, "{large_first}");
     let (left, right) = tokio::join!(
         large_request("large-concurrent", "z".repeat(70_000)).send(),
         large_request("large-concurrent", "z".repeat(70_000)).send(),
     );
-    let left: Value = left.unwrap().json().await.unwrap();
-    let right: Value = right.unwrap().json().await.unwrap();
-    assert_eq!(left, right);
+    let left = left.unwrap();
+    let right = right.unwrap();
+    assert_ne!(left.status(), right.status());
+    let (success, replay) = if left.status() == StatusCode::OK {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    assert_eq!(success.status(), StatusCode::OK);
+    let replay_status = replay.status();
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay_status, StatusCode::CONFLICT, "{replay}");
+    assert_eq!(replay["code"], function_data::IDEMPOTENCY_REPLAY_CODE);
+    let changed_body = large_request("large-replay", "y".repeat(70_000))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed_body.status(), StatusCode::CONFLICT);
     assert_eq!(
-        large_request("large-replay", "y".repeat(70_000))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::CONFLICT
+        changed_body.json::<Value>().await.unwrap()["code"],
+        "idempotency_conflict"
     );
     let db = Connection::open(crate::layout::database(&root, id)).unwrap();
     assert_eq!(
@@ -775,14 +965,35 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     let status = first.status();
     let first: Value = first.json().await.unwrap();
     assert_eq!(status, StatusCode::OK, "{first}");
-    let replay: Value = post("same", changed.clone())
+    Connection::open(crate::layout::database(&root, id))
+        .unwrap()
+        .execute("UPDATE orders SET owner_id=?1 WHERE id=1", [&accounts[1].1])
+        .unwrap();
+    let replay = post("same", changed.clone()).send().await.unwrap();
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["code"], function_data::IDEMPOTENCY_REPLAY_CODE);
+    assert!(
+        replay["error"]
+            .as_str()
+            .unwrap()
+            .contains("authorized read")
+    );
+    let current: Value = get("", &accounts[0].0)
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(replay, first);
+    assert_eq!(current["rows"], json!([]));
+    assert_eq!(
+        Connection::open(crate::layout::database(&root, id))
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM audit", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
     let legacy_fingerprint = function_data::request_fingerprint(
         "POST",
         "/api/orders",
@@ -800,14 +1011,16 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
             [legacy_fingerprint],
         )
         .unwrap();
-    let old_replay: Value = post("same", changed.clone())
-        .send()
-        .await
+    let old_replay = post("same", changed.clone()).send().await.unwrap();
+    assert_eq!(old_replay.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        old_replay.json::<Value>().await.unwrap()["code"],
+        function_data::IDEMPOTENCY_REPLAY_CODE
+    );
+    Connection::open(crate::layout::database(&root, id))
         .unwrap()
-        .json()
-        .await
+        .execute("UPDATE orders SET owner_id=?1 WHERE id=1", [&accounts[0].1])
         .unwrap();
-    assert_eq!(old_replay, first);
     let early_action = |suffix: &str, key: &str| {
         Request::builder()
             .method("POST")
@@ -1045,14 +1258,12 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .unwrap();
     assert_eq!(b_response["version"], "B");
     assert_eq!(b_response["calls"], 1);
-    let replay: Value = post("same", changed)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(replay, first);
+    let replay = post("same", changed).send().await.unwrap();
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        replay.json::<Value>().await.unwrap()["code"],
+        function_data::IDEMPOTENCY_REPLAY_CODE
+    );
     tokio::time::sleep(Duration::from_millis(1200)).await;
     let after_idle: Value = get("", &accounts[0].0)
         .send()
@@ -1065,7 +1276,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     let began = Instant::now();
     let deadline = get("/spin", &accounts[0].0).send().await.unwrap();
     assert_eq!(deadline.status(), StatusCode::GATEWAY_TIMEOUT);
-    assert!(began.elapsed() < Duration::from_millis(1900));
+    assert!(began.elapsed() < Duration::from_millis(DEADLINE_MS + 400));
     let recovered = get("", &accounts[0].0).send().await.unwrap();
     assert_eq!(recovered.status(), StatusCode::OK);
     let lock = crate::named_lock(&state, &format!("publish:{id}"), true).await;
@@ -1103,19 +1314,22 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .iter()
         .find(|row| row["version"] == c.artifact_version)
         .unwrap();
-    assert_eq!(a_series["samples"], 20, "{latency}");
+    assert_eq!(a_series["samples"], 22, "{latency}");
     assert_eq!(a_series["timeouts"], 1, "{latency}");
     assert_eq!(a_series["replays"], 4, "{latency}");
     assert_eq!(b_series["samples"], 7, "{latency}");
     assert_eq!(b_series["timeouts"], 2, "{latency}");
-    assert_eq!(b_series["coldStarts"], 3, "{latency}");
+    assert_eq!(b_series["coldStarts"], 2, "{latency}");
     assert_eq!(b_series["replays"], 1, "{latency}");
     assert_eq!(c_series["samples"], 1, "{latency}");
     assert_eq!(c_series["timeouts"], 1, "{latency}");
     assert_eq!(c_series["coldStarts"], 1, "{latency}");
-    assert_eq!(c_series["execution"]["maxMs"], 0.0, "{latency}");
     assert!(
-        c_series["initialization"]["maxMs"].as_f64().unwrap() >= 1400.0,
+        c_series["initialization"]["maxMs"].as_f64().unwrap() > 0.0,
+        "{latency}"
+    );
+    assert!(
+        c_series["execution"]["maxMs"].as_f64().unwrap() >= (DEADLINE_MS - 100) as f64,
         "{latency}"
     );
     assert!(
@@ -1123,11 +1337,11 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         "{latency}"
     );
     assert!(
-        b_series["execution"]["maxMs"].as_f64().unwrap() >= 1400.0,
+        b_series["execution"]["maxMs"].as_f64().unwrap() >= (DEADLINE_MS - 100) as f64,
         "{latency}"
     );
     assert!(
-        b_series["queue"]["maxMs"].as_f64().unwrap() >= 1500.0,
+        b_series["queue"]["maxMs"].as_f64().unwrap() >= DEADLINE_MS as f64,
         "{latency}"
     );
     if std::env::var_os("KONAE_TEST_FUNCTION_TIMINGS").is_some() {
@@ -1137,14 +1351,14 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
                 json!(format!("// {round}\n{HANDLER}"));
             publish(&state, &payload).await;
             let mut samples = Vec::new();
-            for calls in 1..=6 {
+            for _ in 0..6 {
                 let started = Instant::now();
                 let response = get("", &accounts[0].0).send().await.unwrap();
                 assert_eq!(response.status(), StatusCode::OK);
                 let bytes = response.bytes().await.unwrap();
                 samples.push(started.elapsed().as_secs_f64() * 1000.0);
                 let body: Value = serde_json::from_slice(&bytes).unwrap();
-                assert_eq!(body["calls"], calls);
+                assert_eq!(body["calls"], 1);
                 assert_eq!(body["rows"], json!([{"id": 1, "quantity": 6}]));
             }
             rounds.push(json!({"cold_ms": samples[0], "warm_ms": &samples[1..]}));

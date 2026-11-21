@@ -2,6 +2,7 @@ import { parseFunctions, validateServerArtifact, type ServerArtifact } from "../
 import type { McpClient, Transfer } from "../mcp/client";
 import { checkArtifact, checkRelease, checkSourceUpload } from "../lib/size";
 import { checkSourceFiles } from "../lib/source-rules";
+import type { SourceFiles } from "../lib/source-files";
 import { refusal } from "../kernel/refusal";
 import { buildProjectEntries } from "../lib/build-project";
 
@@ -60,7 +61,7 @@ export type ProjectIdentity = { id: string; name: string; slug: string; manifest
 type CarriedFiles = { files: Record<string, string>; encodings?: Record<string, string> };
 
 export type ReleaseContents = {
-  project: ProjectIdentity & CarriedFiles & { directories?: string[] };
+  project: ProjectIdentity & SourceFiles & { directories?: string[] };
   visibility: unknown;
   artifact: CarriedFiles & { serverArtifact?: ServerArtifact };
   serverArtifact?: ServerArtifact;
@@ -88,7 +89,7 @@ export async function publishProject<Receipt>(
   const { serverArtifact: builtServer, ...artifact } = built;
   const serverArtifact = suppliedServer ?? builtServer;
   validateServerArtifact(sent.files["functions.json"] === undefined ? undefined : parseFunctions(sent.files["functions.json"]), serverArtifact);
-  const sources: CarriedFiles & { directories: string[] } = {
+  const sources: SourceFiles & { directories: string[] } = {
     files: sent.files,
     ...(sent.encodings && Object.keys(sent.encodings).length ? { encodings: sent.encodings } : {}),
     directories: sent.directories ?? [],

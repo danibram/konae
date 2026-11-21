@@ -27,7 +27,7 @@ export function FunctionLatency({ summary }: { summary: FunctionLatencySummary |
           <small>{count.format(row.coldStarts)} cold starts</small>
           {row.failures > 0 && <small>{count.format(row.failures)} failures or refusals</small>}
           {row.uncertain > 0 && <small className="usage-failure">{count.format(row.uncertain)} {row.uncertain === 1 ? "write" : "writes"} with an unconfirmed result</small>}
-          {row.replays > 0 && <small>{count.format(row.replays)} retries answered from a saved result</small>}
+          {row.replays > 0 && <small>{count.format(row.replays)} identical retries returned 409</small>}
         </td>
         <td data-label="Breakdown"><details><summary>Stage p95 times</summary>
           <p>Queue {ms(row.queue.p95Ms)}<br />Initialization {ms(row.initialization.p95Ms)}<br />Execution {ms(row.execution.p95Ms)}</p>

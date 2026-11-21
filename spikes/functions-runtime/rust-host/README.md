@@ -1,5 +1,7 @@
 # Host experimental Rust y Deno
 
+Este README y el código de este directorio documentan el spike histórico. El runner de producción vive en `kernel-rs/functions-runner`; el benchmark `orders` sigue aislado aquí.
+
 Este servidor ejecuta el [workload común](../SPEC.md) en loopback. Los modos `native` y `deno` comparten Axum, autenticación SQLite, bases, consultas y transacciones. `deno` carga los handlers Hono compilados de [app](../app/README.md) con `deno_core` y las implementaciones Web oficiales de Deno. No modifica el Kernel ni publica apps.
 
 ## Compilar y arrancar

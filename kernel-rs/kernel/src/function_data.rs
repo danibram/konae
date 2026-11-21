@@ -12,12 +12,15 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 const RECEIPTS: &str = "__konae_function_receipts";
 const RECEIPT_SCHEMA: &str = "CREATE TABLE __konae_function_receipts (actor_scope TEXT NOT NULL, function_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(actor_scope,function_name,idempotency_key)) WITHOUT ROWID";
-pub const MAX_RECEIPT_BYTES: usize = 1024 * 1024;
+const RECEIPT_RESPONSE_MARKER: &str = "null";
+pub const IDEMPOTENCY_REPLAY_CODE: &str = "idempotency_replay";
+pub const IDEMPOTENCY_REPLAY_MESSAGE: &str =
+    "This request was already processed. Check its current state through an authorized read.";
+pub const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HEADERS: usize = 128;
 const MAX_OPERATIONS: usize = 64;
@@ -58,6 +61,9 @@ impl Failure {
             "The function receipt table has an invalid schema or attached objects.",
         )
     }
+    pub fn replay() -> Self {
+        Self::new(IDEMPOTENCY_REPLAY_CODE, 409, IDEMPOTENCY_REPLAY_MESSAGE)
+    }
 }
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -91,7 +97,7 @@ pub struct InvocationConfig {
 }
 
 pub enum Admission {
-    Replay(Output),
+    Replay(Failure),
     Run(Invocation),
 }
 
@@ -101,7 +107,7 @@ pub fn lookup_receipt(
     function_name: &str,
     key: &str,
     budget: &Budget,
-) -> Result<Option<(String, Output)>> {
+) -> Result<Option<String>> {
     let connection = RequestConnection::open(database, true, budget)?;
     let stored: Option<(String, Option<String>)> = connection.internal(|| {
         connection.sql(|| {
@@ -170,23 +176,12 @@ pub fn lookup_receipt(
         return Err(Failure::schema());
     }
     let actor_scope = serde_json::to_string(&actor).map_err(|_| Failure::storage())?;
-    let receipt: Option<(String, String)> = connection.internal(|| connection.sql(|| connection.db.query_row(
-        "SELECT fingerprint,response_json FROM __konae_function_receipts WHERE actor_scope=?1 AND function_name=?2 AND idempotency_key=?3 LIMIT 1",
+    let receipt: Option<String> = connection.internal(|| connection.sql(|| connection.db.query_row(
+        "SELECT fingerprint FROM __konae_function_receipts WHERE actor_scope=?1 AND function_name=?2 AND idempotency_key=?3 LIMIT 1",
         params![actor_scope, function_name, key],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     ).optional()))?;
-    let Some((fingerprint, serialized)) = receipt else {
-        return Ok(None);
-    };
-    if serialized.len() > MAX_RECEIPT_BYTES {
-        return Err(Failure::schema());
-    }
-    let output: Output = serde_json::from_str(&serialized).map_err(|_| Failure::schema())?;
-    validate_output(&output)?;
-    if output.status >= 400 {
-        return Err(Failure::schema());
-    }
-    Ok(Some((fingerprint, output)))
+    Ok(receipt)
 }
 pub struct Invocation {
     database: Option<PathBuf>,
@@ -299,11 +294,11 @@ pub fn admit(config: InvocationConfig, budget: Budget) -> Result<Admission> {
         let conn = invocation.connection.as_ref().unwrap();
         conn.sql(|| conn.db.execute_batch("BEGIN IMMEDIATE"))?;
         conn.ensure_receipt_schema()?;
-        let receipt: Option<(String, String)> = conn.internal(|| conn.sql(|| conn.db.query_row(
-            "SELECT fingerprint,response_json FROM __konae_function_receipts WHERE actor_scope=?1 AND function_name=?2 AND idempotency_key=?3 LIMIT 1",
+        let receipt: Option<String> = conn.internal(|| conn.sql(|| conn.db.query_row(
+            "SELECT fingerprint FROM __konae_function_receipts WHERE actor_scope=?1 AND function_name=?2 AND idempotency_key=?3 LIMIT 1",
             params![invocation.actor_scope, invocation.function_name, invocation.key],
-            |row| Ok((row.get(0)?, row.get(1)?))).optional()))?;
-        if let Some((stored_fingerprint, serialized)) = receipt {
+            |row| row.get(0)).optional()))?;
+        if let Some(stored_fingerprint) = receipt {
             if stored_fingerprint != invocation.fingerprint {
                 return Err(Failure::new(
                     "idempotency_conflict",
@@ -311,18 +306,9 @@ pub fn admit(config: InvocationConfig, budget: Budget) -> Result<Admission> {
                     "Idempotency-Key was already used with a different request.",
                 ));
             }
-            if serialized.len() > MAX_RECEIPT_BYTES {
-                return Err(Failure::schema());
-            }
-            let output: Output =
-                serde_json::from_str(&serialized).map_err(|_| Failure::schema())?;
-            validate_output(&output)?;
-            if output.status >= 400 {
-                return Err(Failure::schema());
-            }
             conn.rollback()?;
             invocation.budget.check()?;
-            return Ok(Admission::Replay(output));
+            return Ok(Admission::Replay(Failure::replay()));
         }
     }
     Ok(Admission::Run(invocation))
@@ -438,13 +424,10 @@ impl Invocation {
             self.abort()?;
             return Err(error);
         }
-        let serialized = match validate_output(&output) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                self.abort()?;
-                return Err(error);
-            }
-        };
+        if let Err(error) = validate_output(&output) {
+            self.abort()?;
+            return Err(error);
+        }
         if let Err(error) = self.budget.check() {
             self.abort()?;
             return Err(error.into());
@@ -459,7 +442,7 @@ impl Invocation {
                 conn.ensure_receipt_schema()?;
                 conn.internal(|| conn.sql(|| conn.db.execute(
                     "INSERT INTO __konae_function_receipts (actor_scope,function_name,idempotency_key,fingerprint,response_json) VALUES (?1,?2,?3,?4,?5)",
-                    params![self.actor_scope, self.function_name, key, self.fingerprint, serialized])))?;
+                    params![self.actor_scope, self.function_name, key, self.fingerprint, RECEIPT_RESPONSE_MARKER])))?;
                 self.budget.begin_commit()?;
                 conn.commit()?;
                 self.budget.committed();
@@ -506,25 +489,29 @@ impl RequestConnection {
             OpenFlags::SQLITE_OPEN_READ_WRITE
         };
         let db = Connection::open_with_flags(path, flags).map_err(|_| Failure::storage())?;
-        db.busy_timeout(Duration::ZERO)
-            .map_err(|_| Failure::storage())?;
         let progress = budget.clone();
         db.progress_handler(100, Some(move || progress.check().is_err()))
             .map_err(|_| Failure::storage())?;
-        let internal = Arc::new(AtomicBool::new(false));
-        crate::restrict_function_database(&db, internal.clone()).map_err(|_| Failure::storage())?;
+        let connection = Self {
+            db,
+            internal: Arc::new(AtomicBool::new(false)),
+            budget: budget.clone(),
+        };
+        connection.sql(|| {
+            crate::restrict_function_database(&connection.db, connection.internal.clone())
+        })?;
         let commit = budget.clone();
-        db.commit_hook(Some(move || commit.check().is_err()))
+        connection
+            .db
+            .commit_hook(Some(move || commit.check().is_err()))
             .map_err(|_| Failure::storage())?;
         let rollback = budget.clone();
-        db.rollback_hook(Some(move || rollback.rolled_back()))
+        connection
+            .db
+            .rollback_hook(Some(move || rollback.rolled_back()))
             .map_err(|_| Failure::storage())?;
         budget.check()?;
-        Ok(Self {
-            db,
-            internal,
-            budget: budget.clone(),
-        })
+        Ok(connection)
     }
     fn sql<T>(&self, mut operation: impl FnMut() -> rusqlite::Result<T>) -> Result<T> {
         loop {
@@ -765,7 +752,7 @@ fn validate_output(output: &Output) -> Result<String> {
         ));
     }
     let mut header_bytes = 0usize;
-    if output.headers.len() > MAX_HEADERS || output.body.len() > MAX_RECEIPT_BYTES {
+    if output.headers.len() > MAX_HEADERS || output.body.len() > MAX_RESPONSE_BYTES {
         return Err(output_too_large());
     }
     for (name, value) in &output.headers {
@@ -797,13 +784,13 @@ fn validate_output(output: &Output) -> Result<String> {
             ));
         }
     }
-    bounded_json(output, MAX_RECEIPT_BYTES).map_err(|_| output_too_large())
+    bounded_json(output, MAX_RESPONSE_BYTES).map_err(|_| output_too_large())
 }
 fn output_too_large() -> Failure {
     Failure::new(
         "function.output-too-large",
         500,
-        "The function response exceeds its stored response limit.",
+        "The function response exceeds its size limit.",
     )
 }
 fn bounded_json(value: &impl serde::Serialize, maximum: usize) -> std::result::Result<String, ()> {
