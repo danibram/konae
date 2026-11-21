@@ -1,0 +1,26 @@
+name: Functions runner
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/functions-runner.yml
+      - kernel-rs/Cargo.toml
+      - kernel-rs/functions-executor/**
+      - kernel-rs/functions-runner/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  functions-runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install 1.91.0 --profile minimal
+      - name: Test the runner and watchdog
+        run: cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml

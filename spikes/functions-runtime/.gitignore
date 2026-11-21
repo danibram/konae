@@ -1,0 +1,11 @@
+**/node_modules/
+**/dist/
+**/.next/
+**/target/
+**/__pycache__/
+.runs/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+!rust-host/evidence/*/*.log
+rust-host/evidence/*/konae-functions-spike

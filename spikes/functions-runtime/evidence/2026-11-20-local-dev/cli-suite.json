@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-20",
+  "focusedCommand": "bun test --timeout 30000 scripts/konae.test.ts -t 'a page build refreshes generated runtime and builder files in an older app folder|a static app build refreshes its builder and omits the SDK'",
+  "focused": {
+    "passed": 2,
+    "failed": 0,
+    "assertions": 6
+  },
+  "suiteCommand": "bun test --timeout 30000 scripts/konae.test.ts",
+  "suite": {
+    "passed": 70,
+    "failed": 0,
+    "assertions": 475,
+    "durationSeconds": 20.42
+  },
+  "cause": "Both temporary app fixtures created empty node_modules directories. buildLocal refreshed scripts/local-builder.mjs, which imports esbuild, and Node resolved that package relative to the temporary app root.",
+  "fix": "The two fixtures symlink the checkout node_modules directory. Assertions and production behavior were not changed.",
+  "httpEvidence": "results.json is unchanged from the prior local HTTP run."
+}

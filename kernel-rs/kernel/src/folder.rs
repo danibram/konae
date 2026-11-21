@@ -47,6 +47,7 @@ pub async fn open_all(state: &AppState, confirmation: Option<&str>) -> Result<Ve
 /// earlier start gave the app; a folder without one gets `<slug>.<suffix>`,
 /// or a random address when another app holds that one.
 pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Result<Deployment> {
+    let _release_guard = crate::named_lock(state, &format!("publish:{id}"), true).await;
     let root = &state.data_root;
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     let mut settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
@@ -69,7 +70,10 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let dist = read_dist(&layout::dist(root, id))
         .with_context(|| format!("apps/{id}/dist/ is missing or not readable. Build it with npm run build"))?;
     let dist_digest = version_of(&dist);
-    let rebuilt = released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
+    let server_artifact = crate::functions::read_artifact(&layout::server(root, id))?;
+    let server = crate::functions::validate_artifact(server_artifact.as_ref().map(|a| &a.manifest), server_artifact.as_ref())?;
+    let server_changed = released.as_ref().is_some_and(|r| r.server != server);
+    let rebuilt = server_changed || released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
     let candidate_sources = state.execution_mode.is_test();
     let actions_enabled = crate::modules::is_on(&settings.modules, "actions");
     let source_actions = || async { tokio::fs::read_to_string(sources.join("actions.json")).await.unwrap_or_else(|_| r#"{"version":1,"actions":{}}"#.to_owned()) };
@@ -121,6 +125,20 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
                 files.insert("actions.json".to_owned(), actions.clone());
                 files.insert("schema.sql".to_owned(), schema.clone());
                 if let Some(document) = &schema_transforms { files.insert("schema-transforms.json".to_owned(), document.clone()); }
+                let function_source = if candidate_sources || rebuilt || fresh_sources {
+                    optional_text(&sources.join("functions.json")).await?
+                } else {
+                    server.as_ref().map(|published| serde_json::to_string(&published.manifest)).transpose()?
+                };
+                if let Some(source) = function_source {
+                    let declared = crate::functions::read(&source)?;
+                    for function in declared.functions.values() {
+                        if candidate_sources || rebuilt || fresh_sources {
+                            if let Ok(text) = tokio::fs::read_to_string(sources.join(&function.entry)).await { files.insert(function.entry.clone(), text); }
+                        }
+                    }
+                    files.insert("functions.json".into(), source);
+                }
                 files
             },
             encodings: HashMap::new(),
@@ -134,6 +152,8 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
             encodings: dist.keys().map(|path| (path.clone(), "base64".to_owned())).collect(),
             files: dist.iter().map(|(path, bytes)| (path.clone(), encode(bytes))).collect(),
         },
+        server_artifact,
+        initial_released: None,
         initial_signup_policy: None,
         initial_sign_in_methods: None,
         initial_modules: Some(settings.modules.clone()),
@@ -141,7 +161,8 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         contact_email: settings.contact_email.clone().or_else(|| released.as_ref().and_then(|snapshot| snapshot.contact_email.clone())),
         schema_confirmation: None,
     };
-    runtime::validate_release(state, &input, None).await?;
+    if candidate_sources || rebuilt || fresh_sources { runtime::validate_release(state, &input, None).await?; }
+    else { runtime::validate_published_release(state, &input, None).await?; }
     let program: crate::ActionProgram = serde_json::from_str(&actions)?;
     let _database = crate::database_lock(state, id).await;
     let database = layout::database(root, id);
@@ -175,14 +196,15 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let unchanged = !rebuilt && !candidate_sources;
     let released_at = if unchanged { released.as_ref().and_then(|snapshot| snapshot.released_at).or_else(|| stored.as_ref().and_then(|record| record.released_at)).or_else(|| existing.as_ref().map(|current| current.released_at)).unwrap_or_else(now_ms) } else { now_ms() };
     let source_digest = if candidate_sources || rebuilt || fresh_sources { Some(crate::sources::digest_folder(&sources).await?) } else { released.as_ref().and_then(|snapshot| snapshot.source_digest.clone()).or_else(|| stored.as_ref().and_then(|record| record.source_digest.clone())).or_else(|| existing.as_ref().and_then(|current| current.source_digest.clone())) };
-    let artifact_version = if unchanged { stored.as_ref().map(|record| record.artifact_version.clone()).or_else(|| existing.as_ref().map(|current| current.artifact_version.clone())).unwrap_or_else(|| format!("v{}", &dist_digest[..32])) } else { format!("v{}", &dist_digest[..32]) };
+    let revision_digest = crate::functions::revision_digest(&dist_digest, server.as_ref());
+    let artifact_version = if unchanged { stored.as_ref().map(|record| record.artifact_version.clone()).or_else(|| existing.as_ref().map(|current| current.artifact_version.clone())).unwrap_or_else(|| format!("v{}", &revision_digest[..32])) } else { format!("v{}", &revision_digest[..32]) };
     let policy = settings.signup_policy.clone();
     let sign_in_methods = settings.sign_in_methods.clone();
     let deployment = Deployment {
         id: id.to_owned(), project_id: id.to_owned(), project_name: input.project.name.clone(), slug: input.project.slug.clone(),
         url: crate::deployment_url(&state.public_origin, &hostname), created_at, released_at, source_digest,
         manifest: input.project.manifest.clone(), hostname, actions, artifact_version, signup_policy: policy,
-        sign_in_methods, contact_email: input.contact_email.clone(), modules: settings.modules.clone(), released_schema: schema,
+        sign_in_methods, contact_email: input.contact_email.clone(), modules: settings.modules.clone(), released_schema: schema, server,
     };
     if crate::modules::is_on(&deployment.modules, "auth") { open_auth(state, &deployment)?; }
     if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories, schema_transforms.as_deref(), None).await?; }
@@ -193,6 +215,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     deployments.insert(deployment.hostname.clone(), deployment.clone());
     drop(deployments);
     crate::http::routes_published(&deployment);
+    state.functions.release_changed(id, &deployment.artifact_version).await;
     Ok(deployment)
 }
 
@@ -414,7 +437,7 @@ mod tests {
             let released = crate::ReleasedSettings {
                 name: "Legacy".into(), slug: id.into(), visibility: "public".into(), signup_policy: crate::SignupPolicy::initial("public"),
                 sign_in_methods: crate::default_sign_in_methods(), contact_email: None, manifest: json!({"visibility":"public"}),
-                actions: r#"{"version":1,"actions":{}}"#.into(), schema_sql: String::new(), schema_transforms: None, source_digest: None,
+                actions: r#"{"version":1,"actions":{}}"#.into(), schema_sql: String::new(), schema_transforms: None, server: None, source_digest: None,
                 artifact_digest: Some("v0.9.0-artifact".into()), released_at: Some(2),
             };
             settings.released = Some(released.clone());

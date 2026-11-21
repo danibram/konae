@@ -540,6 +540,7 @@ Routes on the Deployment's own host for programs and other services: a JSON endp
 
 Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
+- The 64 KiB POST body limit applies to routes backed by Server Actions. Server functions use the separate streamed 100 MB request-body limit.
 - Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 - Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.
 - An action whose route does not answer anyone answers only on that route: miniapp.actions.call refuses it. The app's own page calls such a route with fetch, which sends the session cookie.
@@ -620,3 +621,40 @@ Owner control: the owner can change this module with module_set. Permission: `pu
 | --- | --- | --- | --- |
 | `canonical` (Canonical address) | `enum`: `domain` (Custom domain), `hostname` (Generated hostname), `path` (Path address) | Use the default address | Choose the address search engines and link previews should use. |
 | `image` (Card image) | `path` | Default | Choose an image path from the app's published files. |
+
+### Server functions (`functions`)
+
+Run bundled JavaScript handlers on the Kernel with verified identity and named Server Actions.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+- Functions start off. Authenticated functions require auth; a nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.
+- For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Operators configure a paired runner; functions remain experimental. Worker processes start on demand and may stay warm until their idle timeout. Each request evaluates the bundle in a fresh V8 isolate.
+- A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.
+- The action allowlist accepts only queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.
+- The private Kernel-runner protocol is konae-functions-ipc/2; the published bundle ABI remains konae-functions/1. Upgrade the Kernel and runner together and restart the service. Server bundles travel in server/, separate from the public dist/. An optional shutdown(signal) can release resources when the worker retires. The runner calls it in the last completed isolate if one is available.
+
+Declared with `functions` in `functions.json`. Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. Request.signal reports cancellation.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Server manifest exceeds 262144 UTF-8 bytes.` | the normalized manifest and its hashes exceed the portable folder limit | Kernel | Same |
+| `Declared functions require a Server Artifact.` | a release declares functions but supplies no serverArtifact | Kernel | Same |
+| `Server Artifact requires version 1 and ABI konae-functions/1.` | the artifact names a different version or ABI | Kernel | Same |
+| `Server Artifact manifest does not match functions.json.` | the built declaration differs from the release declaration | Kernel | Same |
+| `Idempotency-Key is required for this function.` | a POST function with an action allowlist has no idempotency key | Kernel | Same |
+| `Idempotency-Key was already used with a different request.` | the same actor reuses a function key for another request; code idempotency_conflict (409) | Kernel | Same |
+| `This request was already processed. Check its current state through an authorized read.` | the same actor retries an already processed request with the same key and fingerprint; code idempotency_replay (409) | Kernel | Same |
+| `The function request exceeds 100000000 bytes.` | the request body exceeds the decimal 100 MB limit (413) | Kernel | Same |
+| `worker_protocol_mismatch` | the private Kernel and runner IPC versions differ; restart with a matching pair (503) | Kernel | Same |
+
+Limits:
+
+- 32 functions per app
+- 1 to 1048576 UTF-8 bytes per bundle; 8388608 UTF-8 bytes for all bundles
+- 262144 UTF-8 bytes for server/manifest.json, including its hashes
+- GET and POST methods; mounts own their exact path and descendants
+- ESM bundles contain their dependencies, export handle and have zero imports
+- 100000000 bytes per HTTP request body (100 MB decimal); this limit does not raise worker heap, action, SQL, query, file or response limits
+- 8 MiB of aggregate pending request chunks; the HTTP-to-Hono body stream is bounded and does not spool the complete request
+- 1 MiB per serialized action operation, measured after JSON escaping; 64 action operations per invocation

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "actions": {
+    "notes.list": {
+      "kind": "query",
+      "access": "authenticated",
+      "statement": "SELECT id, title, created_at FROM notes WHERE owner_id = ? ORDER BY created_at DESC LIMIT 100",
+      "bindings": [{ "source": "actor", "field": "id" }]
+    },
+    "notes.create": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "INSERT INTO notes (owner_id, title, created_at) VALUES (?, ?, ?)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "input", "key": "title", "type": "string", "maxLength": 80 },
+        { "source": "kernel", "field": "now" }
+      ]
+    },
+    "notes.batch": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "guard": "No notes were added because the batch is empty or has invalid titles.",
+      "statement": "INSERT INTO notes (owner_id, title, created_at) SELECT ?1, item.value, ?2 FROM json_each(?3) AS item WHERE json_valid(?3) AND json_type(?3) = 'array' AND json_array_length(?3) BETWEEN 1 AND 10 AND NOT EXISTS (SELECT 1 FROM json_each(?3) AS candidate WHERE candidate.type != 'text' OR length(trim(candidate.value)) NOT BETWEEN 1 AND 80)",
+      "bindings": [
+        { "source": "actor", "field": "id" },
+        { "source": "kernel", "field": "now" },
+        { "source": "input", "key": "titlesJson", "type": "string", "maxLength": 2000 }
+      ]
+    },
+    "notes.delete": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "DELETE FROM notes WHERE id = ? AND owner_id = ?",
+      "bindings": [
+        { "source": "input", "key": "id", "type": "number" },
+        { "source": "actor", "field": "id" }
+      ]
+    }
+  }
+}

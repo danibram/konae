@@ -1,0 +1,109 @@
+{
+  "checks": {
+    "anonymous": {
+      "pass": true,
+      "status": 401
+    },
+    "validation": {
+      "pass": true,
+      "status": 400,
+      "rowsAfter": 0
+    },
+    "idempotency": {
+      "pass": true,
+      "createStatus": 201,
+      "replayStatus": 201,
+      "conflictStatus": 409
+    },
+    "rowAuthorization": {
+      "pass": true,
+      "ownerRows": 1,
+      "otherUserRows": 0
+    },
+    "jsonEachBatch": {
+      "pass": true,
+      "status": 201,
+      "ownerRows": 3,
+      "otherUserRows": 0,
+      "guardStatus": 403,
+      "guardResponse": {
+        "code": "function.action-refused",
+        "error": "No notes were added because the batch is empty or has invalid titles."
+      },
+      "rowsAfterGuard": 3
+    },
+    "actionAllowlist": {
+      "pass": true,
+      "status": 403,
+      "response": {
+        "code": "function.action-not-allowed",
+        "error": "The function cannot invoke this Server Action."
+      },
+      "rowsAfter": 3
+    },
+    "versionReload": {
+      "pass": true,
+      "version": "v2"
+    },
+    "moduleOffWhileDeclared": {
+      "pass": true,
+      "refused": true,
+      "message": "Module functions is in use by the published app. Remove its use before turning it off."
+    },
+    "moduleOff": {
+      "pass": true,
+      "status": 404,
+      "workersBefore": 0,
+      "workersAfter": 0
+    }
+  },
+  "observations": {
+    "usage": [
+      {
+        "version": "ve26924fdc144d3b22976711994fd68ef",
+        "samples": 3,
+        "replays": 0,
+        "failures": 0,
+        "total": {
+          "maxMs": 101.039,
+          "p50Ms": 95.307,
+          "p95Ms": 101.039,
+          "p99Ms": 101.039
+        },
+        "execution": {
+          "maxMs": 4.298,
+          "p50Ms": 3.407,
+          "p95Ms": 4.298,
+          "p99Ms": 4.298
+        }
+      },
+      {
+        "version": "v93e2ed3ccfb1dc767927c8a54af754e3",
+        "samples": 19,
+        "replays": 1,
+        "failures": 6,
+        "total": {
+          "maxMs": 96.801,
+          "p50Ms": 37.423,
+          "p95Ms": 96.801,
+          "p99Ms": 96.801
+        },
+        "execution": {
+          "maxMs": 3.835,
+          "p50Ms": 1.355,
+          "p95Ms": 3.835,
+          "p99Ms": 3.835
+        }
+      }
+    ],
+    "timings": {
+      "anonymousMs": 15.773,
+      "invalidMs": 55.197,
+      "createMs": 51.755,
+      "replayMs": 16.738,
+      "conflictMs": 15.894
+    }
+  },
+  "startedAt": "2026-11-20T17:34:13.844Z",
+  "finishedAt": "2026-11-20T17:34:21.083Z"
+}

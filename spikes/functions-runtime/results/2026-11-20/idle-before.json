@@ -1,0 +1,40 @@
+{
+  "at": "2026-11-20T10:40:01.522754+00:00",
+  "idle": [
+    {
+      "target": "native",
+      "seconds": 5.000166791956872,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 4064,
+      "rss_after_kib": 4080
+    },
+    {
+      "target": "deno",
+      "seconds": 5.000166791956872,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 4288,
+      "rss_after_kib": 4304
+    },
+    {
+      "target": "node",
+      "seconds": 5.000166791956872,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 43552,
+      "rss_after_kib": 43296
+    },
+    {
+      "target": "next",
+      "seconds": 5.000166791956872,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 144320,
+      "rss_after_kib": 125248
+    }
+  ],
+  "cold": [],
+  "notes": [
+    "Idle CPU comes from ps cumulative process-tree time and may round to zero.",
+    "RSS is sampled process-tree RSS; shared pages may be counted more than once.",
+    "Cold means no retained function instance; filesystem caches and V8 process initialization may remain warm.",
+    "Cold requests include HTTP, auth, module loading, function execution and SQLite; no snapshot is assumed."
+  ]
+}

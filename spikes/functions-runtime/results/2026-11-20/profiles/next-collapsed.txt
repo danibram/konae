@@ -1,0 +1,114 @@
+Analysis of sampling node (pid 76462) every 1 millisecond
+Process:         node [76462]
+Path:            /opt/homebrew/*/node
+Load Address:    0x102dec000
+Identifier:      node
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  node [76461]
+Target Type:     live task
+
+Date/Time:       2026-11-20 11:49:10.551 +0100
+Launch Time:     2026-11-20 11:40:00.616 +0100
+OS Version:      macOS 26.6.1 (25G76)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         137.8M
+Physical footprint (peak):  282.7M
+Idle exit:                  untracked
+----
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        18339
+        kevent  (in libsystem_kernel.dylib)        2684
+        __workq_kernreturn  (in libsystem_kernel.dylib)        2390
+        semaphore_wait_trap  (in libsystem_kernel.dylib)        2390
+        <deduplicated_symbol>  (in libnode.147.dylib)        178
+        v8::internal::ConcurrentMarking::RunMajor(v8::JobDelegate*, v8::base::EnumSet<v8::internal::CodeFlushMode, int>, unsigned int, bool)  (in libnode.147.dylib)        107
+        Builtins_LoadICGenericBaseline  (in libnode.147.dylib)        98
+        Builtins_KeyedLoadIC_Megamorphic  (in libnode.147.dylib)        39
+        v8::internal::HeapObject::SizeFromMap(v8::internal::Tagged<v8::internal::Map>) const  (in libnode.147.dylib)        38
+        v8::internal::Scavenger::ScavengeObject<v8::internal::FullHeapObjectSlot>(v8::internal::FullHeapObjectSlot, v8::internal::Tagged<v8::internal::HeapObject>)  (in libnode.147.dylib)        38
+        write  (in libsystem_kernel.dylib)        36
+        Builtins_RegExpReplace  (in libnode.147.dylib)        28
+        Builtins_LoadIC  (in libnode.147.dylib)        26
+        Builtins_ToBooleanForBaselineJump  (in libnode.147.dylib)        26
+        Builtins_DefineNamedOwnIC  (in libnode.147.dylib)        22
+        Builtins_KeyedStoreIC_Megamorphic  (in libnode.147.dylib)        22
+        Builtins_StoreIC  (in libnode.147.dylib)        21
+        _platform_memmove  (in libsystem_platform.dylib)        21
+        __fcntl  (in libsystem_kernel.dylib)        18
+        read  (in libsystem_kernel.dylib)        18
+        writev  (in libsystem_kernel.dylib)        18
+        Builtins_StrictEqual_Generic_Baseline  (in libnode.147.dylib)        17
+        __findenv_locked  (in libsystem_c.dylib)        17
+        v8::internal::Scavenger::Process(v8::JobDelegate*)  (in libnode.147.dylib)        16
+        Builtins_AsyncFunctionEnter  (in libnode.147.dylib)        15
+        Builtins_LoadIC_Megamorphic  (in libnode.147.dylib)        15
+        v8::internal::compiler::GraphReducer::Recurse(v8::internal::compiler::Node*)  (in libnode.147.dylib)        15
+        Builtins_KeyedStoreIC  (in libnode.147.dylib)        14
+        Builtins_CallFunction_ReceiverIsNotNullOrUndefined  (in libnode.147.dylib)        12
+        Builtins_Call_ReceiverIsNotNullOrUndefined_Baseline_Compact  (in libnode.147.dylib)        12
+        _xzm_free  (in libsystem_malloc.dylib)        12
+        Builtins_BaselineOutOfLinePrologue  (in libnode.147.dylib)        11
+        Builtins_StringAdd_CheckNone  (in libnode.147.dylib)        11
+        v8::internal::MemoryChunkLiveBytesMap::Increment(v8::internal::MutablePage*, long)  (in libnode.147.dylib)        11
+        Builtins_CreateShallowObjectLiteral  (in libnode.147.dylib)        10
+        Builtins_MapConstructor  (in libnode.147.dylib)        10
+        Builtins_ResumeGeneratorTrampoline  (in libnode.147.dylib)        10
+        Builtins_KeyedLoadIC  (in libnode.147.dylib)        9
+        Builtins_KeyedLoadIC_PolymorphicName  (in libnode.147.dylib)        9
+        Builtins_LoadGlobalIC  (in libnode.147.dylib)        9
+        v8::internal::MarkCompactCollector::ProcessMarkingWorklist<(v8::internal::MarkCompactCollector::MarkingWorklistProcessingMode)0>(v8::base::TimeDelta, unsigned long)  (in libnode.147.dylib)        9
+        v8::internal::RelocIteratorBase<v8::internal::RelocInfo>::next()  (in libnode.147.dylib)        9
+        v8::internal::compiler::GraphReducer::ReduceTop()  (in libnode.147.dylib)        9
+        v8::internal::compiler::JSHeapBroker::TryGetOrCreateData(v8::internal::Handle<v8::internal::Object>, v8::base::Flags<v8::internal::compiler::GetOrCreateDataFlag, int, int>)  (in libnode.147.dylib)        9
+        v8::internal::compiler::LiveRange::Covers(v8::internal::compiler::LifetimePosition)  (in libnode.147.dylib)        9
+        Builtins_FunctionPrototypeCall  (in libnode.147.dylib)        8
+        Builtins_RecordWriteSaveFP  (in libnode.147.dylib)        8
+        v8::internal::LookupIterator::LookupInRegularHolder<false>(v8::internal::Tagged<v8::internal::Map>, v8::internal::Tagged<v8::internal::JSReceiver>)  (in libnode.147.dylib)        8
+        v8::internal::SearchStringRaw<unsigned char const, unsigned char const>(v8::internal::Isolate*, unsigned char const const*, int, unsigned char const const*, int, int)  (in libnode.147.dylib)        8
+        v8::internal::compiler::Reducer::Reduce(v8::internal::compiler::Node*, v8::internal::compiler::ObserveNodeManager*)  (in libnode.147.dylib)        8
+        Builtins_Call_ReceiverIsNullOrUndefined_Baseline_Compact  (in libnode.147.dylib)        7
+        Builtins_CreateObjectFromSlowBoilerplateHelper  (in libnode.147.dylib)        7
+        Builtins_FastNewClosure  (in libnode.147.dylib)        7
+        Builtins_JSConstructStubGeneric  (in libnode.147.dylib)        7
+        Builtins_NewStrictArgumentsElements  (in libnode.147.dylib)        7
+        _xzm_xzone_malloc_tiny  (in libsystem_malloc.dylib)        7
+        ada::parser::parse_url_impl<ada::url_aggregator, true>(std::basic_string_view<char>, ada::url_aggregator const*)  (in libada.3.4.4.dylib)        7
+        pthread_mutex_lock  (in libsystem_pthread.dylib)        7
+        std::__hash_table<v8::internal::compiler::CompilationDependency const*, v8::internal::compiler::CompilationDependencies::CompilationDependencyHash, v8::internal::compiler::CompilationDependencies::CompilationDependencyEqual, v8::internal::ZoneAllocator<v8::internal::compiler::CompilationDependency const*>>::__emplace_unique_key_args<v8::internal::compiler::CompilationDependency const*, v8::internal::compiler::CompilationDependency const* const&>(v8::internal::compiler::CompilationDependency const* const&, v8::internal::compiler::CompilationDependency const* const&)  (in libnode.147.dylib)        7
+        v8::internal::JSObject::MigrateToMap(v8::internal::Isolate*, v8::internal::DirectHandle<v8::internal::JSObject>, v8::internal::DirectHandle<v8::internal::Map>, int)  (in libnode.147.dylib)        7
+        Builtins_BaselineLeaveFrame  (in libnode.147.dylib)        6
+        Builtins_CallFunction_ReceiverIsNullOrUndefined  (in libnode.147.dylib)        6
+        Builtins_CreateDataProperty  (in libnode.147.dylib)        6
+        Builtins_CreateTypedArray  (in libnode.147.dylib)        6
+        Builtins_FastNewFunctionContextFunctionWithCells  (in libnode.147.dylib)        6
+        Builtins_FindOrderedHashMapEntry  (in libnode.147.dylib)        6
+        Builtins_FulfillPromise  (in libnode.147.dylib)        6
+        Builtins_RegExpPrototypeTest  (in libnode.147.dylib)        6
+        Builtins_StringPrototypeSplit  (in libnode.147.dylib)        6
+        _xzm_xzone_malloc_small_freelist  (in libsystem_malloc.dylib)        6
+        v8::internal::MarkingVisitorBase<v8::internal::ConcurrentMarkingVisitor>::VisitEmbeddedPointer(v8::internal::Tagged<v8::internal::InstructionStream>, v8::internal::RelocInfo*)  (in libnode.147.dylib)        6
+        v8::internal::Scavenger::ShouldBePromoted(unsigned long)  (in libnode.147.dylib)        6
+        v8::internal::TickCounter::TickAndMaybeEnterSafepoint()  (in libnode.147.dylib)        6
+        ???  (in <unknown binary>)  [0x1223fd834]        5
+        Builtins_Add_Baseline  (in libnode.147.dylib)        5
+        Builtins_CallVarargs  (in libnode.147.dylib)        5
+        Builtins_Call_ReceiverIsAny  (in libnode.147.dylib)        5
+        Builtins_Call_ReceiverIsNullOrUndefined  (in libnode.147.dylib)        5
+        Builtins_FastNewClosureBaseline  (in libnode.147.dylib)        5
+        Builtins_LoadICTrampoline  (in libnode.147.dylib)        5
+        Builtins_OrdinaryHasInstance  (in libnode.147.dylib)        5
+        Builtins_RegExpPrototypeTestFast  (in libnode.147.dylib)        5
+        Builtins_ResumeGeneratorBaseline  (in libnode.147.dylib)        5
+        Builtins_SuspendGeneratorBaseline  (in libnode.147.dylib)        5
+        v8::internal::Factory::AllocateRaw(int, v8::internal::AllocationType, v8::internal::AllocationAlignment, v8::internal::AllocationHint)  (in libnode.147.dylib)        5
+        v8::internal::JSFunction::NeedsResetDueToFlushedBytecode(v8::internal::Isolate*, v8::internal::Tagged<v8::internal::SharedFunctionInfo>, v8::internal::Tagged<v8::internal::Code>)  (in libnode.147.dylib)        5
+        v8::internal::String::WriteToFlat2<unsigned char>(unsigned char*, v8::internal::Tagged<v8::internal::ConsString>, unsigned int, unsigned int, v8::internal::SharedStringAccessGuardIfNeeded const&, v8::internal::PerThreadAssertScopeEmpty<false, (v8::internal::PerThreadAssertType)1, (v8::internal::PerThreadAssertType)2> const&)  (in libnode.147.dylib)        5
+        v8::internal::StringTable::OffHeapStringHashSet::KeyIsMatch<v8::internal::Isolate, v8::internal::InternalizedStringKey>(v8::internal::Isolate*, v8::internal::InternalizedStringKey*, v8::internal::Tagged<v8::internal::Object>)  (in libnode.147.dylib)        5
+        v8::internal::compiler::BytecodeAnalysis::BytecodeAnalysisImpl::Analyze()  (in libnode.147.dylib)        5
+        v8::internal::compiler::JSNativeContextSpecialization::Reduce(v8::internal::compiler::Node*)  (in libnode.147.dylib)        5
+

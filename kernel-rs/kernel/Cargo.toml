@@ -14,6 +14,7 @@ path = "src/main.rs"
 testing = []
 
 [dependencies]
+konae-functions-executor.workspace = true
 konae-backup = { path = "../backup", features = ["s3"] }
 anyhow.workspace = true
 base64.workspace = true
@@ -27,6 +28,10 @@ libc.workspace = true
 rusqlite.workspace = true
 reqwest.workspace = true
 ring.workspace = true
+oxc_allocator = "=0.67.0"
+oxc_parser = "=0.67.0"
+oxc_span = "=0.67.0"
+oxc_syntax = "=0.67.0"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

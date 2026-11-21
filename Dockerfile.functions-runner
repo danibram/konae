@@ -1,0 +1,20 @@
+FROM rust:1.91-bookworm AS build
+
+WORKDIR /src
+COPY kernel-rs/Cargo.toml ./kernel-rs/Cargo.toml
+COPY kernel-rs/backup/Cargo.toml ./kernel-rs/backup/Cargo.toml
+COPY kernel-rs/kernel/Cargo.toml ./kernel-rs/kernel/Cargo.toml
+COPY kernel-rs/konae/Cargo.toml ./kernel-rs/konae/Cargo.toml
+COPY kernel-rs/functions-executor/Cargo.toml ./kernel-rs/functions-executor/Cargo.toml
+COPY kernel-rs/functions-executor/src/ ./kernel-rs/functions-executor/src/
+COPY kernel-rs/functions-runner/Cargo.toml kernel-rs/functions-runner/Cargo.lock kernel-rs/functions-runner/build.rs ./kernel-rs/functions-runner/
+COPY kernel-rs/functions-runner/src/main.rs kernel-rs/functions-runner/src/runtime.rs kernel-rs/functions-runner/src/worker.rs kernel-rs/functions-runner/src/bootstrap.js ./kernel-rs/functions-runner/src/
+RUN cargo build --release --locked \
+    --manifest-path kernel-rs/functions-runner/Cargo.toml \
+    --bin konae-functions-runner \
+  && install -D -m 755 \
+    kernel-rs/functions-runner/target/release/konae-functions-runner \
+    /out/konae-functions-runner
+
+FROM scratch AS artifact
+COPY --from=build /out/konae-functions-runner /konae-functions-runner

@@ -1,0 +1,29 @@
+   Compiling konae-functions-spike v0.0.0 (/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host)
+    Finished `release` profile [optimized] target(s) in 4.32s
+     Running unittests src/bin/native-data-tests.rs (/tmp/konae-deno-core-target/release/deps/native_data_tests-088474d25be3aa88)
+
+running 19 tests
+test data::tests::audit_failure_rolls_back_receipt_and_allows_safe_retry ... ok
+test data::tests::cancellation_after_commit_is_unknown_and_replay_does_not_mutate ... post-commit cancellation=mutation_outcome_unknown replay=true audit=1
+ok
+test data::tests::cancellation_and_commit_phase_share_one_state_across_threads ... ok
+test data::tests::cancellation_before_commit_reverts_order_audit_and_receipt ... ok
+test data::tests::cancellation_interrupts_running_sql_progress ... ok
+test data::tests::cancellation_interrupts_sqlite_busy_wait ... ok
+test data::tests::cancellation_wakes_mutex_wait ... ok
+test data::tests::concurrent_retries_on_distinct_connections_write_once ... ok
+test data::tests::deadline_during_sqlite_commit_completion_reports_unknown_and_replays ... sqlite-commit completion_after_deadline=true outcome=mutation_outcome_unknown replay=true audit=1
+ok
+test data::tests::expired_budget_never_authenticates_reads_or_mutates ... ok
+test data::tests::mutex_wait_obeys_absolute_deadline ... ok
+test data::tests::not_found_is_replayed_even_if_row_becomes_visible_later ... ok
+test data::tests::payload_conflict_does_not_write ... ok
+test data::tests::receipt_scope_separates_actors_and_apps ... ok
+test data::tests::replay_survives_reopen_and_returns_original_response ... ok
+test data::tests::sql_progress_interrupts_expensive_trigger_and_rolls_back ... ok
+test data::tests::sqlite_commit_hook_vetoes_cancelled_commit_without_wrapper_check ... ok
+test data::tests::sqlite_lock_350ms_does_not_commit_after_100ms_deadline ... sqlite-lock elapsed_ms=100 quantity=2 audit=0 receipts=0
+ok
+test data::tests::validates_key_and_native_ranges_before_mutation ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s

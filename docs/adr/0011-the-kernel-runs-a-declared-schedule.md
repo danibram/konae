@@ -2,7 +2,7 @@
 
 Status: accepted.
 
-Some work must happen when nobody is looking: a hold that lapses, a day that closes, a digest that goes out at seven. A comparison with `kernel.now` in each query can make lapsed work look done, but a lapsed hold still blocks every count that does not repeat the comparison. An app may run no process and no code of its own on the server, so the answer is a declaration the Kernel runs.
+Some work must happen when nobody is looking: a hold that lapses, a day that closes, a digest that goes out at seven. A comparison with `kernel.now` in each query can make lapsed work look done, but a lapsed hold still blocks every count that does not repeat the comparison. The Kernel runs scheduled work from declarations. Experimental HTTP functions under ADR-0018 do not add scheduled code or alter this scheduler.
 
 ## Decision
 

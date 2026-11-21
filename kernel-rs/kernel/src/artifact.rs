@@ -66,7 +66,7 @@ pub fn decode(artifact: &BuildArtifact) -> Result<HashMap<String, Vec<u8>>, Stri
 
 /// True for a path the Kernel keeps. No artifact file answers it.
 pub fn kernel_path(path: &str) -> bool {
-    path == "_konae" || path.starts_with("_konae/")
+    ["_konae", "server", "functions", ".konae"].iter().any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
 /// The artifact files that may answer `path`, in order. `path` has no leading

@@ -1,0 +1,36 @@
+[package]
+name = "konae-functions-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[dependencies]
+konae-functions-executor = { path = "../../../kernel-rs/functions-executor" }
+anyhow = "=1.0.100"
+axum = "=0.8.9"
+deno_core = "=0.413.0"
+deno_web = "=0.291.0"
+deno_webidl = "=0.260.0"
+deno_net = "=0.252.0"
+deno_fetch = "=0.284.0"
+deno_permissions = "=0.119.0"
+sys_traits = { version = "=0.1.28", features = ["real", "libc"] }
+deno_error = "=0.7.1"
+libc = "=0.2.191"
+getrandom = "=0.3.4"
+percent-encoding = "=2.3.2"
+rusqlite = { version = "=0.37.0", features = ["bundled", "hooks"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+tokio = { version = "=1.48.0", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+
+[[bin]]
+name = "oom-probe"
+path = "src/bin/oom-probe.rs"
+
+[profile.release]
+debug = 0
+strip = "debuginfo"
+
+[workspace]

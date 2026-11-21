@@ -1,0 +1,4 @@
+b20cef6ba12fe25859d23505bd938c98f2f599142be46edae4c451de0be6f115  kernel-rs/functions-executor/src/containment.rs
+ca04db7bd36d0f4c46a73ef2e3072cb73cf1996fad63a602c6e47000e67fb69e  kernel-rs/functions-executor/src/supervisor.rs
+47c62704c2283d6b5e2727a740c8b3caff7c53749aa963233decad579a33a737  spikes/functions-runtime/rust-host/src/bin/oom-probe.rs
+2d40fdc09ff7438a911c06eda0b7bb2219ddbd5a5a7f9390b7d1aaf24831a1a6  spikes/functions-runtime/evidence/2026-11-20-production-hardening/strict-oom.sh

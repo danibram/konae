@@ -1,0 +1,32 @@
+
+<title>Private notes</title>
+<main class="ui-page" data-purpose="Private notes. Each person signs in and sees only their own.">
+  <section id="landing" class="landing" aria-labelledby="landing-title">
+    <p class="ui-eyebrow">A quiet place to keep things</p>
+    <h1 id="landing-title" class="ui-title">Your notes,<br><em>your space.</em></h1>
+    <p class="ui-lede">Sign in to keep a private list that belongs to you.</p>
+    <p id="landing-status" class="ui-status" role="status" aria-live="polite"></p>
+    <button id="sign-in" class="ui-button ui-button-primary" disabled>Sign in</button>
+  </section>
+
+  <section id="notes-app" hidden aria-labelledby="notes-title">
+    <header class="ui-page-header">
+      <div>
+        <p class="ui-eyebrow">Private notes</p>
+        <h1 id="notes-title" class="ui-title">A place to<br><em>remember.</em></h1>
+      </div>
+      <div class="ui-identity">
+        <span id="identity"></span>
+        <button id="sign-out" class="ui-button ui-button-sm">Sign out</button>
+      </div>
+    </header>
+
+    <div class="ui-composer">
+      <input id="note-title" name="title" maxlength="500" placeholder="Keep a thought…" autocomplete="off" required>
+      <button id="add-note" class="ui-button ui-button-primary" type="button">Save</button>
+    </div>
+    <p id="status" class="ui-status" role="status" aria-live="polite"></p>
+    <div class="ui-section-head"><span>Your notes</span><span id="count">0 notes</span></div>
+    <div id="notes" class="ui-list"></div>
+  </section>
+</main>

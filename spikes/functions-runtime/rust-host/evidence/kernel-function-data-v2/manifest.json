@@ -1,0 +1,26 @@
+{
+  "captured_at_utc": "2026-11-20T12:17:36.269772+00:00",
+  "tests_passed": 18,
+  "regression_tests_passed": 28,
+  "scope": "Kernel whole-invocation coordinator",
+  "capture_note": "Sources captured after tests. Shared integration files may contain concurrent work; this archive is a component capture, not a full tested workspace. Test logs identify the commands and cases executed.",
+  "sha256": {
+    "kernel-rs/kernel/src/function_data.rs": "5ff6473c289e7348e8340ebef2a79db80306193a72de9b6b78fe3674f0b4cfb4",
+    "kernel-rs/kernel/src/function_data_tests.rs": "054979076e806d6d5af83d795324502962a51af96ccc635d2bdf8d9ff9c7053b",
+    "kernel-rs/kernel/src/lib.rs": "e296c84f08fea9aafd9c98c77c4ce9c56443aacab6613586b5752315301aa131",
+    "kernel-rs/kernel/src/schema_change.rs": "2798ca4678b2601115171df7ea07d503eaa980a0a6fe296334a5f98ee0ba5c05",
+    "kernel-rs/kernel/src/import.rs": "adede3f88ab9c07c21c9146273093cf109504a2dd8e392b6d3be44c91f117aff",
+    "kernel-rs/kernel/src/sources.rs": "3538472932816d8f06a6153169dce7412fd86a133e78e6f4ec11dd08a23ed99e",
+    "kernel-rs/kernel/Cargo.toml": "7b375ae8a2ba0c00e3e160d50d66265cc55ebce3f11c16fb8f104610281cc38e",
+    "kernel-rs/Cargo.toml": "ab66d097d91720862f76cb377f880b88f89ce677068e198b17f1d089635471bc",
+    "kernel-rs/Cargo.lock": "d0b2fe13d181ab7fde4ff5a27a2f7a3649525ae431445eb87a008131086641bc",
+    "kernel-rs/functions-executor/src/budget.rs": "57cd46b8591cf5f3ba9eb8a361ea9d9e247be123528f0b12421e17316644a0e1",
+    "kernel-rs/functions-executor/Cargo.toml": "cecf45a1ff8aa4295773a0a52227de9010cccae7a51e3f40c464c02f8e52c7c4",
+    "kernel-rs/functions-executor/src/lib.rs": "f886abb651efbeab456b923fde85c0b82db73873ab945770ed72c6c43dde3560"
+  },
+  "artifacts_sha256": {
+    "source-capture.tar.gz": "06daaed86ff92528f142be2c55b8e5252c4074abeb748a913f3a7facfbb95388",
+    "regression.txt": "9f43129e19b0a61c0bcedb88dbe272a362ed30f3e0c5d8a473075b71b803d330",
+    "test.txt": "8f824784b8acb98d4c725df636fca7f0e83effd6f8998b78862140901a30e350"
+  }
+}

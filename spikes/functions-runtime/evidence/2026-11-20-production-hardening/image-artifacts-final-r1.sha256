@@ -1,0 +1,13 @@
+Kernel image: sha256:e2f2f17582a6f4308c76b0c8b4eb9c802b4f8863e8f834c380fbc3dd9f5dde56 linux/arm64
+Konae image: sha256:14bc714d91c8e4cdaf9e3f961640adb7a9b15e026891d072a52af3e06c31a625 linux/arm64
+
+Runner packaged in both images and clean smoke: df1d3de9b6cbab0d41a28d23e1df810be735b9fe7a24716892619703a638330b
+oom-probe: 39600142a3eaca7fa0b8f95518bec7997d61cfffc64ac2eeaf10d99855ed65af
+Kernel test binary from kernel-linux-build-image-fixture-r3.log: 0629dcc906326d544db23db078d2e48b365cd09906344d3697dedce3f10b20e5
+
+SHA-256 read back from final images:
+df1d3de9b6cbab0d41a28d23e1df810be735b9fe7a24716892619703a638330b  /usr/local/lib/konae/functions-runner
+a245575c18a15cca3febfed617a600df130da7cdc8919593cc3086e9474d963b  /usr/local/bin/kernel
+df1d3de9b6cbab0d41a28d23e1df810be735b9fe7a24716892619703a638330b  /usr/local/lib/konae/functions-runner
+9033f6bc224fddbee94bdf401f5b7e6c30afabaed9289929cc4d2e19f8b0e4ce  /usr/local/bin/konae
+Seccomp profile SHA-256: 5fcbe974e36bdf2aa3c6464d57d1fbb3cab15f2cd09ebcc246316f842815b82c

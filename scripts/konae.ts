@@ -17,7 +17,7 @@ import { describeSchemaChange, publishProject, type ConfirmSchema } from "../src
 import { type ProjectTemplates } from "./project-templates";
 import type { AppEvent, ReadRecord } from "./events";
 import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testCalls, testControls, testReply, testSchedule } from "./local-test";
-import { PULL_DIRECTORY, describePulled, downloadData, extractVerifiedPulledData, pullLocal, readPulled, type Pulled } from "./pull";
+import { PULL_DIRECTORY, describePulled, downloadPackage, extractVerifiedPulledData, pullLocal, readPulled, type Pulled } from "./pull";
 import { pushData } from "./push";
 import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
@@ -33,7 +33,12 @@ import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 import { defaultModuleStates } from "../src/lib/app-folder";
-import { bundleModule } from "../src/lib/local-builder.js";
+import { bundleModule, bundleFunctions } from "../src/lib/local-builder.js";
+import { parseFunctions, validateFunctions, validateServerArtifact, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
+import { readTar } from "../src/lib/tar";
+import { readAppFolder } from "../src/lib/import-folder";
+import { buildProjectEntries } from "../src/lib/build-project";
+import { buildProjectEntriesFromDisk } from "../src/lib/build-project-disk";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 import { requireTestKernel } from "./test-kernel";
@@ -41,7 +46,7 @@ import { importWithLocalKernel, rehearsePulledSnapshot } from "./rehearse";
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
-type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; typeScriptLibs: Record<string, string> };
+type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string; typeScriptLibs: Record<string, string> };
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -196,7 +201,8 @@ conform   --url <app URL> --contract <file> [--token <app session>] [--key <API 
           Calls every action and checks the answers against the contract. It runs each mutation once,
           so point it at a test Deployment.
 export    --dir <folder> --out <empty folder> [--with-data]
-          Writes the app folder: konae.json, app/, a fresh dist/ and its generated developer files.
+          Writes konae.json, app/, dist/, server/ when present and generated developer files.
+          Published folders retain their built version even when editable sources are ahead.
           --with-data adds the published app's data/ and needs a credential from
           login --export-data. Secrets never go with it.
 domain    [--deployment <id>] [--set <hostname> | --clear] [--dir <folder>] [--url <installation URL>]
@@ -507,14 +513,13 @@ async function hasPackageBuild(root: string) {
   return (await stat(path.join(root, "node_modules")).catch(() => undefined))?.isDirectory() ?? false;
 }
 
-async function refreshPageBuilder(root: string, sdk: boolean) {
-  const buildScript = (await folderFiles(root, await readSettings(root))).find((entry) => entry.path === "scripts/build.mjs")!.contents;
-  const resources = [
-    ["scripts/build.mjs", buildScript],
-    ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
-    ...(sdk ? [["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")] as const] : []),
-  ] as const;
+async function refreshPageBuilder(root: string, sdk: boolean, authored: ReadonlySet<string> = new Set()) {
+  const generated = await folderFiles(root, await readSettings(root));
+  const resources = generated.filter((entry) => entry.path === "scripts/build.mjs" || entry.path === "scripts/local-builder.mjs"
+    || entry.path === "scripts/static-artifact.mjs" || entry.path === "scripts/babel-parser.cjs" || entry.path === "scripts/BABEL-PARSER-LICENSE"
+    || sdk && entry.path === "scripts/runtime.js").map(({ path: relative, contents }) => [relative, contents] as const);
   for (const [relative, contents] of resources) {
+    if (authored.has(relative)) continue;
     const target = path.join(root, relative);
     if (await readFile(target, "utf8").catch(() => undefined) === contents) continue;
     await mkdir(path.dirname(target), { recursive: true });
@@ -568,25 +573,42 @@ async function quietly(command: string[], cwd: string) {
  * Answers the artifact, `source`, every file of `app/` as a release carries
  * it, and `files`, the text files of `app/` by path.
  */
-export async function buildLocal(root: string, options: { development?: boolean } = {}) {
+export async function buildLocal(root: string, options: { development?: boolean; customBuild?: boolean } = {}) {
   const source = await sources(root);
   const files = textFiles(source);
+  const buildProject = buildProjectEntries(source);
+  await writeEntries(root, buildProject);
+  const authoredBuildFiles = new Set(buildProject.map((entry) => entry.path));
   const settings = await readSettings(root).catch(() => undefined);
+  const functionsSource = files["functions.json"];
+  const functions = functionsSource === undefined ? undefined : parseFunctions(functionsSource);
+  const functionsContext = { files: Object.keys(files), modules: settings?.modules, actions: JSON.parse(files["actions.json"] ?? '{"actions":{}}').actions ?? {} };
+  if (functions) validateFunctions(functions, functionsContext);
+  const serverArtifact = functions && Object.keys(functions.functions).length ? await bundleFunctions(appDir(root), functions, options.development) : undefined;
+  validateServerArtifact(functions, serverArtifact);
+  const saveServer = async (staticPaths: string[]) => {
+    if (functions) validateFunctions(functions, { ...functionsContext, staticPaths });
+    await rm(path.join(root, "server"), { recursive: true, force: true });
+    if (serverArtifact) await writeEntries(root, await serverFolderEntries(serverArtifact));
+  };
   const sdkEnabled = sdkRequired(settings?.modules, files, settings?.visibility ?? "private");
   await refreshActionTypes(root);
   const paths = await capsulePaths(root);
   if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
-    await refreshPageBuilder(root, sdkEnabled);
+    await refreshPageBuilder(root, sdkEnabled, authoredBuildFiles);
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
     const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files, sdkEnabled);
     if (neverRuns) throw Error(neverRuns);
     // The script type-checks against actions.d.ts, so it reads the actions.json of this build.
-    if (!(await quietly(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], root))) throw Error("npm run build failed.");
+    if (options.customBuild === false) {
+      if (!existsSync(path.join(root, DIST_FOLDER, "index.html"))) throw Error("The app has no dist/index.html. Run `konae build` to run its local build before publishing.");
+    } else if (!(await quietly(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], root))) throw Error("npm run build failed.");
     const packed = await artifactFromDist(root);
     if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
     const artifact = { version: 1 as const, entrypoint: "index.html", files: packed.files, encodings: Object.keys(packed.encodings).length ? packed.encodings : undefined };
-    return { artifact, source, files };
+    await saveServer(Object.keys(artifact.files));
+    return { artifact, serverArtifact, source, files };
   }
   const sdkRuntime = embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8");
   const entry = appEntry(Object.keys(files)) ?? "app.js";
@@ -603,8 +625,9 @@ export async function buildLocal(root: string, options: { development?: boolean 
     routing: settings?.manifest?.routing as "pages" | "spa" | undefined,
     warn: (message) => console.warn(`Warning: ${message}`),
   });
+  await saveServer(Object.keys(artifact.files));
   await writeDist(root, artifact);
-  return { artifact, source, files };
+  return { artifact, serverArtifact, source, files };
 }
 
 /** Checks app TypeScript with the same tsconfig used by the folder build script. */
@@ -668,7 +691,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
   const { signupPolicy: _, runtime: _runtime, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
-  const prepared = await buildLocal(root);
+  const prepared = await buildLocal(root, { customBuild: false });
   const sourcePayload = {
     files: prepared.source.files,
     ...(prepared.source.encodings && Object.keys(prepared.source.encodings).length ? { encodings: prepared.source.encodings } : {}),
@@ -678,7 +701,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   checkArtifact(prepared.artifact);
   const identity = { id: project.id, name: project.name, slug: project.slug, manifest: project.manifest };
   const initialSignupPolicy = wanted ? { mode: wanted.mode, allowlist: wanted.allowlist } : undefined;
-  checkRelease(new TextEncoder().encode(JSON.stringify({ project: identity, visibility: manifest.visibility ?? "private", artifact: prepared.artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}), initialModules })));
+  checkRelease(new TextEncoder().encode(JSON.stringify({ project: identity, visibility: manifest.visibility ?? "private", artifact: prepared.artifact, ...(prepared.serverArtifact ? { serverArtifact: prepared.serverArtifact } : {}), ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}), initialModules })));
   let first = false;
   let observedSourcesRevision: number | undefined;
   let publishedSourceDigest = "";
@@ -690,7 +713,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
         target: { projectId: project.id, projectName: project.name, installation: config.url },
         sourceRevision: { observed: null, planned: null },
         sourceDigest: publishedSourceDigest,
-        artifactDigest: createHash("sha256").update(JSON.stringify(prepared.artifact)).digest("hex"),
+        artifactDigest: createHash("sha256").update(JSON.stringify(prepared.serverArtifact ? { artifact: prepared.artifact, serverArtifact: prepared.serverArtifact } : prepared.artifact)).digest("hex"),
         plan: { mode: "local-first-release" },
         expiresAt: null,
         productionRequirements: ["This project is not registered on the installation. A normal publish will register it and create its first Deployment.", ...await productionRequirements(root)],
@@ -704,9 +727,9 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const marker = await json<{ sourcesRevision: number; installation?: string; projectId?: string }>(path.join(root, ".konae/source-revision.json")).catch(() => undefined);
     const scopedMarker = matchesSourceRevisionScope(marker, config.url!, project.id) ? marker : undefined;
     observedSourcesRevision = scopedMarker?.sourcesRevision ?? (!remote.deployment && remote.sourcesRevision === 0 ? 0 : undefined);
-    const { artifact, source } = prepared;
+    const { artifact, serverArtifact, source } = prepared;
     return {
-      project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
+      project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact, ...(serverArtifact ? { serverArtifact } : {}),
       initialSignupPolicy: first ? wanted : undefined, contactEmail: first ? config.contactEmail : undefined,
       initialModules: first ? initialModules : undefined,
     };
@@ -719,7 +742,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
       target: { projectId: project.id, projectName: project.name, installation: config.url },
       sourceRevision: { observed: observedSourcesRevision ?? null, planned: plan.expectedSourcesRevision },
       sourceDigest: publishedSourceDigest,
-      artifactDigest: createHash("sha256").update(JSON.stringify(prepared.artifact)).digest("hex"),
+      artifactDigest: createHash("sha256").update(JSON.stringify(prepared.serverArtifact ? { artifact: prepared.artifact, serverArtifact: prepared.serverArtifact } : prepared.artifact)).digest("hex"),
       plan,
       expiresAt: new Date(plan.expiresAt).toISOString(),
       productionRequirements: await productionRequirements(root, plan.schema?.confirmation),
@@ -875,6 +898,8 @@ async function folderFiles(root: string, settings: AppSettings) {
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
     localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),
+    parserSource: embeddedResources?.parserSource ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/lib/index.js"), "utf8"),
+    parserLicense: embeddedResources?.parserLicense ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/LICENSE"), "utf8"),
   });
 }
 
@@ -889,26 +914,49 @@ async function writeEntries(root: string, entries: FolderEntry[]) {
 }
 
 /**
- * Exports the app folder into the empty folder `output`: konae.json, app/,
- * a fresh dist/ and the files every app folder carries. With `remote`, a
- * credential that holds export_data, it adds the published app's data/ from
- * project_export. No secret and nothing of .konae/ goes with it.
+ * Exporta fuentes y artefactos a una carpeta vacía. Una publicación conserva
+ * sus bundles aunque las fuentes hayan cambiado. Con credencial export_data,
+ * project_export aporta la carpeta publicada y sus datos.
  */
 export async function exportLocal(root: string, output: string, remote?: { url: string; token: string }) {
   await assertEmptyFolder(output);
   const settings = await readSettings(root);
-  await buildLocal(root);
+  if (remote) {
+    const client = new McpClient(endpoint(remote.url), { token: remote.token });
+    const published = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: settings.id });
+    if (!published.deployment) throw Error("Publish the app before exporting its data, or leave out --with-data.");
+    const scratch = await mkdtemp(path.join(tmpdir(), "konae-export-"));
+    try {
+      const downloaded = await downloadPackage(client, published.deployment.id, scratch);
+      if (!downloaded.folderFile) throw Error("The export has no app folder download.");
+      const archive = new Uint8Array(await readFile(downloaded.folderFile));
+      const folder = readAppFolder(archive);
+      const buildFiles = buildProjectEntries(folder.sources);
+      await verifyServerFolder(folder.server ?? {});
+      await writeEntries(output, readTar(archive));
+      for (const { name } of downloaded.manifest.contents) {
+        const component = downloaded.files.find((file) => file.name === name);
+        if (!component) throw Error(`The export is missing ${name}.`);
+        await writeEntries(output, dataEntries(name, new Uint8Array(await readFile(component.file))));
+      }
+      await writeEntries(output, await folderFiles(output, folder.settings));
+      await writeEntries(output, buildFiles);
+      return { output, data: true };
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  }
+  const hasBuildProject = (await buildProjectEntriesFromDisk(appDir(root))).length > 0;
+  if (hasBuildProject && !existsSync(path.join(root, DIST_FOLDER, "index.html"))) throw Error("The app has no dist/index.html. Run `konae build` before exporting its custom build project.");
+  if (!hasBuildProject && (!settings.released || !existsSync(path.join(root, DIST_FOLDER, "index.html")))) await buildLocal(root, { customBuild: false });
   await mkdir(output, { recursive: true });
   await cp(appDir(root), path.join(output, SOURCES_FOLDER), { recursive: true, filter: (source) => !skippedName(path.basename(source)) });
   await cp(path.join(root, DIST_FOLDER), path.join(output, DIST_FOLDER), { recursive: true });
+  if (existsSync(path.join(root, "server"))) await cp(path.join(root, "server"), path.join(output, "server"), { recursive: true });
   await writeFile(path.join(output, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`);
   await writeEntries(output, await folderFiles(root, settings));
-  if (!remote) return { output, data: false };
-  const client = new McpClient(endpoint(remote.url), { token: remote.token });
-  const published = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: settings.id });
-  if (!published.deployment) throw Error("Publish the app before exporting its data, or leave out --with-data.");
-  await downloadData(client, published.deployment.id, output);
-  return { output, data: true };
+  await writeEntries(output, await buildProjectEntriesFromDisk(appDir(root)));
+  return { output, data: false };
 }
 
 /**
@@ -1068,6 +1116,10 @@ export async function localKernel(root: string, settings: AppSettings, options: 
   const port = options.port ?? "8796";
   const env: Record<string, string | undefined> = {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_"))),
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => [
+      "KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP",
+      "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID",
+    ].includes(name))),
     KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
     KONAE_EXECUTION_MODE: "test",
@@ -1454,7 +1506,7 @@ export async function main() {
     console.log(`Created ${settings.name} in ${root}. Run it with: konae dev --dir ${root}`);
     return;
   }
-  if (command === "build") { await buildLocal(root); console.log(`Built ${path.join(root, DIST_FOLDER)}`); return; }
+  if (command === "build") { await buildLocal(root, { customBuild: true }); console.log(`Built ${path.join(root, DIST_FOLDER)}`); return; }
   if (command === "contract") {
     const { contract, warnings, file } = await writeContract(root, path.resolve(option("out", root)!));
     for (const warning of warnings) console.warn(`Warning: ${warning.message}`);

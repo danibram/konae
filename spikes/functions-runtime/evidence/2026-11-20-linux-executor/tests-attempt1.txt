@@ -1,0 +1,13 @@
+     Locking 18 packages to latest Rust 1.91.1 compatible versions
+      Adding getrandom v0.3.4 (available: v0.4.3)
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+error: failed to run custom build command for `proc-macro2 v1.0.107`
+
+Caused by:
+  could not execute process `/tmp/target/debug/build/proc-macro2-ef34876d28f98fd6/build-script-build` (never executed)
+
+Caused by:
+  Permission denied (os error 13)
+warning: build failed, waiting for other jobs to finish...

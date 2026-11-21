@@ -5,6 +5,7 @@
     "": {
       "name": "miniapp-builder",
       "dependencies": {
+        "@babel/parser": "7.29.8",
         "@codemirror/autocomplete": "^6.20.3",
         "@codemirror/commands": "^6.10.4",
         "@codemirror/lang-sql": "^6.10.0",

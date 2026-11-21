@@ -1,0 +1,8 @@
+Dockerfile.konae AMD64 image: sha256:dc15c4792f16900869c7de28671cefca9389259b33e6e3f3565d9599ede8b779
+Konae ELF x86-64 SHA-256: 7e3c118a0c3a5239f1650c0c974f69e683a945ac9748ec084b199c7ce953f69f
+Packaged runner SHA-256: 1014c7a522dc260cab132cf52336626e5a03407baab1103fb59ea913c9b6e48c
+Runner source image: konae-release-contract-kernel:amd64
+Runner ELF architecture: x86-64
+Packaged Konae ELF architecture: x86-64
+Build log: release-konae-amd64-r5.log
+Strict missing-delegation log: konae-amd64-missing-delegation-r5.log

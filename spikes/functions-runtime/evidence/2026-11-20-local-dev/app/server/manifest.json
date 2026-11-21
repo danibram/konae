@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "abi": "konae-functions/1",
+  "manifest": {
+    "version": 1,
+    "functions": {
+      "notes": {
+        "entry": "functions/notes.ts",
+        "mount": "/api/notes",
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "access": "authenticated",
+        "actions": [
+          "notes.batch",
+          "notes.create",
+          "notes.list"
+        ]
+      }
+    }
+  },
+  "hashes": {
+    "notes": "a9de886d668f018c5592918d1f17273092f78efe93faca589f9aff4ab0dca4a1"
+  }
+}

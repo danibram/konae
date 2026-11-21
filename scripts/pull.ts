@@ -6,6 +6,7 @@ import type { McpClient, Transfer } from "../src/mcp/client";
 import { checkPackageManifest, packageComponentFiles, type PackageComponentName, type PackageManifest } from "../src/lib/portable-package";
 import { dataEntries, SETTINGS_FILE } from "../src/lib/app-folder";
 import { downloadToFile } from "./package-files";
+import { verifyServerFolder } from "../src/kernel/functions";
 import { readTar } from "../src/lib/tar";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { sourceFilesFrom } from "../src/lib/source-files";
@@ -104,6 +105,14 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     const artifactEntries = folderEntries
       .filter((entry) => entry.path.startsWith("dist/"))
       .map((entry) => ({ path: entry.path.slice(5), contents: entry.contents }));
+    const serverEntries = folderEntries.filter((entry) => entry.path.startsWith("server/")).map((entry) => ({ path: entry.path.slice(7), contents: entry.contents }));
+    await verifyServerFolder(Object.fromEntries(serverEntries.map((entry) => [entry.path, entry.contents])));
+    for (const entry of serverEntries) {
+      const target = path.resolve(scratch, "server", entry.path);
+      if (!target.startsWith(path.resolve(scratch, "server") + path.sep)) throw Error(`Invalid server folder path ${entry.path}.`);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, entry.contents);
+    }
     const stagedApp = path.join(scratch, "app");
     await mkdir(stagedApp, { recursive: true });
     for (const entry of sourceEntries) {

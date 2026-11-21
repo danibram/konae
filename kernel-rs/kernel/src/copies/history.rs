@@ -36,7 +36,7 @@ fn paths(record: &DatabaseBackup, id: &str) -> Result<Vec<(String, bool)>> {
                     files.push((format!("{id}/{name}"), false));
                 }
             }
-            HOLDS_SOURCES => files.push((format!("{id}/sources.json"), true)),
+            HOLDS_SOURCES => { files.push((format!("{id}/sources.json"), true)); files.push((format!("{id}/release.json"), false)); },
             _ => bail!("Unknown internal backup scope."),
         }
     }

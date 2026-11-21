@@ -1,3 +1,5 @@
+import { parseFunctions, validateFunctions, validateServerArtifact, FUNCTIONS_ABI, type ServerArtifact } from "../kernel/functions";
+import { refusal } from "../kernel/refusal";
 import * as esbuild from "esbuild-wasm";
 import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
 import type { MiniAppProject } from "../lib/types";
@@ -10,7 +12,11 @@ import { sdkRequired } from "../lib/module-use";
 let initialized: Promise<void> | undefined;
 
 export async function buildProjectInBrowser(project: MiniAppProject): Promise<BuildArtifact> {
-  return assembleStaticArtifact({
+  const source = project.files["functions.json"];
+  const manifest = source === undefined ? undefined : parseFunctions(source);
+  const actions = JSON.parse(project.files["actions.json"] ?? '{"actions":{}}').actions ?? {};
+  if (manifest) validateFunctions(manifest, { files: Object.keys(project.files), modules: project.modules, actions });
+  const artifact = await assembleStaticArtifact({
     paths: Object.keys(project.files),
     read: async (path) => sourceContents(project, path),
     compile: () => compileProjectInBrowser(project, { release: true }),
@@ -19,6 +25,16 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
     sdk: sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined),
     routing: project.manifest.routing,
   });
+  if (!manifest || !Object.keys(manifest.functions).length) return artifact;
+  validateFunctions(manifest, { files: Object.keys(project.files), modules: project.modules, actions, staticPaths: Object.keys(artifact.files) });
+  const bundles: Record<string, string> = {};
+  for (const [name, fn] of Object.entries(manifest.functions)) {
+    const bundle = await bundleInBrowser(project, textFiles(project), fn.entry, true, true, name);
+    Object.defineProperty(bundles, name, { value: bundle.script, enumerable: true });
+  }
+  const serverArtifact: ServerArtifact = { version: 1, abi: FUNCTIONS_ABI, manifest, bundles };
+  validateServerArtifact(manifest, serverArtifact);
+  return { ...artifact, serverArtifact };
 }
 
 export async function compileProjectInBrowser(project: MiniAppProject, options: { release?: boolean } = {}): Promise<{ body: string; styles: string; script: string }> {
@@ -41,7 +57,7 @@ export async function compileProjectInBrowser(project: MiniAppProject, options: 
   return compiled;
 }
 
-async function bundleInBrowser(project: MiniAppProject, files: Record<string, string>, entrypoint: string, release = false): Promise<{ script: string; styles: string }> {
+async function bundleInBrowser(project: MiniAppProject, files: Record<string, string>, entrypoint: string, release = false, server = false, functionName = entrypoint): Promise<{ script: string; styles: string }> {
   initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true }).catch((error) => {
     initialized = undefined;
     throw error;
@@ -56,15 +72,23 @@ async function bundleInBrowser(project: MiniAppProject, files: Record<string, st
     target: "es2022",
     outdir: "out",
     minify: release,
+    metafile: true,
+    logOverride: { "unsupported-dynamic-import": "error", "unsupported-require-call": "error" },
     define: { "process.env.NODE_ENV": JSON.stringify(release ? "production" : "development") },
-    plugins: [projectFilesPlugin(files, project), packagesPlugin(declaredPackages(files))],
+    plugins: [projectFilesPlugin(files, project, server), packagesPlugin(declaredPackages(files))],
   });
+  if (server) {
+    const output = Object.entries(result.metafile!.outputs).find(([file]) => file.endsWith(".js"));
+    if (!output || output[1].imports.length || !output[1].exports.includes("handle") || result.outputFiles.length !== 1) {
+      throw refusal("function.bundle-contract", `Function ${functionName} bundle must be a self-contained ESM module exporting handle.`);
+    }
+  }
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (!script) throw new Error("The browser builder did not produce JavaScript.");
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
-function projectFilesPlugin(files: Record<string, string>, project: MiniAppProject): esbuild.Plugin {
+function projectFilesPlugin(files: Record<string, string>, project: MiniAppProject, server: boolean): esbuild.Plugin {
   return {
     name: "konae-project-files",
     setup(build) {
@@ -78,6 +102,7 @@ function projectFilesPlugin(files: Record<string, string>, project: MiniAppProje
           const source = Object.keys(project.files).find((path) => path === target)
             ?? Object.keys(project.files).find((path) => servedPath(path) === target);
           if (!source) throw new Error(`${args.importer} references ${args.path}, but the Capsule holds no ${target}.`);
+          if (!server && source.startsWith("functions/")) throw new Error("Server function sources cannot be imported by a browser entry.");
           const bytes = sourceBytes(project, source);
           return { path: `data:${mediaType(target)};base64,${bytesToBase64(bytes)}${fragmentSuffix(args.path)}`, external: true };
         }
@@ -90,6 +115,7 @@ function projectFilesPlugin(files: Record<string, string>, project: MiniAppProje
         return { path: resolved, namespace: "konae" };
       });
       build.onLoad({ filter: /.*/, namespace: "konae" }, (args) => {
+        if (!server && args.path.startsWith("functions/")) throw new Error("Server function sources cannot be imported by a browser entry.");
         const contents = files[args.path];
         if (contents === undefined) throw new Error(`Project file not found: ${args.path}`);
         return { contents, loader: loaderFor(args.path), resolveDir: args.path.includes("/") ? args.path.slice(0, args.path.lastIndexOf("/")) : "" };

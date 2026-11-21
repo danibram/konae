@@ -788,7 +788,7 @@ mod tests {
                 sign_in_methods: default_sign_in_methods(),
                 contact_email: None,
                 modules: crate::modules::auth_enabled_defaults(),
-                released_schema: String::new(),
+                released_schema: String::new(), server: None,
             };
             std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(host.to_owned(), item);

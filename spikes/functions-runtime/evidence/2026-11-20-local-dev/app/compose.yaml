@@ -1,0 +1,18 @@
+# Runs the Kernel on this folder. The Kernel opens it as apps/app_0832f699-b596-448d-aff7-258b67483ea7
+# of its data directory, checks it as a release, and serves it. Set
+# KONAE_KERNEL_IMAGE in .env to a published or local Kernel image.
+services:
+  kernel:
+    image: ${KONAE_KERNEL_IMAGE:?Set KONAE_KERNEL_IMAGE in .env to the Kernel image.}
+    env_file: .env
+    environment:
+      KONAE_BIND: "0.0.0.0"
+      KONAE_KERNEL_PORT: "8787"
+      KONAE_DATA_DIR: /kernel
+    ports:
+      - "127.0.0.1:${KONAE_PORT:-8787}:8787"
+    volumes:
+      - ./:/kernel/apps/app_0832f699-b596-448d-aff7-258b67483ea7
+      - kernel:/kernel
+volumes:
+  kernel:

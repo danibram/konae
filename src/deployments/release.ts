@@ -1,7 +1,10 @@
+import { parseFunctions, validateServerArtifact, type ServerArtifact } from "../kernel/functions";
 import type { McpClient, Transfer } from "../mcp/client";
 import { checkArtifact, checkRelease, checkSourceUpload } from "../lib/size";
 import { checkSourceFiles } from "../lib/source-rules";
+import type { SourceFiles } from "../lib/source-files";
 import { refusal } from "../kernel/refusal";
+import { buildProjectEntries } from "../lib/build-project";
 
 export type SchemaLoss = { table: string; column: string | null; sentence: string };
 
@@ -58,9 +61,10 @@ export type ProjectIdentity = { id: string; name: string; slug: string; manifest
 type CarriedFiles = { files: Record<string, string>; encodings?: Record<string, string> };
 
 export type ReleaseContents = {
-  project: ProjectIdentity & CarriedFiles & { directories?: string[] };
+  project: ProjectIdentity & SourceFiles & { directories?: string[] };
   visibility: unknown;
-  artifact: CarriedFiles;
+  artifact: CarriedFiles & { serverArtifact?: ServerArtifact };
+  serverArtifact?: ServerArtifact;
   initialSignupPolicy?: { mode: string; allowlist: string[] };
   initialModules?: Record<string, unknown>;
   contactEmail?: string;
@@ -81,16 +85,20 @@ export async function publishProject<Receipt>(
   registerProject = true,
 ): Promise<{ plan: ReleasePlan; receipt?: Receipt }> {
   if (registerProject) await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
-  const { project: sent, visibility, artifact, initialSignupPolicy, initialModules, contactEmail } = await contents();
-  const sources: CarriedFiles & { directories: string[] } = {
+  const { project: sent, visibility, artifact: built, serverArtifact: suppliedServer, initialSignupPolicy, initialModules, contactEmail } = await contents();
+  const { serverArtifact: builtServer, ...artifact } = built;
+  const serverArtifact = suppliedServer ?? builtServer;
+  validateServerArtifact(sent.files["functions.json"] === undefined ? undefined : parseFunctions(sent.files["functions.json"]), serverArtifact);
+  const sources: SourceFiles & { directories: string[] } = {
     files: sent.files,
     ...(sent.encodings && Object.keys(sent.encodings).length ? { encodings: sent.encodings } : {}),
     directories: sent.directories ?? [],
   };
   checkSourceFiles(sources);
+  buildProjectEntries(sent);
   checkArtifact(artifact);
   const identity = { id: sent.id, name: sent.name, slug: sent.slug, manifest: sent.manifest };
-  const payload = new TextEncoder().encode(JSON.stringify({ project: identity, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(initialModules ? { initialModules } : {}), ...(contactEmail ? { contactEmail } : {}) }));
+  const payload = new TextEncoder().encode(JSON.stringify({ project: identity, visibility, artifact, ...(serverArtifact ? { serverArtifact } : {}), ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(initialModules ? { initialModules } : {}), ...(contactEmail ? { contactEmail } : {}) }));
   checkRelease(payload);
   const sourceBytes = new TextEncoder().encode(JSON.stringify(sources));
   checkSourceUpload(sourceBytes.length);

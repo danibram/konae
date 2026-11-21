@@ -23,6 +23,41 @@ test("a published app exports its folder even when the editor's draft does not b
   expect(paths).toContain(`notes/${SETTINGS_FILE}`);
 });
 
+test("a published export projects its published build sources, not the newer editor draft", async () => {
+  const publishedSources = {
+    "build.json": JSON.stringify({ version: 1, files: ["package.json", "package-lock.json", "scripts/app-build.mjs"] }),
+    "build/package.json": '{"name":"published","scripts":{"build":"node scripts/app-build.mjs"}}',
+    "build/package-lock.json": "{}",
+    "build/scripts/app-build.mjs": 'console.log("published build");',
+  };
+  const publishedFolder = createTar([
+    { path: SETTINGS_FILE, contents: JSON.stringify(settings) },
+    ...Object.entries(publishedSources).map(([file, contents]) => ({ path: `app/${file}`, contents })),
+    { path: "dist/index.html", contents: "published artifact" },
+    { path: "server/manifest.json", contents: "published function manifest" },
+    { path: "server/health.mjs", contents: "published function bundle" },
+  ]);
+  const publishedMcp = { ...mcp, download: async (_transfer: Transfer) => publishedFolder } as never;
+  const newerDraft = {
+    ...draft,
+    files: {
+      ...draft.files,
+      "build.json": JSON.stringify({ version: 1, files: ["package.json", "package-lock.json", "scripts/app-build.mjs"] }),
+      "build/package.json": '{"name":"draft","scripts":{"build":"node scripts/app-build.mjs"}}',
+      "build/package-lock.json": "draft lock",
+      "build/scripts/app-build.mjs": 'console.log("draft build");',
+    },
+  } as never;
+  let builds = 0;
+  const result = await createProjectExport(newerDraft, "app_1", { mcp: publishedMcp, build: async () => { builds += 1; throw Error("published export must not build the draft"); } });
+  const entries = new Map(readTar(new Uint8Array(await result.blob.arrayBuffer())).map((entry) => [entry.path, entry.contents]));
+  expect(builds).toBe(0);
+  expect(new TextDecoder().decode(entries.get("notes/package.json"))).toBe(publishedSources["build/package.json"]);
+  expect(new TextDecoder().decode(entries.get("notes/scripts/app-build.mjs"))).toBe(publishedSources["build/scripts/app-build.mjs"]);
+  expect(new TextDecoder().decode(entries.get("notes/dist/index.html"))).toBe("published artifact");
+  expect(new TextDecoder().decode(entries.get("notes/server/health.mjs"))).toBe("published function bundle");
+});
+
 test("a published static app exports without actions.json", async () => {
   const staticMcp = {
     ...mcp,
@@ -47,6 +82,8 @@ test("a draft's export writes a file that is not text as its bytes", async () =>
   const entries = new Map(readTar(new Uint8Array(await result.blob.arrayBuffer())).map((entry) => [entry.path, entry.contents]));
   expect(entries.get("notes/app/public/logo.png")).toEqual(png);
   expect(entries.get("notes/dist/logo.png")).toEqual(png);
+  expect(new TextDecoder().decode(entries.get("notes/scripts/babel-parser.cjs"))).toContain("parseExpression");
+  expect(new TextDecoder().decode(entries.get("notes/scripts/BABEL-PARSER-LICENSE"))).toContain("Permission is hereby granted");
 });
 
 test("a draft export writes only module states the owner or template chose", async () => {

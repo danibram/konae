@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -44,6 +45,7 @@ export async function rehearsePulledSnapshot(root: string, settings: AppSettings
   try {
     await cp(path.join(root, "app"), path.join(scratch, "app"), { recursive: true });
     await cp(path.join(root, "dist"), path.join(scratch, "dist"), { recursive: true });
+    if (existsSync(path.join(root, "server"))) await cp(path.join(root, "server"), path.join(scratch, "server"), { recursive: true });
     await writeFile(path.join(scratch, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`);
     const manifest = checkPackageManifest(pulled.manifest);
     const snapshot = path.join(scratch, "snapshot");

@@ -1,0 +1,34 @@
+Analysis of sampling konae-functions-spike (pid 76459) every 1 millisecond
+Process:         konae-functions-spike [76459]
+Path:            /private/tmp/*/konae-functions-spike
+Load Address:    0x102980000
+Identifier:      konae-functions-spike
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  launchd [1]
+Target Type:     live task
+
+Date/Time:       2026-11-20 11:48:59.746 +0100
+Launch Time:     2026-11-20 11:40:00.219 +0100
+OS Version:      macOS 26.6.1 (25G76)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         61.8M
+Physical footprint (peak):  123.9M
+Idle exit:                  untracked
+----
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        17189
+        kevent  (in libsystem_kernel.dylib)        2376
+        semaphore_wait_trap  (in libsystem_kernel.dylib)        2267
+        writev  (in libsystem_kernel.dylib)        32
+        __recvfrom  (in libsystem_kernel.dylib)        15
+        __psynch_cvsignal  (in libsystem_kernel.dylib)        13
+        __fcntl  (in libsystem_kernel.dylib)        12
+        v8::internal::Debug::ProcessCompileEvent(bool, v8::internal::DirectHandle<v8::internal::Script>)  (in konae-functions-spike)        10
+        foldhash::hash_bytes_medium::h4f088438a3eaa47c  (in konae-functions-spike)        6
+        v8::internal::Factory::AllocateRaw(int, v8::internal::AllocationType, v8::internal::AllocationAlignment, v8::internal::AllocationHint)  (in konae-functions-spike)        6
+

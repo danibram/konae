@@ -661,7 +661,7 @@ async fn release_input(state: &Konae, principal: &str, transfer_id: &str, source
         ensure_no_component(&artifact_upload)?;
         payload["artifact"] = serde_json::from_slice(&tokio::fs::read(transfer_path(state, artifact_id)?).await?)?;
     }
-    let mut input: DeployInput = serde_json::from_value(payload)?;
+    let mut input: DeployInput = kernel::functions::parse_deploy_input(payload)?;
     anyhow::ensure!(upload["projectId"] == input.project.id, "Artifact belongs to another project.");
     if let Some(sources_id) = sources_id {
         anyhow::ensure!(input.project.files.is_empty() && input.project.encodings.is_empty(), "Send the files of app/ in sourcesTransferId or in project.files, not in both.");
@@ -1808,6 +1808,7 @@ async fn admin_call(
             let found = owned_deployment(state, owner, id, "publish").await?;
             let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
             let deployment = owned_deployment(state, owner, id, "publish").await?;
+            let _release = kernel::named_lock(state, &format!("publish:{}", deployment.id), true).await;
             let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
             let current = super::maintenance::read(&state.data_root, &deployment.id)["maintenance"].clone();
             super::refusal::check_setting_expected(a.get("expected"), current)?;
@@ -2002,6 +2003,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     let confirmation = a["confirmSchema"].as_str();
     let project = deployment.project_id.clone();
     let _guard = database_lock(state, &format!("project:{project}")).await;
+    let _release_guard = kernel::named_lock(state, &format!("publish:{}", deployment.id), true).await;
     let (mut metadata, revision) = owned_project(state, owner, &project, "publish")?;
     if let Some(package) = &package {
         super::package::verify(state, principal, &project, package).await?;
@@ -2025,7 +2027,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 Some(package) => super::package::component_paths(state, &project, package)?.into_iter().find(|(name, _)| name == "database").map(|(_, path)| path),
                 None => None,
             };
-            let change = validate_release(state, &input, against.as_deref()).await?;
+            let change = kernel::runtime::validate_import_release(state, &input, against.as_deref()).await?;
             anyhow::ensure!(
                 input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none() && input.initial_modules.is_none(),
                 "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
@@ -2064,7 +2066,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 metadata[key] = value.clone();
             }
         }
-        let receipt = match response_value(deploy(state, payload.to_string().as_bytes()).await).await {
+        let receipt = match response_value(kernel::deploy_import_held(state, kernel::functions::parse_deploy_input(payload.clone())?).await).await {
             Ok(receipt) => receipt,
             Err(error) => return restore_import_after_release_failure(state, &deployment, package.is_some(), &backup, error).await,
         };
@@ -2866,6 +2868,60 @@ mod tests {
         assert!(saved["manifest"].get("fileAccess").is_none());
         assert_eq!(saved["files"]["index.html"], "<main>Legacy</main>");
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn functions_project_import_keeps_draft_and_restores_compiled_source_backups() {
+        use base64::Engine;
+        use sha2::Digest;
+        async fn upload(state: &Konae, payload: &Value, id: &str) -> String {
+            let bytes = serde_json::to_vec(payload).unwrap();
+            let created = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":hex::encode(sha2::Sha256::digest(&bytes))}), false).await.unwrap();
+            let transfer = created["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer}), false).await.unwrap(); transfer.into()
+        }
+        let root = std::env::temp_dir().join(format!("konae-functions-import-door-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(),display:None,scopes:vec!["read".into(),"write".into(),"publish".into()],projects:vec![],session:false };
+        let id = "function_import";
+        admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"Functions","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+        let manifest = json!({"version":1,"functions":{"hello":{"entry":"functions/hello.ts","mount":"/api/hello","methods":["GET"],"access":"anonymous","actions":[]}}});
+        let mut payload = json!({"project":{"id":id,"name":"Functions","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"functions.json":manifest.to_string(),"functions/hello.ts":"export function handle() { return new Response('A'); }"}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<p>A</p>"}},"serverArtifact":{"version":1,"abi":"konae-functions/1","manifest":manifest,"bundles":{"hello":"export function handle() { return new Response('A'); }"}},"initialModules":{"functions":{"on":true},"auth":{"on":true}}});
+        let transfer = upload(&state, &payload, id).await;
+        let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer,"observedSourcesRevision":0})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+        let a = Settings::read(&root, id).unwrap().released.unwrap();
+        let auth = kernel::auth::AuthService::open(kernel::layout::identity(&root, id)).unwrap();
+        let session = auth.signup("keep@example.test", "correct horse battery").unwrap();
+        let mut imported_payload = payload.clone();
+        imported_payload.as_object_mut().unwrap().remove("initialModules");
+        imported_payload["initialReleased"] = serde_json::to_value(&a).unwrap();
+        imported_payload["project"]["files"] = json!({"functions.json":"invalid saved draft"});
+        let normal = kernel::runtime::validate_release(&state.kernel, &kernel::functions::parse_deploy_input(imported_payload.clone()).unwrap(), None).await;
+        assert!(normal.err().unwrap().to_string().contains("project_import"));
+        payload.as_object_mut().unwrap().remove("initialModules");
+        payload["artifact"]["files"]["index.html"] = json!("<p>B</p>");
+        payload["serverArtifact"]["bundles"]["hello"] = json!("export function handle() { return new Response('B'); }");
+        assert_eq!(kernel::deploy(&state.kernel, payload.to_string().as_bytes()).await.status(), StatusCode::OK);
+        let b = Settings::read(&root, id).unwrap().released.unwrap();
+        let mut mismatched = imported_payload.clone(); mismatched["artifact"]["files"]["index.html"] = json!("wrong artifact");
+        let transfer = upload(&state, &mismatched, id).await;
+        assert!(admin_call(&state, &owner, "owner:o", "project_import", json!({"projectId":id,"replace":"sources","transferId":transfer})).await.is_err());
+        let transfer = upload(&state, &imported_payload, id).await;
+        let result = admin_call(&state, &owner, "owner:o", "project_import", json!({"projectId":id,"replace":"sources","transferId":transfer})).await.unwrap();
+        assert_eq!(Settings::read(&root,id).unwrap().released.unwrap().server, a.server);
+        assert_eq!(std::fs::read_to_string(kernel::layout::sources(&root,id).join("functions.json")).unwrap(), "invalid saved draft");
+        assert!(!kernel::layout::sources(&root,id).join("functions/hello.ts").exists());
+        assert!(auth.authenticate(Some(&session.token)).unwrap().is_some());
+        let restored = admin_call(&state,&owner,"owner:o","database_execute",json!({"projectId":id,"operation":"restore-backup","input":{"backupId":result["backup"]["id"]}})).await.unwrap();
+        assert!(restored["holds"].as_array().unwrap().iter().any(|value| value == "sources"));
+        assert_eq!(Settings::read(&root,id).unwrap().released.unwrap().server, b.server);
+        assert_eq!(std::fs::read_to_string(kernel::layout::dist(&root,id).join("index.html")).unwrap(), "<p>B</p>");
+        assert!(kernel::functions::read_artifact(&kernel::layout::server(&root,id)).unwrap().unwrap().bundles["hello"].contains("'B'"));
+        assert!(auth.authenticate(Some(&session.token)).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

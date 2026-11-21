@@ -1,0 +1,234 @@
+[
+  {
+    "criterion": "a.id.GET.%ZZ",
+    "status": "fail",
+    "detail": {
+      "method": "GET",
+      "path": "/a/orders/%ZZ",
+      "expected_status": 400,
+      "expected_body": {
+        "error": "invalid_input"
+      },
+      "response": {
+        "status": 500,
+        "body": null,
+        "raw": "Internal Server Error",
+        "headers": [
+          [
+            "Cache-Control",
+            "private, no-cache, no-store, max-age=0, must-revalidate"
+          ],
+          [
+            "ETag",
+            "\"66fci67lppl\""
+          ],
+          [
+            "Content-Type",
+            "text/plain"
+          ],
+          [
+            "Content-Length",
+            "21"
+          ],
+          [
+            "Vary",
+            "Accept-Encoding"
+          ],
+          [
+            "Date",
+            "Fri, 20 Nov 2026 10:40:08 GMT"
+          ],
+          [
+            "Connection",
+            "keep-alive"
+          ],
+          [
+            "Keep-Alive",
+            "timeout=5"
+          ]
+        ]
+      },
+      "database_ok": true,
+      "body_ok": false,
+      "content_type_ok": false,
+      "cookie_ok": true,
+      "before_sha256": "a157ff2bc9ae011dafa338000f33acb490ff7b1c4dea5f7601642023d336712f",
+      "after_sha256": "a157ff2bc9ae011dafa338000f33acb490ff7b1c4dea5f7601642023d336712f",
+      "elapsed_ms": 2.88
+    }
+  },
+  {
+    "criterion": "a.id.POST.%ZZ",
+    "status": "fail",
+    "detail": {
+      "method": "POST",
+      "path": "/a/orders/%ZZ",
+      "expected_status": 400,
+      "expected_body": {
+        "error": "invalid_input"
+      },
+      "response": {
+        "status": 500,
+        "body": null,
+        "raw": "Internal Server Error",
+        "headers": [
+          [
+            "Cache-Control",
+            "private, no-cache, no-store, max-age=0, must-revalidate"
+          ],
+          [
+            "ETag",
+            "\"66fci67lppl\""
+          ],
+          [
+            "Content-Type",
+            "text/plain"
+          ],
+          [
+            "Content-Length",
+            "21"
+          ],
+          [
+            "Vary",
+            "Accept-Encoding"
+          ],
+          [
+            "Date",
+            "Fri, 20 Nov 2026 10:40:08 GMT"
+          ],
+          [
+            "Connection",
+            "keep-alive"
+          ],
+          [
+            "Keep-Alive",
+            "timeout=5"
+          ]
+        ]
+      },
+      "database_ok": true,
+      "body_ok": false,
+      "content_type_ok": false,
+      "cookie_ok": true,
+      "before_sha256": "a157ff2bc9ae011dafa338000f33acb490ff7b1c4dea5f7601642023d336712f",
+      "after_sha256": "a157ff2bc9ae011dafa338000f33acb490ff7b1c4dea5f7601642023d336712f",
+      "elapsed_ms": 1.55
+    }
+  },
+  {
+    "criterion": "b.id.GET.%ZZ",
+    "status": "fail",
+    "detail": {
+      "method": "GET",
+      "path": "/b/orders/%ZZ",
+      "expected_status": 400,
+      "expected_body": {
+        "error": "invalid_input"
+      },
+      "response": {
+        "status": 500,
+        "body": null,
+        "raw": "Internal Server Error",
+        "headers": [
+          [
+            "Cache-Control",
+            "private, no-cache, no-store, max-age=0, must-revalidate"
+          ],
+          [
+            "ETag",
+            "\"66fci67lppl\""
+          ],
+          [
+            "Content-Type",
+            "text/plain"
+          ],
+          [
+            "Content-Length",
+            "21"
+          ],
+          [
+            "Vary",
+            "Accept-Encoding"
+          ],
+          [
+            "Date",
+            "Fri, 20 Nov 2026 10:40:09 GMT"
+          ],
+          [
+            "Connection",
+            "keep-alive"
+          ],
+          [
+            "Keep-Alive",
+            "timeout=5"
+          ]
+        ]
+      },
+      "database_ok": true,
+      "body_ok": false,
+      "content_type_ok": false,
+      "cookie_ok": true,
+      "before_sha256": "244ca37c8fbc3ede9aa3718f42fa1a704ac5e36475153bdac263b7c585a2c5b2",
+      "after_sha256": "244ca37c8fbc3ede9aa3718f42fa1a704ac5e36475153bdac263b7c585a2c5b2",
+      "elapsed_ms": 1.56
+    }
+  },
+  {
+    "criterion": "b.id.POST.%ZZ",
+    "status": "fail",
+    "detail": {
+      "method": "POST",
+      "path": "/b/orders/%ZZ",
+      "expected_status": 400,
+      "expected_body": {
+        "error": "invalid_input"
+      },
+      "response": {
+        "status": 500,
+        "body": null,
+        "raw": "Internal Server Error",
+        "headers": [
+          [
+            "Cache-Control",
+            "private, no-cache, no-store, max-age=0, must-revalidate"
+          ],
+          [
+            "ETag",
+            "\"66fci67lppl\""
+          ],
+          [
+            "Content-Type",
+            "text/plain"
+          ],
+          [
+            "Content-Length",
+            "21"
+          ],
+          [
+            "Vary",
+            "Accept-Encoding"
+          ],
+          [
+            "Date",
+            "Fri, 20 Nov 2026 10:40:09 GMT"
+          ],
+          [
+            "Connection",
+            "keep-alive"
+          ],
+          [
+            "Keep-Alive",
+            "timeout=5"
+          ]
+        ]
+      },
+      "database_ok": true,
+      "body_ok": false,
+      "content_type_ok": false,
+      "cookie_ok": true,
+      "before_sha256": "244ca37c8fbc3ede9aa3718f42fa1a704ac5e36475153bdac263b7c585a2c5b2",
+      "after_sha256": "244ca37c8fbc3ede9aa3718f42fa1a704ac5e36475153bdac263b7c585a2c5b2",
+      "elapsed_ms": 1.57
+    }
+  }
+]

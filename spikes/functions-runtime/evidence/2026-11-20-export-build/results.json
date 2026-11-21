@@ -1,0 +1,63 @@
+{
+  "startedAt": "2026-11-20T18:51:33.608Z",
+  "finishedAt": "2026-11-20T18:51:41.305Z",
+  "passed": true,
+  "checks": {
+    "buildProjectReexportWithoutGit": true,
+    "publishedDistAndServerPreservedAlongsideDraft": true,
+    "excludedCredentialsDataGitAndNodeModules": true,
+    "npmCiUsesOnlyExportedLockfiles": true,
+    "aliasesTsconfigExtendsPngNodeShimAndReactBundle": true,
+    "honoFunctionsRebuiltAfterDeletingServerAndDist": true
+  },
+  "packages": {
+    "esbuild": "0.25.12",
+    "react": "18.3.1",
+    "reactDom": "18.3.1",
+    "hono": "4.7.2"
+  },
+  "commands": [
+    {
+      "command": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
+      "cwd": "/var/folders/x_/gprggr817vv86bbd4g36ybsw0000gn/T/konae-export-build-hIwe7F/source/app/build",
+      "status": 0,
+      "stdout": "\nup to date in 2s\n",
+      "stderr": "npm notice\nnpm notice New major version of npm available! 11.12.1 -> 12.2.3\nnpm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3\nnpm notice To update run: npm install -g npm@12.2.3\nnpm notice\n"
+    },
+    {
+      "command": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
+      "cwd": "/var/folders/x_/gprggr817vv86bbd4g36ybsw0000gn/T/konae-export-build-hIwe7F/source/app",
+      "status": 0,
+      "stdout": "\nup to date in 304ms\n",
+      "stderr": ""
+    },
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "cwd": "/var/folders/x_/gprggr817vv86bbd4g36ybsw0000gn/T/konae-export-build-hIwe7F/reexported",
+      "status": 0,
+      "stdout": "\nadded 11 packages in 1s\n",
+      "stderr": "npm notice\nnpm notice New major version of npm available! 11.12.1 -> 12.2.3\nnpm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3\nnpm notice To update run: npm install -g npm@12.2.3\nnpm notice\n"
+    },
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "cwd": "/var/folders/x_/gprggr817vv86bbd4g36ybsw0000gn/T/konae-export-build-hIwe7F/reexported/app",
+      "status": 0,
+      "stdout": "\nadded 1 package in 342ms\n",
+      "stderr": ""
+    },
+    {
+      "command": "npm run build",
+      "cwd": "/var/folders/x_/gprggr817vv86bbd4g36ybsw0000gn/T/konae-export-build-hIwe7F/reexported",
+      "status": 0,
+      "stdout": "\n> build\n> node scripts/app-build.mjs\n\n",
+      "stderr": ""
+    },
+    {
+      "command": "bun run /Users/dbr/htdocs/miniapp-builder/scripts/konae.ts build --dir /var/folders/x_/gprggr817vv86bbd4g36ybsw0000gn/T/konae-export-build-hIwe7F/reexported",
+      "cwd": "/Users/dbr/htdocs/miniapp-builder",
+      "status": 0,
+      "stdout": "Built /var/folders/x_/gprggr817vv86bbd4g36ybsw0000gn/T/konae-export-build-hIwe7F/reexported/dist\n",
+      "stderr": ""
+    }
+  ]
+}

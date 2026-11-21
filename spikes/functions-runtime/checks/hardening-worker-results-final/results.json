@@ -1,0 +1,371 @@
+{
+  "results": [
+    {
+      "criterion": "request-signal-aborts",
+      "status": "pass",
+      "detail": {
+        "kind": "Reply",
+        "capability": {
+          "generation": "1eaaba3e5524b54f01448b37c4c52d5b90eac7d8ad4bf3cdde3e076c2c90a6b2",
+          "request": 1,
+          "token": "95eeee3190a1c8eb28a44200ad025e5e061f199d6a8906e69281d746d4ea6d64"
+        },
+        "output": {
+          "status": 200,
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ]
+          ],
+          "body": "{\"aborted\":true}"
+        }
+      },
+      "elapsed_ms": 67.11
+    },
+    {
+      "criterion": "shutdown-hook-runs",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": null
+      },
+      "elapsed_ms": 30.24
+    },
+    {
+      "criterion": "shutdown-signal-aborts",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": null
+      },
+      "elapsed_ms": 130.26
+    },
+    {
+      "criterion": "shutdown-has-no-capability",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": "capability_expired"
+      },
+      "elapsed_ms": 34.01
+    },
+    {
+      "criterion": "parent-pipe-eof-during-loop",
+      "status": "pass",
+      "detail": {
+        "exit_code": 70,
+        "reason": "EOF del supervisor interrumpe el proceso aunque JS no coopere"
+      },
+      "elapsed_ms": 64.68
+    },
+    {
+      "criterion": "invalid-utf8-refused",
+      "status": "pass",
+      "detail": {
+        "kind": "Failure",
+        "capability": {
+          "generation": "e56ccac1ba740b2e81bb6f59ae0f4361d1aef6bf80afff01c6e24ebe0779a8e6",
+          "request": 1,
+          "token": "4c11aa4ce0f66afb9e866bba2cd19acd3df9d5de7779acc9cdd89c9008e0ac21"
+        },
+        "code": "invalid_response"
+      },
+      "elapsed_ms": 29.57
+    },
+    {
+      "criterion": "system-timer-cannot-survive-request",
+      "status": "pass",
+      "detail": {
+        "kind": "Failure",
+        "capability": {
+          "generation": "75f2417967409e9a538f922067afcd416c5e1d16b2bfecebee795f1e8b92f4f0",
+          "request": 1,
+          "token": "be27533545b45bf3292588fee38a8269f2038819b573af403b0770863a532d35"
+        },
+        "code": "unsupported_runtime_api"
+      },
+      "elapsed_ms": 33.25
+    },
+    {
+      "criterion": "actions-promise-rejects-canonically",
+      "status": "pass",
+      "detail": {
+        "kind": "Failure",
+        "capability": {
+          "generation": "926045074b35419439a630162aced1b418d7c81dc8aa0c770c456ff4f569b0df",
+          "request": 1,
+          "token": "dfb5aa7a88e6179b5849a6a10de8e1961a3b20d836347e5b3ffe918a31e61c9d"
+        },
+        "code": "forbidden"
+      },
+      "elapsed_ms": 29.41
+    },
+    {
+      "criterion": "anonymous-actor-is-null",
+      "status": "pass",
+      "detail": {
+        "kind": "Reply",
+        "capability": {
+          "generation": "68f256b1f11a297c31963e227b829156f0225669336ef50d6c5e4f1fa8a56d3a",
+          "request": 1,
+          "token": "6814a1fec88a02dc213c2a43b6e66e6997abad52b2efb8cec2ca96089df22865"
+        },
+        "output": {
+          "status": 200,
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ]
+          ],
+          "body": "{\"actor\":null}"
+        }
+      },
+      "elapsed_ms": 28.73
+    },
+    {
+      "criterion": "response-byte-limit",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 502,
+          "body": {
+            "error": "response_too_large"
+          },
+          "raw": "{\"error\":\"response_too_large\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "30"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:37:40 GMT"
+            ]
+          ]
+        },
+        "health": {
+          "ok": true
+        },
+        "worker_reaped": true
+      },
+      "elapsed_ms": 161.25
+    },
+    {
+      "criterion": "operation-count-limit",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 429,
+          "body": {
+            "error": "operation_limit"
+          },
+          "raw": "{\"error\":\"operation_limit\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "27"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:37:41 GMT"
+            ]
+          ]
+        },
+        "health": {
+          "ok": true
+        },
+        "worker_reaped": true
+      },
+      "elapsed_ms": 160.01
+    },
+    {
+      "criterion": "heap-failure-contained",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 502,
+          "body": {
+            "error": "worker_failed"
+          },
+          "raw": "{\"error\":\"worker_failed\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "25"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:37:41 GMT"
+            ]
+          ]
+        },
+        "health": {
+          "ok": true
+        },
+        "worker_reaped": true
+      },
+      "elapsed_ms": 166.16
+    },
+    {
+      "criterion": "rss-poll-detects-finite-burst",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 502,
+          "body": {
+            "error": "worker_memory_limit"
+          },
+          "raw": "{\"error\":\"worker_memory_limit\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "31"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:37:41 GMT"
+            ]
+          ]
+        },
+        "health": {
+          "ok": true
+        },
+        "worker_reaped": true
+      },
+      "elapsed_ms": 144.68
+    },
+    {
+      "criterion": "hung-shutdown-killed-and-reaped",
+      "status": "pass",
+      "detail": {
+        "eviction": {
+          "evicted": 1
+        },
+        "elapsed_ms": 12.44,
+        "worker_reaped": true
+      },
+      "elapsed_ms": 117.41
+    },
+    {
+      "criterion": "parent-sigkill-leaves-no-worker",
+      "status": "pass",
+      "detail": {
+        "parent_exit": -9,
+        "worker_disappeared": true,
+        "request": {
+          "error": "RemoteDisconnected"
+        }
+      },
+      "elapsed_ms": 163.74
+    },
+    {
+      "criterion": "foreign-order-leaves-no-receipt",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 404,
+          "body": {
+            "error": "not_found"
+          },
+          "raw": "{\"error\":\"not_found\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "21"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:37:41 GMT"
+            ]
+          ]
+        },
+        "database_unchanged": true
+      },
+      "elapsed_ms": 84.86
+    },
+    {
+      "criterion": "fixture-preferences-has-no-order-ops",
+      "status": "pass",
+      "detail": {
+        "responses": {
+          "read": {
+            "status": 500,
+            "body": {
+              "error": "internal_error"
+            },
+            "raw": "{\"error\":\"internal_error\"}",
+            "headers": [
+              [
+                "content-type",
+                "application/json"
+              ],
+              [
+                "content-length",
+                "26"
+              ],
+              [
+                "date",
+                "Fri, 20 Nov 2026 12:37:41 GMT"
+              ]
+            ]
+          },
+          "update": {
+            "status": 500,
+            "body": {
+              "error": "internal_error"
+            },
+            "raw": "{\"error\":\"internal_error\"}",
+            "headers": [
+              [
+                "content-type",
+                "application/json"
+              ],
+              [
+                "content-length",
+                "26"
+              ],
+              [
+                "date",
+                "Fri, 20 Nov 2026 12:37:42 GMT"
+              ]
+            ]
+          }
+        },
+        "database_unchanged": true
+      },
+      "elapsed_ms": 107.99
+    }
+  ],
+  "summary": {
+    "pass": 17,
+    "fail": 0
+  },
+  "binary_sha256": "98619085910b1fc10eb15a198e1938663f821e184d296dc279ba22eff812bd23",
+  "script_sha256": "fd79293c005d22adfb4f998555265593661b74f2125fc01361963761e407765b",
+  "scope": "IPC y procesos propios. Las asignaciones son finitas; RSS polling no demuestra límite duro."
+}

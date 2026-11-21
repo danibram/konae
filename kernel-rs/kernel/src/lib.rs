@@ -36,6 +36,10 @@ pub mod enter;
 pub mod file_store;
 pub mod files;
 pub mod folder;
+pub mod functions;
+pub mod function_data;
+pub mod functions_runtime;
+pub mod functions_http;
 pub mod google;
 pub mod guard;
 pub mod heap;
@@ -102,6 +106,7 @@ pub struct AppState {
     pub installation: Arc<installation::Installation>,
     /// Where an app user's file uploads and deletes are recorded.
     pub audit: Option<runtime::AuditSink>,
+    pub functions: Arc<functions_runtime::Runtime>,
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -126,6 +131,7 @@ impl AppState {
             guards: Arc::new(Guards::new(Vec::new())),
             installation: Arc::new(installation::Installation::for_test()),
             audit: None,
+            functions: Arc::new(functions_runtime::Runtime::disabled()),
         }
     }
 }
@@ -166,6 +172,8 @@ pub struct Deployment {
     pub contact_email: Option<String>,
     #[serde(skip, default)]
     pub released_schema: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<functions::Published>,
 }
 
 
@@ -234,6 +242,8 @@ pub struct ReleasedSettings {
     pub schema_sql: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_transforms: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<functions::Published>,
     #[serde(default)]
     pub source_digest: Option<String>,
     #[serde(default)]
@@ -252,6 +262,7 @@ fn released_settings(deployment: &Deployment) -> ReleasedSettings {
         contact_email: deployment.contact_email.clone(), manifest,
         actions: deployment.actions.clone(), schema_sql: deployment.released_schema.clone(),
         schema_transforms: None,
+        server: deployment.server.clone(),
         source_digest: deployment.source_digest.clone(), released_at: Some(deployment.released_at),
         artifact_digest: None,
     }
@@ -398,6 +409,7 @@ impl Settings {
             contact_email,
             modules: self.modules,
             released_schema: released.as_ref().map(|r| r.schema_sql.clone()).unwrap_or_default(),
+            server: released.as_ref().and_then(|r| r.server.clone()),
         }
     }
 }
@@ -538,12 +550,16 @@ impl SignupPolicy {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployInput {
     pub project: ProjectInput,
     pub visibility: String,
     pub artifact: BuildArtifact,
+    #[serde(default)]
+    pub server_artifact: Option<functions::ServerArtifact>,
+    #[serde(default)]
+    pub initial_released: Option<ReleasedSettings>,
     #[serde(default)]
     pub initial_signup_policy: Option<SignupPolicy>,
     #[serde(default)]
@@ -562,7 +578,7 @@ pub struct DeployInput {
     pub schema_confirmation: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInput {
     pub id: String,
@@ -587,7 +603,7 @@ impl ProjectInput {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct BuildArtifact {
     pub version: u8,
     pub entrypoint: String,
@@ -844,6 +860,7 @@ pub async fn state_from_env(
             &std::env::var("KONAE_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
         accounts: account_settings,
+        functions: Arc::new(functions_runtime::Runtime::from_env()?),
         audit,
         installation: Arc::new(installation),
     };
@@ -922,6 +939,7 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .route("/_konae/{*path}", axum::routing::any(|| async { error(StatusCode::GONE, "Use authenticated MCP for platform operations.") }))
         .route("/{*path}", get(http::get_route).post(http::post_route))
         .route("/", get(serve_root))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), logical_route))
         .layer(axum::middleware::from_fn_with_state(state.clone(), maintenance::guard))
         .with_state(state.clone());
     let service = ServiceBuilder::new()
@@ -933,10 +951,26 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
     tower::util::BoxCloneSyncService::new(service)
 }
 
-async fn logical_request(State(state): State<AppState>, request: Request, next: axum::middleware::Next) -> Response {
-    // A disconnected client can leave SQLite work running on a blocking thread.
-    // Keep the permit until the handler has joined that work.
-    let operation = state.copies.operations.clone().read_owned().await;
+#[derive(Clone)]
+struct Operation(Arc<tokio::sync::OwnedRwLockReadGuard<()>>);
+
+async fn logical_request(State(state): State<AppState>, mut request: Request, next: axum::middleware::Next) -> Response {
+    let operation = Operation(Arc::new(state.copies.operations.clone().read_owned().await));
+    request.extensions_mut().insert(operation);
+    next.run(request).await
+}
+
+async fn logical_route(State(state): State<AppState>, request: Request, next: axum::middleware::Next) -> Response {
+    let request = if request.extensions().get::<axum::extract::MatchedPath>().is_some_and(|path| path.as_str() == "/{*path}") {
+        match functions_http::dispatch(&state, request).await {
+            Ok(response) => return response,
+            Err(request) => request,
+        }
+    } else {
+        request
+    };
+    // The legacy handlers join their SQLite work before releasing the copy gate.
+    let operation = request.extensions().get::<Operation>().map(|operation| operation.0.clone());
     let task = tokio::spawn(async move {
         let _operation = operation;
         next.run(request).await
@@ -968,9 +1002,10 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     if body.len() > size::RELEASE_BYTES {
         return error(StatusCode::BAD_REQUEST, &size::release_refused(body.len()));
     }
-    let input: DeployInput = match serde_json::from_slice(body) {
+    let input: DeployInput = match serde_json::from_slice(body).map_err(anyhow::Error::from).and_then(functions::parse_deploy_input) {
         Ok(value) => value,
         Err(error_value) => {
+            if let Some(refused) = refusal::of(&error_value) { return refusal_error(refused); }
             return error(
                 StatusCode::BAD_REQUEST,
                 &format!("Invalid deployment: {error_value}"),
@@ -984,8 +1019,20 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
 /// imports. `app/`, `dist/`, the database and the record change together, or
 /// none of them does.
 pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
+    deploy_input_in(state, input, false).await
+}
+
+/// The owner import door calls this after checking its project permission and package.
+pub async fn deploy_import_held(state: &AppState, input: DeployInput) -> Response {
+    deploy_input_in(state, input, true).await
+}
+
+async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import: bool) -> Response {
     let _generation = state.copies.generations.read().await;
-    if let Err(error_value) = runtime::validate_release(&state, &input, None).await {
+    let _release_guard = if restoring_import { None } else { Some(named_lock(state, &format!("publish:{}", input.project.id), true).await) };
+    let validation = if restoring_import { runtime::validate_import_release(state, &input, None).await }
+        else { runtime::validate_release(state, &input, None).await };
+    if let Err(error_value) = validation {
         return match refusal::of(&error_value) {
             Some(refused) => refusal_error(refused),
             None => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
@@ -1003,9 +1050,20 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             "Visibility must be public or private.",
         );
     }
+    let server = match functions::validate_artifact(input.server_artifact.as_ref().map(|a| &a.manifest), input.server_artifact.as_ref()) {
+        Ok(server) => server,
+        Err(refused) => return refusal_error(&refused),
+    };
     let release_sources = match input.project.sources() {
         Ok(files) => files,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+    };
+    let draft = input.project.clone();
+    let draft_visibility = input.visibility.clone();
+    let imported_snapshot = input.initial_released.clone();
+    let input = match input.restored() {
+        Ok(input) => input,
+        Err(e) => return error(StatusCode::BAD_REQUEST, &e.to_string()),
     };
     let actions = input.project.files.get("actions.json").cloned().unwrap_or_else(|| r#"{"version":1,"actions":{}}"#.to_owned());
     let program = match action_shape::read(&actions) {
@@ -1114,7 +1172,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             .map(|item| item.created_at)
             .unwrap_or_else(now_ms),
         released_at: now_ms(),
-        source_digest: Some(sources::digest(release_sources.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())))),
+        source_digest: imported_snapshot.as_ref().and_then(|s| s.source_digest.clone()).or_else(|| Some(sources::digest(release_sources.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice()))))),
         manifest,
         hostname: hostname.clone(),
         actions,
@@ -1155,14 +1213,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         },
         contact_email: input.contact_email.clone(),
         released_schema,
+        server,
     };
     let data = layout::data(&state.data_root, &id);
     if let Err(error_value) = tokio::fs::create_dir_all(&data).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
-
-
-    let _release_guard = named_lock(&state, &format!("publish:{id}"), true).await;
 
 
     if let Err(error_value) = stage_local_artifact(&state, &id, &artifact_version, &artifact_files)
@@ -1171,6 +1227,10 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     {
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
+    }
+    if let Err(e) = functions::stage(&staged_server(state, &id, &artifact_version), input.server_artifact.as_ref()).await.and_then(|()| release_step(&id, "stage_server")) {
+        remove_staged_dist(state, &id, &artifact_version).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
     let subject = format!("{id} revision {artifact_version}");
     let journal_release = || copies::Pending::begin(&state.data_root, &subject, "installing the database, sources and release record");
@@ -1296,9 +1356,17 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             }
         }
     };
-    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref(), Some(&deployment.modules))
-        .await
-        .and_then(|()| release_step(&id, "persist_deployment"))
+    if let Err(error_value) = async {
+        persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref(), Some(&deployment.modules)).await?;
+        if imported_snapshot.is_some() {
+            let mut settings = Settings::read(&state.data_root, &id)?;
+            settings.name = draft.name.clone(); settings.slug = draft.slug.clone();
+            settings.manifest = sources::manifest_without_runtime(&draft.manifest);
+            settings.visibility = draft_visibility.clone();
+            settings.write(&state.data_root).await?;
+        }
+        release_step(&id, "persist_deployment")
+    }.await
     {
         recorded.put_back().await;
         undo_database();
@@ -1338,6 +1406,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     staged_sources.finish().await;
     if let Err(e) = pending.finish() { return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()); }
     http::routes_published(&deployment);
+    state.functions.release_changed(&id, &deployment.artifact_version).await;
     remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
         Ok(value) => value,
@@ -1374,25 +1443,36 @@ pub fn staged_dist(state: &AppState, id: &str, version: &str) -> PathBuf {
 /// Moves the staged files into `dist/` and the previous ones aside, for
 /// `remove_stale_dist` to delete. When the second move fails, the
 /// previous files go back to `dist/`.
-pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::Result<()> {
-    let dist = layout::dist(&state.data_root, id);
-    let retired = layout::private(&state.data_root, id).join(format!("dist-retired-{}", Uuid::new_v4().simple()));
-    let had_dist = tokio::fs::try_exists(&dist).await?;
-    if had_dist {
-        tokio::fs::rename(&dist, &retired).await?;
-    }
-    let moved = match release_step(id, "switch_dist") {
-        Ok(()) => tokio::fs::rename(staged_dist(state, id, version), &dist).await,
-        Err(error_value) => Err(std::io::Error::other(error_value.to_string())),
-    };
-    if moved.is_err() && had_dist {
-        if let Err(error_value) = tokio::fs::rename(&retired, &dist).await {
-            eprintln!("Could not put back dist/ of {id}: {error_value}");
-        }
-    }
-    moved
+pub fn staged_server(state: &AppState, id: &str, version: &str) -> PathBuf {
+    layout::private(&state.data_root, id).join(format!("server-{version}"))
 }
 
+pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::Result<()> {
+    let mut changed: Vec<(PathBuf, PathBuf, bool)> = Vec::new();
+    for (live, staged, label, step) in [
+        (layout::dist(&state.data_root, id), staged_dist(state, id, version), "dist", "switch_dist"),
+        (layout::server(&state.data_root, id), staged_server(state, id, version), "server", "switch_server"),
+    ] {
+        // Local static-only callers do not stage a server directory.
+        if label == "server" && !staged.exists() { continue; }
+        let retired = layout::private(&state.data_root, id).join(format!("{label}-retired-{}", Uuid::new_v4().simple()));
+        let moved = async {
+            let had_live = tokio::fs::try_exists(&live).await?;
+            if had_live { tokio::fs::rename(&live, &retired).await?; }
+            changed.push((live.clone(), retired.clone(), had_live));
+            release_step(id, step).map_err(|e| std::io::Error::other(e.to_string()))?;
+            tokio::fs::rename(&staged, &live).await
+        }.await;
+        if let Err(error) = moved {
+            for (live, retired, existed) in changed.into_iter().rev() {
+                let _ = tokio::fs::remove_dir_all(&live).await;
+                if existed { tokio::fs::rename(retired, live).await?; }
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
+}
 
 
 
@@ -1504,6 +1584,7 @@ fn release_step(_id: &str, _step: &'static str) -> Result<()> {
 /// Best-effort removal of a release that never went live.
 pub async fn remove_staged_dist(state: &AppState, id: &str, version: &str) {
     let _ = tokio::fs::remove_dir_all(staged_dist(state, id, version)).await;
+    let _ = tokio::fs::remove_dir_all(staged_server(state, id, version)).await;
 }
 
 /// Deletes the retired or staged release folders beside `dist/`. Failures
@@ -1511,7 +1592,7 @@ pub async fn remove_staged_dist(state: &AppState, id: &str, version: &str) {
 pub async fn remove_stale_dist(state: &AppState, id: &str) {
     if let Ok(mut entries) = tokio::fs::read_dir(layout::private(&state.data_root, id)).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if !entry.file_name().to_str().is_some_and(|name| name.starts_with("dist-")) {
+            if !entry.file_name().to_str().is_some_and(|name| name.starts_with("dist-") || name.starts_with("server-")) {
                 continue;
             }
             let removed = match entry.file_type().await {
@@ -2625,6 +2706,7 @@ pub async fn admin_database(state: &AppState, id: &str, body: &[u8]) -> Response
         if let Err(refused) = modules::require_on(&deployment.modules, "actions") { return refusal_error(&refused); }
     }
     let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;
+    let _release_guard = named_lock(state, &format!("publish:{}", deployment.id), operation == "restore-backup").await;
     let path = database_path(&state, &deployment.id);
     let _guard = database_lock(&state, &deployment.id).await;
     match operation {
@@ -2770,7 +2852,7 @@ pub async fn action_lock(state: &AppState, id: &str, kind: &str) -> ActionLock {
 
 pub fn inspect_database(path: &Path) -> Result<Vec<Value>> {
     let db = Connection::open(path)?;
-    let mut statement = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY name")?;
+    let mut statement = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY name")?;
     let names = statement
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -3184,6 +3266,10 @@ async fn run_action_holding(path: PathBuf, action: &ActionDefinition, params: Ve
 
 pub fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Vec<Value>> {
     let connection = app_db::open(path)?;
+    run_query_on_connection(&connection, action, params)
+}
+
+pub fn run_query_on_connection(connection: &Connection, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Vec<Value>> {
     let mut statement = connection.prepare_cached(&action.statement)?;
     let names = statement
         .column_names()
@@ -3205,15 +3291,19 @@ pub fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) 
 pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
     let mut connection = app_db::open(path)?;
     let transaction = connection.transaction()?;
+    let ran = run_mutation_on_connection(&transaction, action, params)?;
+    transaction.commit()?;
+    Ok(ran)
+}
 
-
+pub fn run_mutation_on_connection(connection: &Connection, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
     let columns = action.notify.as_ref().map(|_| notify::returning("", action)).unwrap_or_default();
     let mut rows = Vec::new();
     let mut budget = ResultBudget::default();
     let changes = if columns.is_empty() {
-        transaction.prepare_cached(&action.statement)?.execute(params_from_iter(params))? as u64
+        connection.prepare_cached(&action.statement)?.execute(params_from_iter(params))? as u64
     } else {
-        let mut statement = transaction.prepare_cached(&notify::with_returning(&action.statement, &columns))?;
+        let mut statement = connection.prepare_cached(&notify::with_returning(&action.statement, &columns))?;
         let mut cursor = statement.query(params_from_iter(params))?;
         let mut serialized_bytes = 2usize;
 
@@ -3242,10 +3332,9 @@ pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue
         }
         drop(cursor);
         drop(statement);
-        transaction.changes()
+        connection.changes()
     };
-    let last_insert_id = transaction.last_insert_rowid();
-    transaction.commit()?;
+    let last_insert_id = connection.last_insert_rowid();
     Ok(Ran { answer: json!({"changes": changes, "lastInsertId": last_insert_id}), rows })
 }
 
@@ -4075,7 +4164,7 @@ pub const MAX_APP_DATABASE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Caps the database file behind this connection. SQLite keeps the setting per
 /// connection, so every connection that may write needs it.
-pub fn limit_database_size(db: &Connection, max_bytes: u64) -> Result<()> {
+pub fn limit_database_size(db: &Connection, max_bytes: u64) -> rusqlite::Result<()> {
     let page_size: u64 = db.query_row("PRAGMA page_size", [], |row| row.get(0))?;
     let pages = (max_bytes / page_size.max(1)).max(1);
     db.query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))?;
@@ -4097,13 +4186,21 @@ pub fn denied_function(name: &str) -> bool {
 }
 
 pub fn restrict_database(db: &Connection) -> Result<()> {
-
-
     db.busy_timeout(std::time::Duration::from_secs(5))?;
+    configure_database_limits(db)?;
+    arm_deadline(db)?;
+    install_database_authorizer(db, None)?;
+    Ok(())
+}
 
+pub(crate) fn restrict_function_database(db: &Connection, receipts: Arc<std::sync::atomic::AtomicBool>) -> rusqlite::Result<()> {
+    db.busy_timeout(std::time::Duration::ZERO)?;
+    db.pragma_update(None, "foreign_keys", true)?;
+    configure_database_limits(db)?;
+    install_database_authorizer(db, Some(receipts))
+}
 
-
-
+fn configure_database_limits(db: &Connection) -> rusqlite::Result<()> {
     db.pragma_update(None, "synchronous", "NORMAL")?;
     use_wal(db);
 
@@ -4115,18 +4212,30 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
 
 
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LIKE_PATTERN_LENGTH, MAX_LIKE_PATTERN_BYTES)?;
-    arm_deadline(db)?;
-    db.authorizer(Some(|context: AuthContext<'_>| match context.action {
+    Ok(())
+}
+
+fn install_database_authorizer(db: &Connection, receipts: Option<Arc<std::sync::atomic::AtomicBool>>) -> rusqlite::Result<()> {
+    let function_connection = receipts.is_some();
+    let reserved = move |name: &str, accessor: Option<&str>| {
+        schema_transform::is_internal_table(name)
+            && !(name.eq_ignore_ascii_case("__konae_function_receipts")
+                && accessor.is_none()
+                && receipts.as_ref().is_some_and(|allowed| allowed.load(std::sync::atomic::Ordering::SeqCst)))
+    };
+    db.authorizer(Some(move |context: AuthContext<'_>| {
+        if function_connection && context.accessor.is_some() { return Authorization::Deny; }
+        match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
-        AuthAction::CreateTable { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::CreateIndex { index_name, table_name } if schema_transform::is_internal_table(index_name) || schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::AlterTable { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::DropTable { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::DropIndex { index_name, table_name } if schema_transform::is_internal_table(index_name) || schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::Read { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::Insert { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::Update { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
-        AuthAction::Delete { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::CreateTable { table_name, .. } if reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::CreateIndex { index_name, table_name } if reserved(index_name, context.accessor) || reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::AlterTable { table_name, .. } if reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::DropTable { table_name } if reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::DropIndex { index_name, table_name } if reserved(index_name, context.accessor) || reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::Read { table_name, .. } if reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::Insert { table_name } if reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::Update { table_name, .. } if reserved(table_name, context.accessor) => Authorization::Deny,
+        AuthAction::Delete { table_name } if reserved(table_name, context.accessor) => Authorization::Deny,
         // Konae runs no triggers or views, and Studio and the schema change
         // use this connection too, so neither can add one the Gate never saw.
         AuthAction::CreateTrigger { .. } | AuthAction::CreateTempTrigger { .. } => Authorization::Deny,
@@ -4134,6 +4243,7 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
         AuthAction::Pragma { pragma_name, .. } if !["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list", "foreign_key_check", "integrity_check", "quick_check"].contains(&pragma_name.to_ascii_lowercase().as_str()) => Authorization::Deny,
         AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
         _ => Authorization::Allow,
+        }
     }))?;
     Ok(())
 }
@@ -4592,6 +4702,7 @@ pub mod tests {
                 modules
             },
             released_schema: String::new(),
+            server: None,
         };
         tokio::fs::create_dir_all(crate::layout::data(&root, &deployment.id))
             .await
@@ -5907,7 +6018,7 @@ pub mod tests {
         std::fs::read_dir(layout::private(root, id))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .filter(|name| name.starts_with("dist-"))
+            .filter(|name| name.starts_with("dist-") || name.starts_with("server-"))
             .collect()
     }
 
@@ -6142,12 +6253,13 @@ pub mod tests {
         let list = |table: &str, column: &str| json!({"kind": "query", "access": "anonymous", "statement": format!("SELECT {column} FROM {table} ORDER BY id LIMIT 50"), "bindings": []});
         let both = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n";
         let notes_only = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n";
-        for step in ["stage_local_artifact", "schema_change", "stage_sources", "persist_deployment", "swap_sources", "switch_dist"] {
+        for step in ["stage_local_artifact", "stage_server", "schema_change", "stage_sources", "persist_deployment", "swap_sources", "switch_dist", "switch_server"] {
             let root = std::env::temp_dir().join(format!("konae-release-step-{}", Uuid::new_v4()));
             tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);
             let id = format!("app_{step}");
-            let first = release_body(&id, both, json!({"notes.list": list("notes", "body"), "tags.list": list("tags", "name")}), "<p>one</p>", None);
+            let mut first = release_body(&id, both, json!({"notes.list": list("notes", "body"), "tags.list": list("tags", "name")}), "<p>one</p>", None);
+            functions::tests::add_function(&mut first, "export function handle() { return new Response('A'); }");
             let response = deploy(&state, first.to_string().as_bytes()).await;
             let status = response.status();
             let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
@@ -6161,6 +6273,8 @@ pub mod tests {
 
 
             let mut second = release_body(&id, notes_only, json!({"notes.list": list("notes", "body")}), "<p>two</p>", None);
+            functions::tests::add_function(&mut second, "export function handle() { return new Response('B'); }");
+            second.as_object_mut().unwrap().remove("initialModules");
             let input: DeployInput = serde_json::from_value(second.clone()).unwrap();
             let confirmation = runtime::validate_release(&state, &input, None).await.unwrap().confirmation();
             assert!(confirmation.is_some(), "dropping tags loses a row");
@@ -6191,6 +6305,13 @@ pub mod tests {
             assert_eq!(std::fs::read(crate::layout::dist(&root, &id).join("index.html")).unwrap(), b"<p>one</p>", "{step}: dist/ is the first release's");
             assert_eq!(std::fs::read(app.join("actions.json")).unwrap(), first_actions, "{step}: app/ is the first release's");
             assert!(!crate::layout::private(&root, &id).join("sources.json").exists(), "{step}: the release does not write editor metadata outside app/");
+            let restored = functions::read_artifact(&layout::server(&root, &id)).unwrap().unwrap();
+            assert!(restored.bundles["orders"].contains("'A'"), "{step}");
+            assert_eq!(serving.server, live.server, "{step}");
+            let mut restarted = test_state(&root);
+            restarted.execution_mode = execution::ExecutionMode::Live;
+            let reopened = folder::open(&restarted, &id, None).await.unwrap();
+            assert_eq!(reopened.server, live.server, "{step}");
             assert!(staged_or_retired(&root, &id).is_empty(), "{step}: no staged files stay");
             let staged_sources: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())

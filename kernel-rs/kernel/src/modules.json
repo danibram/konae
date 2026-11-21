@@ -168,6 +168,17 @@
       "uses": [
         "HTML pages with a title"
       ]
+    },
+    "functions": {
+      "summary": "Run bundled JavaScript handlers on the Kernel with verified identity and named Server Actions.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": [],
+      "uses": [
+        "functions.json"
+      ]
     }
   }
 }

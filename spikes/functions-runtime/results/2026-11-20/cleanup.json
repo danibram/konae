@@ -1,0 +1,22 @@
+[
+  {
+    "target": "native",
+    "pid": 76458,
+    "command": "/private/tmp/konae-deno-core-target/release/konae-functions-spike"
+  },
+  {
+    "target": "deno",
+    "pid": 76459,
+    "command": "/private/tmp/konae-deno-core-target/release/konae-functions-spike"
+  },
+  {
+    "target": "node",
+    "pid": 76460,
+    "command": "/opt/homebrew/bin/node /Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/baselines/node/server.mjs"
+  },
+  {
+    "target": "next",
+    "pid": 76461,
+    "command": "/opt/homebrew/bin/node /Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/baselines/next/start.mjs"
+  }
+]

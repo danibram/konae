@@ -284,7 +284,7 @@ function pagePathsOverlap(left: string, right: string): boolean {
 function assertNoReservedKernelTable(name: string, statement: string) {
   const tokens = sqlTokens(statement);
   const tableKeywords = new Set(["FROM", "JOIN", "UPDATE", "INTO", "TABLE", "REFERENCES"]);
-  const reserved = new Set(["__konae_schema_state", "__konae_schema_history"]);
+  const reserved = new Set(["__konae_schema_state", "__konae_schema_history", "__konae_function_receipts"]);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     if (token.kind !== "word" || !tableKeywords.has(token.text.toUpperCase())) continue;

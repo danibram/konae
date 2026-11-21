@@ -1,0 +1,631 @@
+[
+  {
+    "name": "anonymous function",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "expected": {
+      "version": 1,
+      "functions": {
+        "orders": {
+          "entry": "functions/orders.ts",
+          "mount": "/api/orders",
+          "methods": [
+            "GET"
+          ],
+          "access": "anonymous",
+          "actions": []
+        }
+      }
+    }
+  },
+  {
+    "name": "defaults are authenticated and empty allowlist",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "expected": {
+      "version": 1,
+      "functions": {
+        "orders": {
+          "entry": "functions/orders.ts",
+          "mount": "/api/orders",
+          "methods": [
+            "GET"
+          ],
+          "access": "authenticated",
+          "actions": []
+        }
+      }
+    }
+  },
+  {
+    "name": "invalid JSON",
+    "source": "{",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.invalid",
+    "message": "functions.json must be a JSON object with version 1 and a functions object."
+  },
+  {
+    "name": "wrong version",
+    "source": "{\"version\":2,\"functions\":{}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.invalid",
+    "message": "functions.json must be a JSON object with version 1 and a functions object."
+  },
+  {
+    "name": "unknown root key",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}},\"unknown\":true}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.key-unknown",
+    "message": "functions.json has unknown key unknown."
+  },
+  {
+    "name": "unknown function key",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[],\"unknown\":true}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.key-unknown",
+    "message": "Function orders has unknown key unknown."
+  },
+  {
+    "name": "entry index.ts",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"index.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.entry-invalid",
+    "message": "Function orders entry must name a .ts, .js, .mts or .mjs file under functions/."
+  },
+  {
+    "name": "entry functions/../orders.ts",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/../orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.entry-invalid",
+    "message": "Function orders entry must name a .ts, .js, .mts or .mjs file under functions/."
+  },
+  {
+    "name": "mount /",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.mount-invalid",
+    "message": "Function orders mount must be an absolute path of nonempty ASCII letter, digit, underscore or hyphen segments."
+  },
+  {
+    "name": "mount /_konae/orders",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/_konae/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.mount-reserved",
+    "message": "Function orders mount /_konae/orders is reserved."
+  },
+  {
+    "name": "mount /server/orders",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/server/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.mount-reserved",
+    "message": "Function orders mount /server/orders is reserved."
+  },
+  {
+    "name": "methods ['PUT']",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"PUT\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.methods-invalid",
+    "message": "Function orders methods must be a nonempty array of GET or POST without duplicates."
+  },
+  {
+    "name": "methods ['GET', 'GET']",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\",\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.methods-invalid",
+    "message": "Function orders methods must be a nonempty array of GET or POST without duplicates."
+  },
+  {
+    "name": "access owner",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"owner\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.access-invalid",
+    "message": "Function orders access must be authenticated or anonymous."
+  },
+  {
+    "name": "actions ['read', 'read']",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[\"read\",\"read\"]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.actions-invalid",
+    "message": "Function orders actions must be an array of unique action names."
+  },
+  {
+    "name": "missing entry",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.entry-missing",
+    "message": "Function orders entry functions/orders.ts is missing from the app sources."
+  },
+  {
+    "name": "module off",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {},
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "module.off",
+    "message": "Module functions is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run."
+  },
+  {
+    "name": "auth required",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"authenticated\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "module.requires",
+    "message": "Module functions requires auth, which is off. Turn auth on first."
+  },
+  {
+    "name": "actions required",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[\"read\"]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "module.requires",
+    "message": "Module functions requires actions, which is off. Turn actions on first."
+  },
+  {
+    "name": "missing action",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[\"read\"]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.action-missing",
+    "message": "Function orders names unknown action read."
+  },
+  {
+    "name": "effect action",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[\"read\"]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {
+      "read": {
+        "kind": "mutation",
+        "notify": {}
+      }
+    },
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.action-unsupported",
+    "message": "Function orders action read must be a query or mutation without external effects."
+  },
+  {
+    "name": "query allowed",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[\"read\"]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {
+      "read": {
+        "kind": "query"
+      }
+    },
+    "staticPaths": [
+      "index.html"
+    ],
+    "expected": {
+      "version": 1,
+      "functions": {
+        "orders": {
+          "entry": "functions/orders.ts",
+          "mount": "/api/orders",
+          "methods": [
+            "GET"
+          ],
+          "access": "anonymous",
+          "actions": [
+            "read"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "static conflict",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "api/orders/index.html"
+    ],
+    "code": "function.mount-conflict",
+    "message": "Function orders mount /api/orders overlaps route /api/orders/index.html."
+  },
+  {
+    "name": "http conflict",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {
+      "hook": {
+        "http": {
+          "path": "/api/orders"
+        }
+      }
+    },
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.mount-conflict",
+    "message": "Function orders mount /api/orders overlaps route /api/orders."
+  },
+  {
+    "name": "overlapping functions",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]},\"other\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders/item\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.mount-conflict",
+    "message": "Function other mount /api/orders/item overlaps function orders."
+  }
+]

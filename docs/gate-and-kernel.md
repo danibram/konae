@@ -1,5 +1,7 @@
 # The Gate and the Kernel
 
+Server functions have a separate bundle validation and runtime path. The editor preview does not execute them; `konae dev` and deployments require a configured paired runner. See [Server functions](./functions.md).
+
 A Capsule meets two checks. The Validation Gate runs in the editor before Apply. The Kernel runs the same checks again at every release, and when the `kernel` binary starts an app folder, such as an export on another machine.
 
 ```mermaid

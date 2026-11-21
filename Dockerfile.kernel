@@ -6,27 +6,36 @@ FROM rust:1.91-bookworm AS build
 WORKDIR /src
 COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
 COPY kernel-rs/backup/Cargo.toml backup/Cargo.toml
+COPY kernel-rs/functions-executor/Cargo.toml functions-executor/Cargo.toml
 COPY kernel-rs/kernel/Cargo.toml kernel/Cargo.toml
 COPY kernel-rs/konae/Cargo.toml konae/Cargo.toml
 # Builds the dependencies once, on empty crates, so a source change rebuilds only the Kernel.
 # The workspace names konae too, so it gets an empty crate and is never built.
-RUN mkdir backup/src kernel/src konae/src \
-  && touch backup/src/lib.rs && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
-  && cargo build --release --locked -p kernel --bin kernel && rm -rf backup/src kernel/src
+RUN mkdir backup/src functions-executor/src kernel/src konae/src \
+  && touch backup/src/lib.rs functions-executor/src/lib.rs && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
+  && cargo build --release --locked -p kernel --bin kernel && rm -rf backup/src functions-executor/src kernel/src
 COPY kernel-rs/backup/src ./backup/src
+COPY kernel-rs/functions-executor/src ./functions-executor/src
 COPY kernel-rs/kernel/src ./kernel/src
-RUN touch backup/src/lib.rs kernel/src/lib.rs kernel/src/main.rs && cargo build --release --locked -p kernel --bin kernel
+RUN touch backup/src/lib.rs functions-executor/src/lib.rs kernel/src/lib.rs kernel/src/main.rs && cargo build --release --locked -p kernel --bin kernel
 
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && apt-get install -y --no-install-recommends ca-certificates curl util-linux \
   && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system --gid 10002 konae-functions \
+  && useradd --system --uid 10002 --gid konae-functions --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin konae-functions \
   && mkdir -p /kernel/apps /usr/local/lib/konae
 COPY --from=build /src/target/release/kernel /usr/local/lib/konae/kernel
+ARG FUNCTIONS_RUNNER_SHA256
+COPY --from=functions-runner /konae-functions-runner /usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}
+RUN test -n "$FUNCTIONS_RUNNER_SHA256" \
+  && printf '%s  %s\n' "$FUNCTIONS_RUNNER_SHA256" "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" | sha256sum --check --status \
+  && mv "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" /usr/local/lib/konae/functions-runner
 COPY ops/kernel-entrypoint.sh /usr/local/bin/kernel
 RUN chmod 755 /usr/local/bin/kernel
-ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/kernel KONAE_KERNEL_PORT=8787
+ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/kernel KONAE_KERNEL_PORT=8787 KONAE_FUNCTIONS_UID=10002 KONAE_FUNCTIONS_GID=10002
 EXPOSE 8787
 HEALTHCHECK --interval=10s --timeout=2s --start-period=5s CMD curl -fs http://127.0.0.1:8787/_konae/health || exit 1
 ENTRYPOINT ["/usr/local/bin/kernel"]

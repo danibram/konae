@@ -22,6 +22,8 @@ app/
 
 `konae.json` sits beside `app/` in the app folder. It holds the app's ID, name, visibility, Signup Policy, sign-in methods, contact email, module state and manifest. The manifest sets routing and the origins a page may fetch (`connects`).
 
+Apps that declare server functions also keep `app/functions.json` and source files under `app/functions/`. Their built bundles go to the private `server/` directory, apart from the public `dist/` files. See [Server functions](./functions.md).
+
 ## What each file does
 
 | File | Role |

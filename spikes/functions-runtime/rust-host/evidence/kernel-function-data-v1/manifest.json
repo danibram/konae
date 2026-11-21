@@ -1,0 +1,8 @@
+{
+  "tests_passed": 16,
+  "scope": "Kernel transaction coordinator before header fingerprint extension",
+  "sha256": {
+    "kernel-rs/kernel/src/function_data.rs": "1001cb7dea1e2f1304c6c0628fa05b51493bfe34fc38915cca4ce0c099c548ba",
+    "kernel-rs/kernel/src/function_data_tests.rs": "99a9f5ce25143335bd86e73dd41865f77000c03f4fe152d2b1c9d423b980bb58"
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Product rule
 
-A new app creates no process, VM or container. It is one app folder: a static Build Artifact, a SQLite database and the declarations the Kernel runs. An idle app uses no CPU and costs only the disk its folder takes.
+A new app starts no process, VM or container. It is one app folder: a static Build Artifact, a SQLite database and the declarations the Kernel runs. Functions starts a child worker only when an admitted request needs one, then keeps it warm until its idle timeout. A recently used app can retain worker memory during that interval.
 
 The Kernel decides who an actor is, whether a Deployment is public or private, and which action that actor may call. A proxy, an S3 store or a mail provider stores or carries bytes and makes no access decision.
 
@@ -12,13 +12,19 @@ The Kernel decides who an actor is, whether a Deployment is public or private, a
 flowchart TB
   OWN["Owners<br/>in the editor, the konae CLI<br/>or an agent's MCP client"]
   RUN["Visitors, app users<br/>and other services"]
-  subgraph process["One process, the konae binary"]
+  subgraph process["Main process, the konae binary"]
     KO["Konae<br/>owner's MCP on /mcp, OAuth,<br/>owner accounts, project list"]
-    KE["Kernel<br/>Server Actions, app accounts, files,<br/>schedules, notices, routes, calls, Usage"]
+    KE["Kernel<br/>Server Actions, functions, app accounts, files,<br/>schedules, notices, routes, calls, Usage"]
+    FX["functions-executor crate<br/>Rust supervisor and IPC"]
+  end
+  subgraph child["On-demand child process"]
+    RUNNER["deno_core Functions runner<br/>source: spikes/functions-runtime/rust-host"]
   end
   OWN -->|"the editor host"| KO
   RUN -->|"each app's own host"| KE
   KO -->|"calls the library"| KE
+  KE -->|"supervisor API"| FX
+  FX -->|"spawn, then bounded IPC/2"| RUNNER
   subgraph data["One data directory"]
     OWNERS[("owners.sqlite<br/>mcp.sqlite")]
     APPS[("apps/#lt;id#gt;/<br/>one app folder per app")]
@@ -31,19 +37,22 @@ flowchart TB
   QUEUES -.-> OUT["Mail provider<br/>and other services"]
 ```
 
-An installation is one process and one data directory. Owners reach Konae on the editor host, through the editor, the CLI or an agent's MCP client. Visitors, app users and other services reach the Kernel on each app's own host. Konae keeps owners and the project list in its two stores, and the Kernel keeps one app folder per app and the queues for email and calls. The `kernel` binary is the Kernel alone, with no Konae in front.
+An installation has a main server process and one data directory. Functions may start child runner processes on demand. Owners reach Konae on the editor host, through the editor, the CLI or an agent's MCP client. Visitors, app users and other services reach the Kernel on each app's own host. Konae keeps owners and the project list in its two stores, and the Kernel keeps one app folder per app and the queues for email and calls. The `kernel` binary is the Kernel alone, with no Konae in front.
 
-## Two crates
+## Kernel, Konae and the functions executor
 
-`kernel-rs` is a Cargo workspace of two crates ([ADR-0001](./adr/0001-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md)).
+`kernel-rs` is a Cargo workspace with the `kernel`, `konae` and `functions-executor` crates. The executor is a Rust supervisor and IPC layer; it does not embed a JavaScript engine. The Kernel keeps identity, authorization, SQLite and admission. It starts workers on demand and sends bounded IPC/2 messages to the paired `deno_core` runner, whose source is in `spikes/functions-runtime/rust-host` ([ADR-0018](./adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md), [ADR-0019](./adr/0019-functions-stream-request-bodies-with-bounded-ipc.md)).
 
 ```text
 kernel-rs/
-├── kernel/   the Kernel: a library and the `kernel` binary
-└── konae/    Konae: the `konae` binary, which links the library
+├── kernel/             the Kernel: a library and the `kernel` binary
+├── konae/              Konae: the `konae` binary, which links the Kernel
+└── functions-executor/ Rust supervisor and IPC protocol
 ```
 
-`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, and applies the schema change `app/schema.sql` asks of `data/database.sqlite` when actions is on. It serves Server Actions, app accounts, files, schedules, notices, HTTP routes, calls and Usage according to each app's modules. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
+`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, and applies the schema change `app/schema.sql` asks of `data/database.sqlite` when actions is on. It serves Server Actions, app accounts, files, schedules, notices, HTTP routes, functions, calls and Usage according to each app's modules. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
+
+The Functions interface, actor binding, action allowlist, replay behavior and export boundary are documented in [Server functions](./functions.md). Current evidence and isolated candidates are separated in [Functions research](./architecture/functions-research.md).
 
 `konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics, the project list and, when `KONAE_EDITOR_DIR` names it, the built editor on the editor host. It runs the same installation commands, and adds `owner-code-*` and `owner-account-*` commands that admit and suspend owners.
 
@@ -75,6 +84,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `guard.rs` | A mutation's guard |
 | `schedule.rs` | A mutation's schedule, the timer and the record of each run |
 | `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_konae/files/<id>` |
+| `functions.rs`, `functions_http.rs`, `functions_runtime.rs`, `function_data.rs` | Function artifact checks, HTTP admission, runner lifecycle, action authorization, SQLite transactions and idempotency receipts |
 | `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries |
 | `calls.rs` | Call actions, their queue and worker, the address rules and `then` mutations |
 | `usage.rs` | Usage and Signals |
@@ -122,6 +132,7 @@ apps/<id>/
 ├── konae.json          app settings, identity and manifest
 ├── app/                sources, including text and binary assets
 ├── dist/               the Build Artifact the Kernel serves
+├── server/             private Functions bundles, not served to browsers
 ├── data/
 │   ├── database.sqlite # app rows
 │   ├── identity.sqlite # app accounts, sessions, challenges, invitations and API keys

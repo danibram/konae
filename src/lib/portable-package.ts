@@ -35,6 +35,7 @@ export type PackageManifest = {
   signInMethods?: ("password" | "google")[];
   publishedRevision: number;
   artifactVersion?: string | null;
+  released?: Record<string, unknown>;
   sourcesRevision?: number | null;
   contents: PackageContent[];
   excluded: string[];

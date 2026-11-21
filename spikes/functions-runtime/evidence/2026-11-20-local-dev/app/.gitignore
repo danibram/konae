@@ -1,0 +1,4 @@
+data/
+.env
+.konae/
+node_modules/

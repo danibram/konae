@@ -1,0 +1,64 @@
+{
+  "at": "2026-11-20T10:40:01.258994+00:00",
+  "git_head": "3e83cfecd4119e13c2317ac7bccdce826212dbeb",
+  "node": "v26.0.0",
+  "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)",
+  "binary": "/private/tmp/konae-deno-core-target/release/konae-functions-spike",
+  "binary_bytes": 81675520,
+  "server_commands": [
+    [
+      "/private/tmp/konae-deno-core-target/release/konae-functions-spike"
+    ],
+    [
+      "/private/tmp/konae-deno-core-target/release/konae-functions-spike"
+    ],
+    [
+      "/opt/homebrew/bin/node",
+      "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/baselines/node/server.mjs"
+    ],
+    [
+      "/opt/homebrew/bin/node",
+      "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/baselines/next/start.mjs"
+    ]
+  ],
+  "app_manifest": {
+    "name": "konae-functions-spike-app",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+      "build": "esbuild src/orders.ts src/preferences.ts src/schema.ts --bundle --format=esm --platform=neutral --target=es2022 --outdir=dist",
+      "check": "tsc --noEmit"
+    },
+    "dependencies": {
+      "hono": "4.13.19",
+      "zod": "4.6.7"
+    },
+    "devDependencies": {
+      "esbuild": "0.28.2",
+      "typescript": "5.9.3"
+    }
+  },
+  "baseline_manifest": {
+    "name": "konae-functions-baselines",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "engines": {
+      "node": ">=22.13.0"
+    },
+    "scripts": {
+      "build": "next build next --webpack",
+      "start:node": "node node/server.mjs",
+      "start:next": "node next/start.mjs",
+      "test": "node --test tests/*.test.mjs"
+    },
+    "dependencies": {
+      "@hono/node-server": "1.19.17",
+      "hono": "4.13.19",
+      "next": "16.4.6",
+      "react": "19.2.0",
+      "react-dom": "19.2.0"
+    }
+  }
+}

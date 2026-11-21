@@ -73,3 +73,8 @@ pub fn record(root: &Path, id: &str) -> PathBuf {
 pub fn backups(root: &Path, id: &str) -> PathBuf {
     private(root, id).join("backups")
 }
+
+/// The compiled server bundles are never part of the static document root.
+pub fn server(root: &Path, id: &str) -> PathBuf {
+    folder(root, id).join("server")
+}

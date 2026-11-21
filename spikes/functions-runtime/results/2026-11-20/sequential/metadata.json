@@ -1,0 +1,55 @@
+{
+  "started_at": "2026-11-20T10:40:09.297722+00:00",
+  "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.5",
+  "cpus": 11,
+  "load_average": [
+    5.43701171875,
+    12.59814453125,
+    14.4931640625
+  ],
+  "targets": [
+    {
+      "name": "native",
+      "url": "http://127.0.0.1:43101",
+      "pid": 76458,
+      "data_dir": "/Users/dbr/.bb/thread-storage/thr_4kbab3tzcv/functions-adr/measurement-1/data/native"
+    },
+    {
+      "name": "deno",
+      "url": "http://127.0.0.1:43102",
+      "pid": 76459,
+      "data_dir": "/Users/dbr/.bb/thread-storage/thr_4kbab3tzcv/functions-adr/measurement-1/data/deno"
+    },
+    {
+      "name": "node",
+      "url": "http://127.0.0.1:43103",
+      "pid": 76460,
+      "data_dir": "/Users/dbr/.bb/thread-storage/thr_4kbab3tzcv/functions-adr/measurement-1/data/node"
+    },
+    {
+      "name": "next",
+      "url": "http://127.0.0.1:43104",
+      "pid": 76461,
+      "data_dir": "/Users/dbr/.bb/thread-storage/thr_4kbab3tzcv/functions-adr/measurement-1/data/next"
+    }
+  ],
+  "rounds": 5,
+  "requests_per_round": 5000,
+  "concurrency": 1,
+  "workloads": [
+    "get",
+    "post"
+  ],
+  "warmup_requests_per_round": 200,
+  "latency_scope": "HTTP request through complete response body; JSON verification follows timer",
+  "throughput_scope": "Client loop includes body verification; investigate client CPU before ranking throughput",
+  "cpu_scope": "ps cumulative process-tree CPU before and after each round; platform timer precision applies",
+  "rss_scope": "Sum of process-tree RSS at samples; shared pages may count more than once",
+  "finished_at": "2026-11-20T10:40:55.539927+00:00",
+  "load_average_after": [
+    6.62255859375,
+    11.8349609375,
+    14.10302734375
+  ]
+}

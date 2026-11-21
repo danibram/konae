@@ -1,4 +1,3 @@
-
 use std::{
     collections::{HashMap, HashSet},
     io::{Read, Write},
@@ -54,6 +53,8 @@ pub struct Manifest {
     pub sign_in_methods: Option<Vec<SignInMethod>>,
     #[serde(default)]
     pub published_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<crate::ReleasedSettings>,
     #[serde(default)]
     pub artifact_version: Option<String>,
     #[serde(default)]
@@ -75,7 +76,7 @@ pub struct Content {
     pub sha256: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitialPackage {
     pub manifest: Manifest,
@@ -88,9 +89,8 @@ pub fn component_limit(name: &str, files: &file_store::FileLimits) -> Result<u64
     match name {
         "database" => Ok(MAX_APP_DATABASE_BYTES),
         "identity" => Ok(auth::MAX_IDENTITY_DATABASE_BYTES),
-        "files" => Ok(MAX_COMPONENT_BYTES.max(
-            files.quota_bytes + MAX_FILE_INDEX_BYTES + (files::MAX_FILES as u64 + 2) * 1024,
-        )),
+        "files" => Ok(MAX_COMPONENT_BYTES
+            .max(files.quota_bytes + MAX_FILE_INDEX_BYTES + (files::MAX_FILES as u64 + 2) * 1024)),
         "usage" => Ok(usage::MAX_USAGE_DATABASE_BYTES),
         other => bail!("Unknown package component {other}."),
     }
@@ -98,7 +98,10 @@ pub fn component_limit(name: &str, files: &file_store::FileLimits) -> Result<u64
 
 /// Checks what the manifest itself says, before any component is read.
 pub fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Result<()> {
-    ensure!(manifest.format == PACKAGE_FORMAT, "This is not a Konae package manifest.");
+    ensure!(
+        manifest.format == PACKAGE_FORMAT,
+        "This is not a Konae package manifest."
+    );
     ensure!(
         manifest.version == PACKAGE_VERSION,
         "Package version {} is not supported. This Kernel reads version {PACKAGE_VERSION}.",
@@ -111,7 +114,11 @@ pub fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Re
     let mut seen = HashSet::new();
     for content in &manifest.contents {
         let limit = component_limit(&content.name, files)?;
-        ensure!(seen.insert(content.name.as_str()), "The manifest lists the {} component twice.", content.name);
+        ensure!(
+            seen.insert(content.name.as_str()),
+            "The manifest lists the {} component twice.",
+            content.name
+        );
         ensure!(
             content.size > 0 && content.size <= limit,
             "The {} component is {} bytes; its limit is {limit} bytes.",
@@ -119,13 +126,23 @@ pub fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Re
             content.size
         );
         ensure!(
-            content.sha256.len() == 64 && content.sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            content.sha256.len() == 64
+                && content
+                    .sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
             "The {} component has no valid SHA-256 in the manifest.",
             content.name
         );
     }
-    let actions_on = manifest.modules.get("actions").is_none_or(|state| state["on"] != false);
-    ensure!(seen.contains("database") || !actions_on, "The package manifest lists no database. This Kernel requires a database component for apps with actions on.");
+    let actions_on = manifest
+        .modules
+        .get("actions")
+        .is_none_or(|state| state["on"] != false);
+    ensure!(
+        seen.contains("database") || !actions_on,
+        "The package manifest lists no database. This Kernel requires a database component for apps with actions on."
+    );
     if let Some(policy) = &manifest.signup_policy {
         SignupPolicy::from_input(policy.mode, &policy.allowlist).map_err(anyhow::Error::msg)?;
     }
@@ -147,7 +164,11 @@ pub fn ensure_space(free: u64, needed: u64, operation: &str) -> Result<()> {
 
 /// Refuses a component upload the volume cannot hold, before its bytes arrive.
 pub fn ensure_upload_space(state: &AppState, size: u64) -> Result<()> {
-    ensure_space(free_bytes(&state.data_root)?, size + SPACE_MARGIN, "receive this component")
+    ensure_space(
+        free_bytes(&state.data_root)?,
+        size + SPACE_MARGIN,
+        "receive this component",
+    )
 }
 
 #[cfg(unix)]
@@ -156,7 +177,10 @@ pub fn free_bytes(path: &Path) -> Result<u64> {
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
     let status = unsafe { libc::statvfs(path.as_ptr(), &mut stat) };
-    ensure!(status == 0, "Could not read the free space on the Kernel volume.");
+    ensure!(
+        status == 0,
+        "Could not read the free space on the Kernel volume."
+    );
     #[allow(clippy::unnecessary_cast)]
     Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
 }
@@ -165,7 +189,6 @@ pub fn free_bytes(path: &Path) -> Result<u64> {
 pub fn free_bytes(_path: &Path) -> Result<u64> {
     Ok(u64::MAX)
 }
-
 
 /// The revisions an export's manifest names: the release the app serves
 /// and the saved sources, when the caller keeps a count of saves.
@@ -196,27 +219,52 @@ pub async fn export(
         COMPONENT_NAMES.len() + 1
     );
     let folder = crate::layout::data(&state.data_root, &deployment.id);
-    let scratch = state.data_root.join("transfers").join(format!(".package-{}", Uuid::new_v4()));
+    let scratch = state
+        .data_root
+        .join("transfers")
+        .join(format!(".package-{}", Uuid::new_v4()));
     let captured = {
         let _project = database_lock(state, &format!("project:{}", deployment.project_id)).await;
-        let deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned().unwrap_or(deployment);
-        let Revisions { published: published_revision, sources: sources_revision } = revisions(&deployment)?;
+        let _release = crate::named_lock(state, &format!("publish:{id}"), false).await;
+        let deployment = state
+            .deployments
+            .read()
+            .await
+            .values()
+            .find(|d| d.id == id)
+            .cloned()
+            .unwrap_or(deployment);
+        let Revisions {
+            published: published_revision,
+            sources: sources_revision,
+        } = revisions(&deployment)?;
         let _data = database_lock(state, &deployment.id).await;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
-        if crate::modules::is_on(&deployment.modules, "auth") { open_auth(state, &deployment)?; }
+        if crate::modules::is_on(&deployment.modules, "auth") {
+            open_auth(state, &deployment)?;
+        }
         let elsewhere: u64 = match state.files.store.kind() {
             "local" => 0,
-            _ => file_store::indexed_files(&state.data_root, &deployment.id).await?.unwrap_or_default().iter().map(|(_, size)| size).sum(),
+            _ => file_store::indexed_files(&state.data_root, &deployment.id)
+                .await?
+                .unwrap_or_default()
+                .iter()
+                .map(|(_, size)| size)
+                .sum(),
         };
         let needed = folder_size(&folder)? + elsewhere + SPACE_MARGIN;
         ensure_space(free_bytes(&state.data_root)?, needed, "capture this app")?;
         let (source, target) = (folder.clone(), scratch.clone());
         let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
         let app_folder = crate::layout::folder(&state.data_root, &deployment.id);
-        let export_settings = crate::sources::settings_for_export(&state.data_root, &deployment.id).await?;
+        let export_settings =
+            crate::sources::settings_for_export(&state.data_root, &deployment.id).await?;
+        let published_snapshot = export_settings.released.clone();
         let export_settings = serde_json::to_vec_pretty(&export_settings)?;
         let app_sources = crate::layout::sources(&state.data_root, &deployment.id);
-        let saved_actions = tokio::fs::read_to_string(app_sources.join("actions.json")).await.ok();
+        let saved_actions = tokio::fs::read_to_string(app_sources.join("actions.json"))
+            .await
+            .ok();
         let mut sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
         if let Some(released) = deployment.source_digest.as_deref() {
             let saved = crate::sources::digest_folder(&app_sources).await?;
@@ -229,9 +277,25 @@ pub async fn export(
             Ok::<_, anyhow::Error>(components)
         })
         .await?;
-        components.map(|components| (components, deployment, published_revision, sources_revision, sources_ahead))
+        components.map(|components| {
+            (
+                components,
+                deployment,
+                published_revision,
+                sources_revision,
+                sources_ahead,
+                published_snapshot,
+            )
+        })
     };
-    let (components, deployment, published_revision, sources_revision, sources_ahead) = match captured {
+    let (
+        components,
+        deployment,
+        published_revision,
+        sources_revision,
+        sources_ahead,
+        published_snapshot,
+    ) = match captured {
         Ok(value) => value,
         Err(error_value) => {
             let _ = tokio::fs::remove_dir_all(&scratch).await;
@@ -245,14 +309,27 @@ pub async fn export(
         created_at: now_ms(),
         deployment_id: deployment.id.clone(),
         project_id: deployment.project_id.clone(),
-        visibility: if is_private(&deployment) { "private" } else { "public" }.into(),
+        visibility: if is_private(&deployment) {
+            "private"
+        } else {
+            "public"
+        }
+        .into(),
         modules: deployment.modules.clone(),
         signup_policy: Some(deployment.signup_policy.clone()),
         sign_in_methods: Some(deployment.sign_in_methods.clone()),
+        released: published_snapshot,
         published_revision,
         artifact_version: Some(deployment.artifact_version.clone()),
         sources_revision,
-        contents: components.iter().map(|(name, _, size, sha256)| Content { name: name.clone(), size: *size, sha256: sha256.clone() }).collect(),
+        contents: components
+            .iter()
+            .map(|(name, _, size, sha256)| Content {
+                name: name.clone(),
+                size: *size,
+                sha256: sha256.clone(),
+            })
+            .collect(),
         excluded: EXCLUDED.iter().map(|item| (*item).to_owned()).collect(),
         domain: super::domain::for_package(state, &deployment.id),
         path: super::path::for_package(state, &deployment.id),
@@ -269,9 +346,13 @@ pub async fn export(
             "exportData":true,"deploymentId":deployment.id,"component":name});
         match new_transfer(state, principal, body).await {
             Ok(created) => {
-                let id = created["transferId"].as_str().unwrap_or_default().to_owned();
+                let id = created["transferId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
                 downloads.insert(name.clone(), created);
-                if let Err(error_value) = tokio::fs::rename(path, transfer_path(state, &id)?).await {
+                if let Err(error_value) = tokio::fs::rename(path, transfer_path(state, &id)?).await
+                {
                     failure = Some(anyhow::Error::from(error_value));
                     break;
                 }
@@ -286,19 +367,26 @@ pub async fn export(
     if let Some(error_value) = failure {
         for created in downloads.values() {
             let id = created["transferId"].as_str().unwrap_or_default();
-            super::transfers::store(state)?.execute("DELETE FROM transfers WHERE id=?1 AND principal=?2", params![id, principal])?;
+            super::transfers::store(state)?.execute(
+                "DELETE FROM transfers WHERE id=?1 AND principal=?2",
+                params![id, principal],
+            )?;
             let _ = tokio::fs::remove_file(transfer_path(state, id)?).await;
         }
         return Err(error_value);
     }
     let folder = downloads.remove(FOLDER_DOWNLOAD);
-    Ok(json!({"manifest": manifest, "downloads": downloads, "folder": folder, "sourcesAhead": sources_ahead}))
+    Ok(
+        json!({"manifest": manifest, "downloads": downloads, "folder": folder, "sourcesAhead": sources_ahead}),
+    )
 }
 
 pub fn folder_size(folder: &Path) -> Result<u64> {
     let mut total = 0;
     for name in ["database.sqlite", "identity.sqlite", usage::USAGE_DATABASE] {
-        total += std::fs::metadata(folder.join(name)).map(|m| m.len()).unwrap_or(0);
+        total += std::fs::metadata(folder.join(name))
+            .map(|m| m.len())
+            .unwrap_or(0);
     }
     if let Ok(entries) = std::fs::read_dir(folder.join("files")) {
         for entry in entries {
@@ -308,9 +396,16 @@ pub fn folder_size(folder: &Path) -> Result<u64> {
     Ok(total)
 }
 
-fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles, modules: &std::collections::BTreeMap<String, Value>) -> Result<Vec<(String, PathBuf, u64, String)>> {
+fn capture(
+    folder: &Path,
+    scratch: &Path,
+    blobs: &file_store::BlockingFiles,
+    modules: &std::collections::BTreeMap<String, Value>,
+) -> Result<Vec<(String, PathBuf, u64, String)>> {
     let components = snapshot(folder, scratch, blobs, modules)?;
-    if let Some((_, identity)) = components.iter().find(|(name, _)| *name == "identity") { revoke_access(identity)?; }
+    if let Some((_, identity)) = components.iter().find(|(name, _)| *name == "identity") {
+        revoke_access(identity)?;
+    }
     components
         .into_iter()
         .map(|(name, path)| {
@@ -325,7 +420,12 @@ fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles, mod
 /// one, `usage.sqlite`. The caller holds the data and identity locks. An
 /// export then revokes the copy's access (`capture`); an import's backup
 /// keeps it as it is (`import.rs`).
-pub fn snapshot(folder: &Path, target: &Path, blobs: &file_store::BlockingFiles, modules: &std::collections::BTreeMap<String, Value>) -> Result<Vec<(&'static str, PathBuf)>> {
+pub fn snapshot(
+    folder: &Path,
+    target: &Path,
+    blobs: &file_store::BlockingFiles,
+    modules: &std::collections::BTreeMap<String, Value>,
+) -> Result<Vec<(&'static str, PathBuf)>> {
     // Usage queued before the copy is written first, so the copy holds it.
     usage::flush();
     std::fs::create_dir_all(target)?;
@@ -363,7 +463,11 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
     let mut removed = 0;
     for table in ACCESS_TABLES {
         let exists = connection
-            .query_row("SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)=?1", [table], |_| Ok(()))
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)=?1",
+                [table],
+                |_| Ok(()),
+            )
             .optional()?
             .is_some();
         if exists {
@@ -375,8 +479,11 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
     Ok(removed)
 }
 
-
-fn write_files_tar<R: Read>(directory: &Path, target: &Path, open: impl Fn(&str) -> Result<Option<(u64, R)>>) -> Result<()> {
+fn write_files_tar<R: Read>(
+    directory: &Path,
+    target: &Path,
+    open: impl Fn(&str) -> Result<Option<(u64, R)>>,
+) -> Result<()> {
     let index: Vec<Value> = match std::fs::read(directory.join("index.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
         Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -388,16 +495,26 @@ fn write_files_tar<R: Read>(directory: &Path, target: &Path, open: impl Fn(&str)
     output.write_all(&index_bytes)?;
     output.write_all(&vec![0; tar_padding(index_bytes.len() as u64)])?;
     for file in &index {
-        let id = file["id"].as_str().filter(|id| valid_file_id(id)).context("A stored file has an invalid id.")?;
+        let id = file["id"]
+            .as_str()
+            .filter(|id| valid_file_id(id))
+            .context("A stored file has an invalid id.")?;
         let name = format!("{id}.blob");
-        let (size, mut blob) = open(id)?.with_context(|| format!("Stored file {id} has no data."))?;
+        let (size, mut blob) =
+            open(id)?.with_context(|| format!("Stored file {id} has no data."))?;
         output.write_all(&tar_header(&name, size))?;
         let copied = std::io::copy(&mut blob, &mut output)?;
-        ensure!(copied == size, "Stored file {id} changed during the capture.");
+        ensure!(
+            copied == size,
+            "Stored file {id} changed during the capture."
+        );
         output.write_all(&vec![0; tar_padding(size)])?;
     }
     output.write_all(&[0; 1024])?;
-    output.into_inner().map_err(|error_value| error_value.into_error())?.sync_all()?;
+    output
+        .into_inner()
+        .map_err(|error_value| error_value.into_error())?
+        .sync_all()?;
     Ok(())
 }
 
@@ -417,17 +534,25 @@ pub fn folder_files_tar(directory: &Path, target: &Path) -> Result<()> {
 fn write_folder_tar(folder: &Path, target: &Path, settings: &[u8]) -> Result<()> {
     let mut output = std::io::BufWriter::new(std::fs::File::create(target)?);
     let mut entries = vec![crate::layout::SETTINGS_FILE.to_owned()];
-    for top in ["app", "dist"] {
+    crate::functions::read_artifact(&folder.join("server"))?;
+    for top in ["app", "dist", "server"] {
         let mut pending = vec![folder.join(top)];
         while let Some(directory) = pending.pop() {
-            let Ok(listing) = std::fs::read_dir(&directory) else { continue };
+            let Ok(listing) = std::fs::read_dir(&directory) else {
+                continue;
+            };
             for entry in listing {
                 let entry = entry?;
                 if entry.file_type()?.is_dir() {
                     pending.push(entry.path());
                 } else {
-                    let relative = entry.path().strip_prefix(folder)?.components()
-                        .map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+                    let relative = entry
+                        .path()
+                        .strip_prefix(folder)?
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/");
                     entries.push(relative);
                 }
             }
@@ -436,9 +561,13 @@ fn write_folder_tar(folder: &Path, target: &Path, settings: &[u8]) -> Result<()>
     entries.sort();
     for relative in entries {
         let (mut input, size): (Box<dyn Read>, u64) = if relative == crate::layout::SETTINGS_FILE {
-            (Box::new(std::io::Cursor::new(settings.to_vec())), settings.len() as u64)
+            (
+                Box::new(std::io::Cursor::new(settings.to_vec())),
+                settings.len() as u64,
+            )
         } else {
-            let file = std::fs::File::open(folder.join(&relative)).with_context(|| format!("{relative} is not readable."))?;
+            let file = std::fs::File::open(folder.join(&relative))
+                .with_context(|| format!("{relative} is not readable."))?;
             let size = file.metadata()?.len();
             (Box::new(file), size)
         };
@@ -448,7 +577,10 @@ fn write_folder_tar(folder: &Path, target: &Path, settings: &[u8]) -> Result<()>
         output.write_all(&vec![0; tar_padding(size)])?;
     }
     output.write_all(&[0; 1024])?;
-    output.into_inner().map_err(|error_value| error_value.into_error())?.sync_all()?;
+    output
+        .into_inner()
+        .map_err(|error_value| error_value.into_error())?
+        .sync_all()?;
     Ok(())
 }
 
@@ -497,7 +629,9 @@ fn tar_header(name: &str, size: u64) -> [u8; 512] {
 
 fn read_tar_header(input: &mut impl Read) -> Result<Option<(String, u64)>> {
     let mut header = [0u8; 512];
-    input.read_exact(&mut header).context("The files component ends early.")?;
+    input
+        .read_exact(&mut header)
+        .context("The files component ends early.")?;
     if header.iter().all(|byte| *byte == 0) {
         return Ok(None);
     }
@@ -505,11 +639,25 @@ fn read_tar_header(input: &mut impl Read) -> Result<Option<(String, u64)>> {
     let mut copy = header;
     copy[148..156].fill(b' ');
     let checksum: u64 = copy.iter().map(|byte| u64::from(*byte)).sum();
-    ensure!(stored == checksum, "The files component has a damaged header.");
-    ensure!(header[156] == b'0' || header[156] == 0, "The files component holds an entry that is not a file.");
-    ensure!(header[345..500].iter().all(|byte| *byte == 0), "The files component holds an unexpected path.");
-    let end = header[..100].iter().position(|byte| *byte == 0).unwrap_or(100);
-    let name = std::str::from_utf8(&header[..end]).context("The files component holds an unexpected path.")?.to_owned();
+    ensure!(
+        stored == checksum,
+        "The files component has a damaged header."
+    );
+    ensure!(
+        header[156] == b'0' || header[156] == 0,
+        "The files component holds an entry that is not a file."
+    );
+    ensure!(
+        header[345..500].iter().all(|byte| *byte == 0),
+        "The files component holds an unexpected path."
+    );
+    let end = header[..100]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(100);
+    let name = std::str::from_utf8(&header[..end])
+        .context("The files component holds an unexpected path.")?
+        .to_owned();
     Ok(Some((name, parse_octal(&header[124..136])?)))
 }
 
@@ -526,24 +674,51 @@ pub(super) fn unpack_files(
 ) -> Result<usize> {
     let mut input = std::io::BufReader::new(std::fs::File::open(archive)?);
     let (name, size) = read_tar_header(&mut input)?.context("The files component is empty.")?;
-    ensure!(name == "index.json", "The files component must start with index.json.");
-    ensure!(size <= MAX_FILE_INDEX_BYTES, "The file index exceeds {} MiB.", MAX_FILE_INDEX_BYTES / MIB);
+    ensure!(
+        name == "index.json",
+        "The files component must start with index.json."
+    );
+    ensure!(
+        size <= MAX_FILE_INDEX_BYTES,
+        "The file index exceeds {} MiB.",
+        MAX_FILE_INDEX_BYTES / MIB
+    );
     let mut index_bytes = Vec::new();
     (&mut input).take(size).read_to_end(&mut index_bytes)?;
-    ensure!(index_bytes.len() as u64 == size, "The files component ends early.");
+    ensure!(
+        index_bytes.len() as u64 == size,
+        "The files component ends early."
+    );
     skip(&mut input, tar_padding(size) as u64)?;
-    let index: Vec<Value> = serde_json::from_slice(&index_bytes).context("The file index is not valid JSON.")?;
+    let index: Vec<Value> =
+        serde_json::from_slice(&index_bytes).context("The file index is not valid JSON.")?;
     let mut expected: HashMap<String, u64> = HashMap::new();
     let mut order = Vec::with_capacity(index.len());
     let mut total = 0u64;
     let mut normalized = Vec::with_capacity(index.len());
     for file in &index {
-        let id = file["id"].as_str().filter(|id| valid_file_id(id)).context("The file index has an invalid file id.")?;
-        let declared = file["size"].as_u64().context("The file index has a file without a size.")?;
-        ensure!(declared <= limits.max_file_bytes, "File {id} exceeds this installation's {} limit per file.", limits.max_file());
+        let id = file["id"]
+            .as_str()
+            .filter(|id| valid_file_id(id))
+            .context("The file index has an invalid file id.")?;
+        let declared = file["size"]
+            .as_u64()
+            .context("The file index has a file without a size.")?;
+        ensure!(
+            declared <= limits.max_file_bytes,
+            "File {id} exceeds this installation's {} limit per file.",
+            limits.max_file()
+        );
         total += declared;
-        ensure!(total <= limits.quota_bytes, "The files exceed this installation's {} file quota.", limits.quota());
-        ensure!(expected.insert(id.to_owned(), declared).is_none(), "The file index lists file {id} twice.");
+        ensure!(
+            total <= limits.quota_bytes,
+            "The files exceed this installation's {} file quota.",
+            limits.quota()
+        );
+        ensure!(
+            expected.insert(id.to_owned(), declared).is_none(),
+            "The file index lists file {id} twice."
+        );
         order.push(id.to_owned());
         let mut restored = json!({
             "id": id,
@@ -554,12 +729,21 @@ pub(super) fn unpack_files(
             "createdAt": file["createdAt"].as_u64().unwrap_or_else(now_ms),
         });
         if let Some(owner) = file_owner(file) {
-            ensure!(accepted_owner_id(owner), "File {id} names an invalid owner.");
+            ensure!(
+                accepted_owner_id(owner),
+                "File {id} names an invalid owner."
+            );
             let known = match accounts {
-                Some(db) => db.query_row("SELECT 1 FROM app_users WHERE id=?1", [owner], |_| Ok(())).optional()?.is_some(),
+                Some(db) => db
+                    .query_row("SELECT 1 FROM app_users WHERE id=?1", [owner], |_| Ok(()))
+                    .optional()?
+                    .is_some(),
                 None => false,
             };
-            ensure!(known, "File {id} belongs to an account the export does not contain.");
+            ensure!(
+                known,
+                "File {id} belongs to an account the export does not contain."
+            );
             restored["ownerId"] = json!(owner);
         }
         normalized.push(restored);
@@ -569,14 +753,27 @@ pub(super) fn unpack_files(
     }
     let mut seen = 0;
     while let Some((name, size)) = read_tar_header(&mut input)? {
-        let id = name.strip_suffix(".blob").context("The files component holds an unexpected entry.")?;
-        let declared = expected.remove(id).with_context(|| format!("The files component holds data for {id}, which the index does not list."))?;
-        ensure!(order.get(seen).is_some_and(|next| next == id), "The files component is out of index order.");
-        ensure!(size == declared, "The data of file {id} does not match its indexed size.");
+        let id = name
+            .strip_suffix(".blob")
+            .context("The files component holds an unexpected entry.")?;
+        let declared = expected.remove(id).with_context(|| {
+            format!("The files component holds data for {id}, which the index does not list.")
+        })?;
+        ensure!(
+            order.get(seen).is_some_and(|next| next == id),
+            "The files component is out of index order."
+        );
+        ensure!(
+            size == declared,
+            "The data of file {id} does not match its indexed size."
+        );
         let mut body = (&mut input).take(size);
         let verify_digest = |digest: &str| -> Result<()> {
             if let Some(expected) = index[seen].get("sha256") {
-                ensure!(expected.as_str() == Some(digest), "File {id} does not match its indexed SHA-256.");
+                ensure!(
+                    expected.as_str() == Some(digest),
+                    "File {id} does not match its indexed SHA-256."
+                );
             }
             Ok(())
         };
@@ -607,7 +804,11 @@ pub(super) fn unpack_files(
         skip(&mut input, tar_padding(size) as u64)?;
         seen += 1;
     }
-    ensure!(expected.is_empty(), "The files component is missing the data of {} indexed files.", expected.len());
+    ensure!(
+        expected.is_empty(),
+        "The files component is missing the data of {} indexed files.",
+        expected.len()
+    );
     if let Some((directory, _)) = destination {
         let bytes = serde_json::to_vec_pretty(&normalized)?;
         let temp = directory.join(format!(".index.json.tmp-{}", Uuid::new_v4()));
@@ -620,7 +821,13 @@ pub(super) fn unpack_files(
 /// Unpacks a files component into `directory`, which receives `index.json`,
 /// and the store `blobs`, which receives each file. `accounts` is the
 /// identity file whose accounts the files may name as owners.
-pub fn unpack_into(archive: &Path, accounts: &Connection, directory: &Path, blobs: &file_store::BlockingFiles, limits: &file_store::FileLimits) -> Result<usize> {
+pub fn unpack_into(
+    archive: &Path,
+    accounts: &Connection,
+    directory: &Path,
+    blobs: &file_store::BlockingFiles,
+    limits: &file_store::FileLimits,
+) -> Result<usize> {
     unpack_files(archive, Some(accounts), Some((directory, blobs)), limits)
 }
 
@@ -630,31 +837,57 @@ fn skip(input: &mut impl Read, bytes: u64) -> Result<()> {
     Ok(())
 }
 
-
-fn component_uploads(state: &AppState, principal: Option<&str>, project_id: &str, package: &InitialPackage) -> Result<Vec<(Content, PathBuf)>> {
+fn component_uploads(
+    state: &AppState,
+    principal: Option<&str>,
+    project_id: &str,
+    package: &InitialPackage,
+) -> Result<Vec<(Content, PathBuf)>> {
     check_manifest(&package.manifest, &state.files.limits)?;
     for name in package.components.keys() {
         ensure!(
-            package.manifest.contents.iter().any(|content| &content.name == name),
+            package
+                .manifest
+                .contents
+                .iter()
+                .any(|content| &content.name == name),
             "The payload names a {name} component the manifest does not list."
         );
     }
     let mut uploads = Vec::new();
     for content in &package.manifest.contents {
         let name = &content.name;
-        let id = package.components.get(name).with_context(|| format!("The {name} component has not been uploaded."))?;
+        let id = package
+            .components
+            .get(name)
+            .with_context(|| format!("The {name} component has not been uploaded."))?;
         let upload = match principal {
             Some(principal) => transfer(state, principal, &json!({"transferId": id}))?,
             None => {
                 let body: Option<String> = super::transfers::store(state)?
-                    .query_row("SELECT body FROM transfers WHERE id=?1 AND expires>?2", params![id, now_ms()], |r| r.get(0))
+                    .query_row(
+                        "SELECT body FROM transfers WHERE id=?1 AND expires>?2",
+                        params![id, now_ms()],
+                        |r| r.get(0),
+                    )
                     .optional()?;
-                serde_json::from_str(&body.with_context(|| format!("The {name} upload has expired."))?)?
+                serde_json::from_str(
+                    &body.with_context(|| format!("The {name} upload has expired."))?,
+                )?
             }
         };
-        ensure!(upload["direction"] == "upload" && upload["complete"] == true, "The {name} upload is not complete.");
-        ensure!(upload["component"] == name.as_str(), "Transfer {id} was not started for the {name} component.");
-        ensure!(upload["projectId"] == project_id, "The {name} upload belongs to another project.");
+        ensure!(
+            upload["direction"] == "upload" && upload["complete"] == true,
+            "The {name} upload is not complete."
+        );
+        ensure!(
+            upload["component"] == name.as_str(),
+            "Transfer {id} was not started for the {name} component."
+        );
+        ensure!(
+            upload["projectId"] == project_id,
+            "The {name} upload belongs to another project."
+        );
         ensure!(
             upload["size"] == content.size && upload["sha256"] == content.sha256.as_str(),
             "The {name} component does not match the size and SHA-256 in the manifest."
@@ -666,20 +899,44 @@ fn component_uploads(state: &AppState, principal: Option<&str>, project_id: &str
 
 /// The file of each component the package names, checked against the
 /// manifest and the project. The caller has checked who uploaded them.
-pub fn component_paths(state: &AppState, project_id: &str, package: &InitialPackage) -> Result<Vec<(String, PathBuf)>> {
-    Ok(component_uploads(state, None, project_id, package)?.into_iter().map(|(content, path)| (content.name, path)).collect())
+pub fn component_paths(
+    state: &AppState,
+    project_id: &str,
+    package: &InitialPackage,
+) -> Result<Vec<(String, PathBuf)>> {
+    Ok(component_uploads(state, None, project_id, package)?
+        .into_iter()
+        .map(|(content, path)| (content.name, path))
+        .collect())
 }
 
 /// Runs at `release_plan`, before any Deployment exists: the manifest, each
 /// upload's checksum against the manifest, SQLite integrity, the files and
 /// the accounts they name, and the free space the import will use.
-pub async fn verify(state: &AppState, principal: &str, project_id: &str, package: &InitialPackage) -> Result<()> {
+pub async fn verify(
+    state: &AppState,
+    principal: &str,
+    project_id: &str,
+    package: &InitialPackage,
+) -> Result<()> {
     let uploads = component_uploads(state, Some(principal), project_id, package)?;
-    let database = uploads.iter().find(|(c, _)| c.name == "database").map(|(c, _)| c.size).unwrap_or(0);
+    let database = uploads
+        .iter()
+        .find(|(c, _)| c.name == "database")
+        .map(|(c, _)| c.size)
+        .unwrap_or(0);
     let total: u64 = uploads.iter().map(|(c, _)| c.size).sum();
-    ensure_space(free_bytes(&state.data_root)?, total + database + SPACE_MARGIN, "import this app")?;
+    ensure_space(
+        free_bytes(&state.data_root)?,
+        total + database + SPACE_MARGIN,
+        "import this app",
+    )?;
     let file_limits = state.files.limits;
-    let actions_on = package.manifest.modules.get("actions").is_none_or(|state| state["on"] != false);
+    let actions_on = package
+        .manifest
+        .modules
+        .get("actions")
+        .is_none_or(|state| state["on"] != false);
     tokio::task::spawn_blocking(move || {
         for (content, path) in &uploads {
             let (size, sha256) = copies::checksum_file(path)?;
@@ -689,7 +946,10 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
                 content.name
             );
         }
-        let components = uploads.into_iter().map(|(content, path)| (content.name, path)).collect::<Vec<_>>();
+        let components = uploads
+            .into_iter()
+            .map(|(content, path)| (content.name, path))
+            .collect::<Vec<_>>();
         check_components_for_modules(&components, &file_limits, actions_on)
     })
     .await?
@@ -698,19 +958,37 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
 /// The checks every component gets before an import puts it in place:
 /// SQLite integrity, no stored trigger or view, an accounts file with its
 /// users, and files that fit the limits and belong to accounts it holds.
-pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits) -> Result<()> {
+pub fn check_components(
+    components: &[(String, PathBuf)],
+    file_limits: &file_store::FileLimits,
+) -> Result<()> {
     check_components_for_modules(components, file_limits, true)
 }
 
-pub fn check_components_for_modules(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits, actions_on: bool) -> Result<()> {
-    let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
+pub fn check_components_for_modules(
+    components: &[(String, PathBuf)],
+    file_limits: &file_store::FileLimits,
+    actions_on: bool,
+) -> Result<()> {
+    let path = |name: &str| {
+        components
+            .iter()
+            .find(|(component, _)| component == name)
+            .map(|(_, p)| p.clone())
+    };
     let database = path("database");
-    ensure!(database.is_some() || !actions_on, "The package has no database. This Kernel requires a database component for apps with actions on.");
+    ensure!(
+        database.is_some() || !actions_on,
+        "The package has no database. This Kernel requires a database component for apps with actions on."
+    );
     if let Some(database) = &database {
         no_trigger_or_view(database, "database", "database")?;
         integrity(database, "database")?;
     }
-    for (name, label, what) in [("identity", "accounts", "accounts component"), ("usage", "usage", "usage component")] {
+    for (name, label, what) in [
+        ("identity", "accounts", "accounts component"),
+        ("usage", "usage", "usage component"),
+    ] {
         if let Some(component) = path(name) {
             no_trigger_or_view(&component, label, what)?;
         }
@@ -718,7 +996,8 @@ pub fn check_components_for_modules(components: &[(String, PathBuf)], file_limit
     let accounts = match path("identity") {
         Some(identity) => {
             integrity(&identity, "accounts")?;
-            let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let db =
+                Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let has_users: bool = db.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)='app_users')",
                 [],
@@ -727,13 +1006,20 @@ pub fn check_components_for_modules(components: &[(String, PathBuf)], file_limit
             ensure!(has_users, "The accounts component has no app_users table.");
             match db.prepare("SELECT password_hash FROM app_users") {
                 Ok(mut hashes) => {
-                    let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
+                    let rows =
+                        hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
                     for hash in rows {
                         let known = matches!(hash?, rusqlite::types::Value::Text(hash) if auth::is_stored_password_hash(&hash));
-                        ensure!(known, "The accounts component holds a password hash this Kernel did not write.");
+                        ensure!(
+                            known,
+                            "The accounts component holds a password hash this Kernel did not write."
+                        );
                     }
                 }
-                Err(rusqlite::Error::SqlInputError { msg, .. } | rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.starts_with("no such column") => {}
+                Err(
+                    rusqlite::Error::SqlInputError { msg, .. }
+                    | rusqlite::Error::SqliteFailure(_, Some(msg)),
+                ) if msg.starts_with("no such column") => {}
                 Err(error) => return Err(error.into()),
             }
             Some(db)
@@ -751,10 +1037,12 @@ pub fn check_components_for_modules(components: &[(String, PathBuf)], file_limit
 
 fn no_trigger_or_view(path: &Path, label: &str, what: &str) -> Result<()> {
     let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .and_then(|db| match super::sql_rules::stored_trigger_or_view(&db, what)? {
-            Some(refusal) => Ok(Some(refusal)),
-            None => super::sql_rules::stored_virtual_table(&db, what),
-        })
+        .and_then(
+            |db| match super::sql_rules::stored_trigger_or_view(&db, what)? {
+                Some(refusal) => Ok(Some(refusal)),
+                None => super::sql_rules::stored_virtual_table(&db, what),
+            },
+        )
         .with_context(|| format!("The {label} component is not a SQLite database."))?;
     match stored {
         Some(refusal) => anyhow::bail!(refusal),
@@ -768,14 +1056,20 @@ fn integrity(path: &Path, label: &str) -> Result<()> {
     let result: String = db
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .with_context(|| format!("The {label} component is not a SQLite database."))?;
-    ensure!(result == "ok", "The {label} component failed SQLite's integrity check.");
+    ensure!(
+        result == "ok",
+        "The {label} component failed SQLite's integrity check."
+    );
     Ok(())
 }
 
 /// Copies the uploaded database to `target`, where the release check tries
 /// the schema against it.
 pub fn copy_database(state: &AppState, package: &InitialPackage, target: &Path) -> Result<()> {
-    let id = package.components.get("database").context("The package has no database.")?;
+    let id = package
+        .components
+        .get("database")
+        .context("The package has no database.")?;
     std::fs::copy(transfer_path(state, id)?, target)?;
     Ok(())
 }
@@ -804,9 +1098,17 @@ pub async fn install(state: &AppState, package: &InitialPackage, id: &str) -> Re
         }
         if let Some((content, source)) = find("files") {
             let (size, sha256) = copies::checksum_file(source)?;
-            ensure!(size == content.size && sha256 == content.sha256, "The files component does not match the SHA-256 in the manifest.");
+            ensure!(
+                size == content.size && sha256 == content.sha256,
+                "The files component does not match the SHA-256 in the manifest."
+            );
             let accounts = crate::app_db::read_optional(&identity)?;
-            unpack_files(source, accounts.as_ref(), Some((&directory.join("files"), &blobs)), &file_limits)?;
+            unpack_files(
+                source,
+                accounts.as_ref(),
+                Some((&directory.join("files"), &blobs)),
+                &file_limits,
+            )?;
         }
         if let Some((content, source)) = find("usage") {
             copy_verified(source, &directory.join(usage::USAGE_DATABASE), content)?;
@@ -845,6 +1147,354 @@ fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> 
 mod tests {
     use super::*;
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn functions_export_import_preserves_published_bundles_accounts_rows_and_rules() {
+        functions_round_trip(None).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires KONAE_TEST_FUNCTION_WORKER pointing to the built external JavaScript worker"]
+    async fn functions_export_import_executes_the_published_bundle_with_imported_identity() {
+        functions_round_trip(Some(
+            std::env::var_os("KONAE_TEST_FUNCTION_WORKER")
+                .expect("KONAE_TEST_FUNCTION_WORKER")
+                .into(),
+        ))
+        .await;
+    }
+
+    async fn functions_round_trip(worker: Option<PathBuf>) {
+        let root =
+            std::env::temp_dir().join(format!("konae-functions-transfer-{}", Uuid::new_v4()));
+        let (a_root, b_root) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&a_root).unwrap();
+        std::fs::create_dir_all(&b_root).unwrap();
+        let (mut a, mut b) = (AppState::for_test(&a_root), AppState::for_test(&b_root));
+        if let Some(worker) = &worker {
+            let policy = std::env::var_os("KONAE_TEST_FUNCTION_CGROUP")
+                .map(|root| konae_functions_executor::MemoryPolicy::LinuxCgroup {
+                    delegated_root: root.into(),
+                })
+                .unwrap_or(konae_functions_executor::MemoryPolicy::DevelopmentPolling);
+            a.functions = Arc::new(crate::functions_runtime::Runtime::configured(
+                worker.clone(),
+                policy.clone(),
+                std::time::Duration::from_secs(2),
+                std::time::Duration::from_millis(100),
+            ));
+            b.functions = Arc::new(crate::functions_runtime::Runtime::configured(
+                worker.clone(),
+                policy,
+                std::time::Duration::from_secs(2),
+                std::time::Duration::from_millis(100),
+            ));
+        }
+        let id = "portable_functions";
+        let bundle = if worker.is_some() {
+            r#"
+            export async function handle(request, context) {
+                if (request.method === 'POST') await context.actions.call('notes.touch', {});
+                return Response.json(await context.actions.call('notes.list', {}));
+            }
+        "#
+        } else {
+            "throw new Error('no evaluation'); export function handle() {}"
+        };
+        let mut payload = crate::functions::tests::release(id, bundle);
+        payload["initialModules"] =
+            json!({"functions":{"on":true},"auth":{"on":true},"actions":{"on":true}});
+        payload["initialSignupPolicy"] = json!({"mode":"open","allowlist":[]});
+        payload["project"]["files"]["schema.sql"] = json!(
+            "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL, body TEXT NOT NULL, touches INTEGER NOT NULL DEFAULT 0);"
+        );
+        let actions = json!({"version":1,"actions":{
+            "notes.list":{"kind":"query","access":"authenticated","statement":"SELECT body,touches FROM notes WHERE owner_id=?1 LIMIT 10","bindings":[{"source":"actor","field":"id"}]},
+            "notes.touch":{"kind":"mutation","access":"authenticated","statement":"UPDATE notes SET touches=touches+1 WHERE owner_id=?1","bindings":[{"source":"actor","field":"id"}]}
+        }});
+        payload["project"]["files"]["actions.json"] = json!(actions.to_string());
+        payload["serverArtifact"]["manifest"]["functions"]["orders"]["access"] =
+            json!("authenticated");
+        payload["serverArtifact"]["manifest"]["functions"]["orders"]["actions"] =
+            json!(["notes.list", "notes.touch"]);
+        payload["project"]["files"]["functions.json"] =
+            json!(payload["serverArtifact"]["manifest"].to_string());
+        let deployed = crate::functions::tests::publish(&a, &payload).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serving = tokio::spawn(crate::serve(listener, a.clone(), axum::Router::new()));
+        let client = reqwest::Client::new();
+        let account = json!({"email":"portable@example.test","password":"portable password"});
+        let response = client
+            .post(format!("http://{address}/_konae/auth/signup"))
+            .header("host", &deployed.hostname)
+            .json(&account)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let response: Value = response.json().await.unwrap();
+        assert_eq!(status, reqwest::StatusCode::OK, "{response}");
+        let user_id = response["result"]["user"]["userId"].as_str().unwrap();
+        Connection::open(crate::layout::database(&a_root, id)).unwrap()
+            .execute("INSERT INTO notes(owner_id,body) VALUES (?1,'portable row'), ('other-owner','private decoy')", [user_id]).unwrap();
+        let mut original_rows = None;
+        if worker.is_some() {
+            let response = client
+                .post(format!("http://{address}/api/orders"))
+                .header("host", &deployed.hostname)
+                .header("cookie", &cookie)
+                .header("idempotency-key", "portable-receipt")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            let rows: Value = response.json().await.unwrap();
+            assert_eq!(rows, json!([{"body":"portable row","touches":1}]));
+            original_rows = Some(rows);
+        }
+        std::fs::write(
+            crate::layout::sources(&a_root, id).join("functions.json"),
+            "invalid newer draft",
+        )
+        .unwrap();
+        std::fs::remove_file(crate::layout::sources(&a_root, id).join("functions/orders.ts"))
+            .unwrap();
+        let secret = crate::http::secrets_store(&a_root, id).unwrap();
+        secret.execute("INSERT INTO secrets(name,value,updated_at,use) VALUES ('private','never-export-this',0,'call')", []).unwrap();
+        drop(secret);
+        for path in [
+            "server/orders.mjs",
+            "server/manifest.json",
+            "functions/orders.ts",
+            ".konae/cache/snapshot",
+        ] {
+            let response = client
+                .get(format!("http://{address}/{path}"))
+                .header("host", &deployed.hostname)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND, "{path}");
+            assert!(!response.text().await.unwrap().contains("no evaluation"));
+        }
+        let exported = export(&a, deployed.clone(), "owner:test", |_| {
+            Ok(Revisions {
+                published: 1,
+                sources: Some(2),
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(exported["sourcesAhead"], true);
+        let tar_id = exported["folder"]["transferId"].as_str().unwrap();
+        let mut archive = std::fs::File::open(transfer_path(&a, tar_id).unwrap()).unwrap();
+        let unpacked = root.join("exported");
+        std::fs::create_dir_all(&unpacked).unwrap();
+        let mut names = Vec::new();
+        while let Some((name, size)) = read_tar_header(&mut archive).unwrap() {
+            assert!(
+                name == "konae.json"
+                    || name.starts_with("app/")
+                    || name.starts_with("dist/")
+                    || name.starts_with("server/"),
+                "{name}"
+            );
+            let mut bytes = vec![0; size as usize];
+            archive.read_exact(&mut bytes).unwrap();
+            let path = unpacked.join(&name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+            archive.read_exact(&mut vec![0; tar_padding(size)]).unwrap();
+            names.push(name);
+        }
+        assert!(names.contains(&"server/orders.mjs".to_owned()));
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.contains("secrets") || name.starts_with(".konae/"))
+        );
+        let incoming_artifact = crate::functions::read_artifact(&unpacked.join("server"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            crate::functions::validate_artifact(
+                Some(&incoming_artifact.manifest),
+                Some(&incoming_artifact)
+            )
+            .unwrap(),
+            deployed.server
+        );
+        let mut components = HashMap::new();
+        for (name, download) in exported["downloads"].as_object().unwrap() {
+            let source = transfer_path(&a, download["transferId"].as_str().unwrap()).unwrap();
+            let bytes = std::fs::read(source).unwrap();
+            if name == "identity" {
+                assert!(
+                    !bytes
+                        .windows(b"never-export-this".len())
+                        .any(|part| part == b"never-export-this")
+                );
+                let identity = root.join("exported-identity.sqlite");
+                std::fs::write(&identity, &bytes).unwrap();
+                let db = Connection::open(identity).unwrap();
+                assert_eq!(
+                    db.query_row("SELECT COUNT(*) FROM app_sessions", [], |row| row
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    0
+                );
+            }
+            let begun = crate::transfers::transfer_call(&b, "owner:test", "transfer_begin", &json!({"size":bytes.len(),"sha256":digest(&bytes),"component":name,"projectId":id}), false).await.unwrap();
+            let transfer_id = begun["transferId"].as_str().unwrap();
+            crate::transfers::receive_body(&b, "owner:test", transfer_id, Body::from(bytes))
+                .await
+                .unwrap();
+            components.insert(name.clone(), transfer_id.to_owned());
+        }
+        let package = InitialPackage {
+            manifest: serde_json::from_value(exported["manifest"].clone()).unwrap(),
+            components,
+        };
+        verify(&b, "owner:test", id, &package).await.unwrap();
+        let saved = crate::sources::read(&a_root, id).await.unwrap().unwrap();
+        payload["project"]["files"] = saved["files"].clone();
+        payload["initialReleased"] = exported["manifest"]["released"].clone();
+        payload["initialPackage"] =
+            json!({"manifest":package.manifest,"components":package.components});
+        payload["serverArtifact"] = serde_json::to_value(incoming_artifact).unwrap();
+        let imported = crate::functions::tests::publish(&b, &payload).await;
+        assert_eq!(imported.server, deployed.server);
+        assert_eq!(imported.actions, deployed.actions);
+        assert_eq!(imported.signup_policy, deployed.signup_policy);
+        assert_eq!(imported.modules, deployed.modules);
+        assert!(!crate::layout::secrets(&b_root, id).exists());
+        let db = Connection::open(crate::layout::database(&b_root, id)).unwrap();
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM notes", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT body FROM notes WHERE owner_id=?1",
+                [user_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "portable row"
+        );
+        drop(db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let destination = tokio::spawn(crate::serve(listener, b.clone(), axum::Router::new()));
+        let action_call = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"actions_invoke","arguments":{"name":"notes.list","input":{}}}});
+        let old_session: Value = client
+            .post(format!("http://{address}/_konae/mcp"))
+            .header("host", &imported.hostname)
+            .header("cookie", &cookie)
+            .json(&action_call)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(!old_session.to_string().contains("portable row"));
+        let response = client
+            .post(format!("http://{address}/_konae/auth/login"))
+            .header("host", &imported.hostname)
+            .json(&account)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let new_cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let login: Value = response.json().await.unwrap();
+        assert_eq!(login["result"]["user"]["userId"], user_id);
+        let rows: Value = client
+            .post(format!("http://{address}/_konae/mcp"))
+            .header("host", &imported.hostname)
+            .header("cookie", &new_cookie)
+            .json(&action_call)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(rows.to_string().contains("portable row"), "{rows}");
+        if let Some(original_rows) = original_rows {
+            let old = client
+                .get(format!("http://{address}/api/orders"))
+                .header("host", &imported.hostname)
+                .header("cookie", &cookie)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(old.status(), reqwest::StatusCode::UNAUTHORIZED);
+            let replay = client
+                .post(format!("http://{address}/api/orders"))
+                .header("host", &imported.hostname)
+                .header("cookie", &new_cookie)
+                .header("idempotency-key", "portable-receipt")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(replay.status(), reqwest::StatusCode::CONFLICT);
+            assert_eq!(
+                replay.json::<Value>().await.unwrap()["code"],
+                crate::function_data::IDEMPOTENCY_REPLAY_CODE
+            );
+            let response = client
+                .get(format!("http://{address}/api/orders"))
+                .header("host", &imported.hostname)
+                .header("cookie", &new_cookie)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let rows: Value = response.json().await.unwrap();
+            assert_eq!(status, reqwest::StatusCode::OK, "{rows}");
+            assert_eq!(rows, original_rows);
+        }
+        assert_eq!(
+            std::fs::read_to_string(crate::layout::sources(&b_root, id).join("functions.json"))
+                .unwrap(),
+            "invalid newer draft"
+        );
+        assert!(
+            !crate::layout::sources(&b_root, id)
+                .join("functions/orders.ts")
+                .exists()
+        );
+        let mut restart = AppState::for_test(&b_root);
+        restart.execution_mode = crate::execution::ExecutionMode::Live;
+        let reopened = crate::folder::open(&restart, id, None).await.unwrap();
+        assert_eq!(reopened.server, deployed.server);
+        serving.abort();
+        destination.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn snapshots_carry_an_existing_database_when_actions_are_off() {
         let root = std::env::temp_dir().join(format!("konae-package-off-{}", Uuid::new_v4()));
@@ -852,7 +1502,9 @@ mod tests {
         let target = root.join("snapshot");
         std::fs::create_dir_all(&folder).unwrap();
         let database = Connection::open(folder.join("database.sqlite")).unwrap();
-        database.execute_batch("CREATE TABLE notes(value TEXT); INSERT INTO notes VALUES('kept');").unwrap();
+        database
+            .execute_batch("CREATE TABLE notes(value TEXT); INSERT INTO notes VALUES('kept');")
+            .unwrap();
         drop(database);
         let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
         let blobs = file_store::BlockingFiles::new(store, "app");
@@ -861,7 +1513,12 @@ mod tests {
         let parts = snapshot(&folder, &target, &blobs, &modules).unwrap();
         assert!(parts.iter().any(|(name, _)| *name == "database"));
         let copied = Connection::open(target.join("database.sqlite")).unwrap();
-        assert_eq!(copied.query_row("SELECT value FROM notes", [], |row| row.get::<_, String>(0)).unwrap(), "kept");
+        assert_eq!(
+            copied
+                .query_row("SELECT value FROM notes", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "kept"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -878,12 +1535,17 @@ mod tests {
             signup_policy: None,
             sign_in_methods: None,
             published_revision: 1,
+            released: None,
             artifact_version: Some("v1".into()),
             sources_revision: None,
-            contents: vec![Content { name: "database".into(), size: 4096, sha256: "a".repeat(64) }],
+            contents: vec![Content {
+                name: "database".into(),
+                size: 4096,
+                sha256: "a".repeat(64),
+            }],
             excluded: vec![],
             domain: None,
-        path: None,
+            path: None,
         }
     }
 
@@ -892,31 +1554,71 @@ mod tests {
         assert!(check_manifest(&manifest(), &Default::default()).is_ok());
         let mut next = manifest();
         next.version = 3;
-        assert!(check_manifest(&next, &Default::default()).unwrap_err().to_string().contains("Package version 3 is not supported"));
+        assert!(
+            check_manifest(&next, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("Package version 3 is not supported")
+        );
         let mut second = manifest();
         second.version = 2;
-        assert!(check_manifest(&second, &Default::default()).unwrap_err().to_string().contains("Package version 2 is not supported"));
+        assert!(
+            check_manifest(&second, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("Package version 2 is not supported")
+        );
         let mut foreign = manifest();
         foreign.format = "zip".into();
         assert!(check_manifest(&foreign, &Default::default()).is_err());
         let mut unknown = manifest();
-        unknown.contents.push(Content { name: "secrets".into(), size: 1, sha256: "a".repeat(64) });
-        assert!(check_manifest(&unknown, &Default::default()).unwrap_err().to_string().contains("Unknown package component secrets"));
+        unknown.contents.push(Content {
+            name: "secrets".into(),
+            size: 1,
+            sha256: "a".repeat(64),
+        });
+        assert!(
+            check_manifest(&unknown, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown package component secrets")
+        );
         let mut twice = manifest();
         twice.contents.push(twice.contents[0].clone());
-        assert!(check_manifest(&twice, &Default::default()).unwrap_err().to_string().contains("twice"));
+        assert!(
+            check_manifest(&twice, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("twice")
+        );
         let mut large = manifest();
         large.contents[0].size = MAX_APP_DATABASE_BYTES + 1;
-        assert!(check_manifest(&large, &Default::default()).unwrap_err().to_string().contains("its limit is"));
+        assert!(
+            check_manifest(&large, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("its limit is")
+        );
         let mut identity = manifest();
-        identity.contents.push(Content { name: "identity".into(), size: auth::MAX_IDENTITY_DATABASE_BYTES + 1, sha256: "b".repeat(64) });
+        identity.contents.push(Content {
+            name: "identity".into(),
+            size: auth::MAX_IDENTITY_DATABASE_BYTES + 1,
+            sha256: "b".repeat(64),
+        });
         assert!(check_manifest(&identity, &Default::default()).is_err());
         let mut empty = manifest();
         empty.contents.clear();
-        assert!(check_manifest(&empty, &Default::default()).unwrap_err().to_string().contains("no database"));
+        assert!(
+            check_manifest(&empty, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("no database")
+        );
         let mut static_app = manifest();
         static_app.contents.clear();
-        static_app.modules.insert("actions".into(), json!({"on":false}));
+        static_app
+            .modules
+            .insert("actions".into(), json!({"on":false}));
         assert!(check_manifest(&static_app, &Default::default()).is_ok());
         assert!(check_components_for_modules(&[], &Default::default(), false).is_ok());
         let mut checksum = manifest();
@@ -927,22 +1629,41 @@ mod tests {
     #[test]
     fn sign_in_methods_travel_in_the_manifest_and_older_manifests_mean_password() {
         let mut manifest = manifest();
-        let older: Manifest = serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap();
+        let older: Manifest =
+            serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap();
         assert!(older.sign_in_methods.is_none());
-        assert!(serde_json::to_value(&manifest).unwrap().get("signInMethods").is_none());
+        assert!(
+            serde_json::to_value(&manifest)
+                .unwrap()
+                .get("signInMethods")
+                .is_none()
+        );
         manifest.sign_in_methods = Some(vec![SignInMethod::Password, SignInMethod::Google]);
         let written = serde_json::to_value(&manifest).unwrap();
-        assert_eq!(written["signInMethods"], serde_json::json!(["password", "google"]));
+        assert_eq!(
+            written["signInMethods"],
+            serde_json::json!(["password", "google"])
+        );
         assert!(check_manifest(&manifest, &Default::default()).is_ok());
         manifest.sign_in_methods = Some(vec![SignInMethod::Google]);
-        assert_eq!(check_manifest(&manifest, &Default::default()).unwrap_err().to_string(), PASSWORD_REQUIRED);
+        assert_eq!(
+            check_manifest(&manifest, &Default::default())
+                .unwrap_err()
+                .to_string(),
+            PASSWORD_REQUIRED
+        );
     }
 
     #[test]
     fn space_checks_refuse_with_both_numbers() {
         assert!(ensure_space(300 * MIB, 200 * MIB, "import this app").is_ok());
-        let refused = ensure_space(100 * MIB, 200 * MIB, "import this app").unwrap_err().to_string();
-        assert_eq!(refused, "Not enough free space on the Kernel volume to import this app: 200 MiB needed, 100 MiB free.");
+        let refused = ensure_space(100 * MIB, 200 * MIB, "import this app")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            refused,
+            "Not enough free space on the Kernel volume to import this app: 200 MiB needed, 100 MiB free."
+        );
         assert!(free_bytes(Path::new(".")).unwrap() > 0);
     }
 
@@ -963,13 +1684,22 @@ mod tests {
         )
         .unwrap();
         drop(db);
-        assert_eq!(revoke_access(&path).unwrap(), 3, "a session, a link and the live key");
+        assert_eq!(
+            revoke_access(&path).unwrap(),
+            3,
+            "a session, a link and the live key"
+        );
         let bytes = std::fs::read(&path).unwrap();
         for secret in ["secret-session-hash", "secret-link-hash"] {
-            assert!(!bytes.windows(secret.len()).any(|w| w == secret.as_bytes()), "{secret} survived");
+            assert!(
+                !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
+                "{secret} survived"
+            );
         }
         let db = Connection::open(&path).unwrap();
-        let users: i64 = db.query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0)).unwrap();
+        let users: i64 = db
+            .query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(users, 1);
         let keys: Vec<(String, Option<i64>, Option<String>)> = db
             .prepare("SELECT id, revoked_at, revoked_reason FROM api_keys ORDER BY id")
@@ -978,9 +1708,19 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert!(matches!(&keys[0], (id, Some(at), Some(reason)) if id == "key-live" && *at > 2 && reason == "import"));
-        assert_eq!(keys[1], ("key-old".to_owned(), Some(2), None), "an owner's revocation keeps its time and has no reason");
-        assert_eq!(revoke_access(&path).unwrap(), 0, "a second pass changes nothing");
+        assert!(
+            matches!(&keys[0], (id, Some(at), Some(reason)) if id == "key-live" && *at > 2 && reason == "import")
+        );
+        assert_eq!(
+            keys[1],
+            ("key-old".to_owned(), Some(2), None),
+            "an owner's revocation keeps its time and has no reason"
+        );
+        assert_eq!(
+            revoke_access(&path).unwrap(),
+            0,
+            "a second pass changes nothing"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1001,19 +1741,38 @@ mod tests {
         )
         .unwrap();
         drop(db);
-        assert_eq!(revoke_access(&path).unwrap(), 4, "a session, two links and the live key");
+        assert_eq!(
+            revoke_access(&path).unwrap(),
+            4,
+            "a session, two links and the live key"
+        );
         let db = Connection::open(&path).unwrap();
         for table in ["app_sessions", "account_challenges", "entry_links"] {
-            let rows: i64 = db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            let rows: i64 = db
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
             assert_eq!(rows, 0, "{table} still holds rows");
         }
-        let live: i64 = db.query_row("SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL", [], |r| r.get(0)).unwrap();
+        let live: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(live, 0, "the key is still live");
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    async fn round_trip(source: Arc<dyn file_store::FileStore>, target: Arc<dyn file_store::FileStore>, root: &Path) {
-        let (a, b) = ("00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b");
+    async fn round_trip(
+        source: Arc<dyn file_store::FileStore>,
+        target: Arc<dyn file_store::FileStore>,
+        root: &Path,
+    ) {
+        let (a, b) = (
+            "00000000-0000-4000-8000-00000000000a",
+            "00000000-0000-4000-8000-00000000000b",
+        );
         let deployment = Uuid::new_v4().to_string();
         let index_dir = crate::layout::files(&root, &deployment);
         std::fs::create_dir_all(&index_dir).unwrap();
@@ -1030,8 +1789,12 @@ mod tests {
         let archive = root.join("files.tar");
         let arrival = Uuid::new_v4().to_string();
         let target_dir = crate::layout::files(&root, &arrival);
-        let (from, to) = (file_store::BlockingFiles::new(source.clone(), &deployment), file_store::BlockingFiles::new(target.clone(), &arrival));
-        let (archive_path, index_path, target_path) = (archive.clone(), index_dir.clone(), target_dir.clone());
+        let (from, to) = (
+            file_store::BlockingFiles::new(source.clone(), &deployment),
+            file_store::BlockingFiles::new(target.clone(), &arrival),
+        );
+        let (archive_path, index_path, target_path) =
+            (archive.clone(), index_dir.clone(), target_dir.clone());
         tokio::task::spawn_blocking(move || {
             write_files_tar(&index_path, &archive_path, |id| from.open(id)).unwrap();
             let accounts = Connection::open_in_memory().unwrap();
@@ -1041,14 +1804,27 @@ mod tests {
         .await
         .unwrap();
         for id in [a, b] {
-            let sent = file_store::read_all(source.as_ref(), &deployment, id).await.unwrap().unwrap();
-            let arrived = file_store::read_all(target.as_ref(), &arrival, id).await.unwrap().unwrap();
+            let sent = file_store::read_all(source.as_ref(), &deployment, id)
+                .await
+                .unwrap()
+                .unwrap();
+            let arrived = file_store::read_all(target.as_ref(), &arrival, id)
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(super::digest(&arrived), super::digest(&sent), "{id}");
         }
-        let restored: Vec<Value> = serde_json::from_slice(&std::fs::read(target_dir.join("index.json")).unwrap()).unwrap();
+        let restored: Vec<Value> =
+            serde_json::from_slice(&std::fs::read(target_dir.join("index.json")).unwrap()).unwrap();
         assert_eq!(restored[0]["ownerId"], "u1");
         assert_eq!(restored[1]["visibility"], "public");
-        assert!(std::fs::read_dir(&target_dir).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with('.')));
+        assert!(std::fs::read_dir(&target_dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1069,7 +1845,10 @@ mod tests {
         let deployment = "source";
         let source = crate::layout::files(&root, &deployment);
         std::fs::create_dir_all(&source).unwrap();
-        let (a, b) = ("00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b");
+        let (a, b) = (
+            "00000000-0000-4000-8000-00000000000a",
+            "00000000-0000-4000-8000-00000000000b",
+        );
         std::fs::write(source.join(format!("{a}.blob")), b"first file").unwrap();
         std::fs::write(source.join(format!("{b}.blob")), vec![7u8; 1000]).unwrap();
         let index = json!([
@@ -1129,13 +1908,22 @@ mod tests {
         db.execute_batch(statements).unwrap();
         if let Some(kind) = edit_type {
             db.execute_batch("PRAGMA writable_schema=ON;").unwrap();
-            db.execute("UPDATE sqlite_master SET type = ?1 WHERE type = 'trigger'", [kind]).unwrap();
+            db.execute(
+                "UPDATE sqlite_master SET type = ?1 WHERE type = 'trigger'",
+                [kind],
+            )
+            .unwrap();
             db.execute_batch("PRAGMA writable_schema=OFF;").unwrap();
         }
         path
     }
 
-    fn components(root: &Path, database: PathBuf, identity: Option<PathBuf>, usage: Option<PathBuf>) -> Vec<(String, PathBuf)> {
+    fn components(
+        root: &Path,
+        database: PathBuf,
+        identity: Option<PathBuf>,
+        usage: Option<PathBuf>,
+    ) -> Vec<(String, PathBuf)> {
         let _ = root;
         let mut list = vec![("database".to_owned(), database)];
         list.extend(identity.map(|path| ("identity".to_owned(), path)));
@@ -1160,9 +1948,17 @@ mod tests {
         let database = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
         let (salt, hash) = ("00".repeat(16), "00".repeat(32));
         let refused = "The accounts component holds a password hash this Kernel did not write.";
-        for hash in [format!("pbkdf2-sha256$4294967295${salt}${hash}"), format!("pbkdf2-sha256$1${salt}${hash}"), "x".to_owned()] {
+        for hash in [
+            format!("pbkdf2-sha256$4294967295${salt}${hash}"),
+            format!("pbkdf2-sha256$1${salt}${hash}"),
+            "x".to_owned(),
+        ] {
             let identity = accounts_with_hash(&root, "bad.sqlite", &hash);
-            let error = check_components(&components(&root, database.clone(), Some(identity), None), &Default::default()).unwrap_err();
+            let error = check_components(
+                &components(&root, database.clone(), Some(identity), None),
+                &Default::default(),
+            )
+            .unwrap_err();
             assert_eq!(error.to_string(), refused, "{hash}");
             std::fs::remove_file(root.join("bad.sqlite")).unwrap();
         }
@@ -1173,7 +1969,11 @@ mod tests {
         let db = Connection::open(&identity).unwrap();
         db.execute("INSERT INTO app_users (id, email, password_hash, created_at, state) VALUES ('p1', 'p@example.test', ?1, 0, 'pending')", [auth::NO_PASSWORD]).unwrap();
         drop(db);
-        check_components(&components(&root, database, Some(identity), None), &Default::default()).unwrap();
+        check_components(
+            &components(&root, database, Some(identity), None),
+            &Default::default(),
+        )
+        .unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1182,20 +1982,48 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let plain = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
-        let trigger = "CREATE TABLE t(v); CREATE TRIGGER leak AFTER INSERT ON t BEGIN SELECT 1; END;";
+        let trigger =
+            "CREATE TABLE t(v); CREATE TRIGGER leak AFTER INSERT ON t BEGIN SELECT 1; END;";
         let upper = file_with(&root, "upper.sqlite", trigger, Some("TRIGGER"));
-        let error = check_components(&components(&root, upper, None, None), &Default::default()).unwrap_err();
+        let error = check_components(&components(&root, upper, None, None), &Default::default())
+            .unwrap_err();
         assert!(error.to_string().contains("CREATE TRIGGER leak"), "{error}");
 
         let identity = root.join("identity.sqlite");
         AuthService::open(&identity).unwrap();
-        Connection::open(&identity).unwrap().execute_batch("CREATE TRIGGER leak AFTER INSERT ON app_sessions BEGIN SELECT 1; END;").unwrap();
-        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
-        assert!(error.to_string().contains("accounts component holds CREATE TRIGGER leak"), "{error}");
+        Connection::open(&identity)
+            .unwrap()
+            .execute_batch("CREATE TRIGGER leak AFTER INSERT ON app_sessions BEGIN SELECT 1; END;")
+            .unwrap();
+        let error = check_components(
+            &components(&root, plain.clone(), Some(identity), None),
+            &Default::default(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("accounts component holds CREATE TRIGGER leak"),
+            "{error}"
+        );
 
-        let usage = file_with(&root, "usage.sqlite", "CREATE TABLE u(v); CREATE VIEW seen AS SELECT v FROM u;", None);
-        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
-        assert!(error.to_string().contains("usage component holds CREATE VIEW seen"), "{error}");
+        let usage = file_with(
+            &root,
+            "usage.sqlite",
+            "CREATE TABLE u(v); CREATE VIEW seen AS SELECT v FROM u;",
+            None,
+        );
+        let error = check_components(
+            &components(&root, plain, None, Some(usage)),
+            &Default::default(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("usage component holds CREATE VIEW seen"),
+            "{error}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1205,24 +2033,46 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let database = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
         let (salt, hash) = ("00".repeat(16), "00".repeat(32));
-        for (table, column) in [("app_users", "PASSWORD_HASH"), ("APP_USERS", "PASSWORD_HASH"), ("APP_USERS", "password_hash")] {
+        for (table, column) in [
+            ("app_users", "PASSWORD_HASH"),
+            ("APP_USERS", "PASSWORD_HASH"),
+            ("APP_USERS", "password_hash"),
+        ] {
             let identity = root.join("upper.sqlite");
             let db = Connection::open(&identity).unwrap();
             db.execute_batch(&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, email TEXT NOT NULL, {column} TEXT NOT NULL, created_at INTEGER NOT NULL)")).unwrap();
             db.execute("INSERT INTO app_users (id, email, password_hash, created_at) VALUES ('u1', 'a@example.test', ?1, 0)", [format!("pbkdf2-sha256$4294967295${salt}${hash}")]).unwrap();
             drop(db);
-            let error = check_components(&components(&root, database.clone(), Some(identity.clone()), None), &Default::default()).unwrap_err();
-            assert_eq!(error.to_string(), "The accounts component holds a password hash this Kernel did not write.", "{table} {column}");
+            let error = check_components(
+                &components(&root, database.clone(), Some(identity.clone()), None),
+                &Default::default(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "The accounts component holds a password hash this Kernel did not write.",
+                "{table} {column}"
+            );
             std::fs::remove_file(identity).unwrap();
         }
         let _ = std::fs::remove_dir_all(root);
     }
 
     fn damaged_fts(root: &Path, name: &str, base: &str) -> PathBuf {
-        let path = file_with(root, name, &format!("{base}; CREATE VIRTUAL TABLE notes USING fts5(body); INSERT INTO notes VALUES('one two three');"), None);
+        let path = file_with(
+            root,
+            name,
+            &format!(
+                "{base}; CREATE VIRTUAL TABLE notes USING fts5(body); INSERT INTO notes VALUES('one two three');"
+            ),
+            None,
+        );
         let db = Connection::open(&path).unwrap();
-        db.execute("UPDATE notes_data SET block = x'0001' WHERE id > 10", []).unwrap();
-        let problem: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+        db.execute("UPDATE notes_data SET block = x'0001' WHERE id > 10", [])
+            .unwrap();
+        let problem: String = db
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
         assert_ne!(problem, "ok", "the fixture must fail the integrity check");
         path
     }
@@ -1243,10 +2093,26 @@ mod tests {
             ),
             None,
         );
-        let error = check_components(&components(&root, database.clone(), Some(identity), None), &Default::default()).unwrap_err();
-        assert_eq!(error.to_string(), "The accounts component holds a password hash this Kernel did not write.");
-        let bare = file_with(&root, "bare.sqlite", "CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT)", None);
-        check_components(&components(&root, database, Some(bare), None), &Default::default()).unwrap();
+        let error = check_components(
+            &components(&root, database.clone(), Some(identity), None),
+            &Default::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The accounts component holds a password hash this Kernel did not write."
+        );
+        let bare = file_with(
+            &root,
+            "bare.sqlite",
+            "CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT)",
+            None,
+        );
+        check_components(
+            &components(&root, database, Some(bare), None),
+            &Default::default(),
+        )
+        .unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1255,15 +2121,35 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let plain = file_with(&root, "plain.sqlite", "CREATE TABLE t(v)", None);
-        let identity = damaged_fts(&root, "identity.sqlite", "CREATE TABLE app_users(id TEXT PRIMARY KEY, password_hash TEXT)");
+        let identity = damaged_fts(
+            &root,
+            "identity.sqlite",
+            "CREATE TABLE app_users(id TEXT PRIMARY KEY, password_hash TEXT)",
+        );
         let usage = damaged_fts(&root, "usage.sqlite", "CREATE TABLE u(v)");
         let database = damaged_fts(&root, "database.sqlite", "CREATE TABLE d(v)");
-        let sentence = |what: &str| format!("The {what} holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing.");
-        let error = check_components(&components(&root, database, None, None), &Default::default()).unwrap_err();
+        let sentence = |what: &str| {
+            format!(
+                "The {what} holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing."
+            )
+        };
+        let error = check_components(
+            &components(&root, database, None, None),
+            &Default::default(),
+        )
+        .unwrap_err();
         assert_eq!(error.to_string(), sentence("database"));
-        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        let error = check_components(
+            &components(&root, plain.clone(), Some(identity), None),
+            &Default::default(),
+        )
+        .unwrap_err();
         assert_eq!(error.to_string(), sentence("accounts component"));
-        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
+        let error = check_components(
+            &components(&root, plain, None, Some(usage)),
+            &Default::default(),
+        )
+        .unwrap_err();
         assert_eq!(error.to_string(), sentence("usage component"));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1276,19 +2162,57 @@ mod tests {
         let identity = root.join("identity.sqlite");
         AuthService::open(&identity).unwrap();
         let usage = file_with(&root, "usage.sqlite", "CREATE TABLE u(v)", None);
-        check_components(&components(&root, plain.clone(), Some(identity.clone()), Some(usage.clone())), &Default::default()).unwrap();
+        check_components(
+            &components(
+                &root,
+                plain.clone(),
+                Some(identity.clone()),
+                Some(usage.clone()),
+            ),
+            &Default::default(),
+        )
+        .unwrap();
 
-        let fts = file_with(&root, "fts.sqlite", "CREATE TABLE t(v); CREATE VIRTUAL TABLE notes USING fts5(body)", None);
-        let error = check_components(&components(&root, fts, None, None), &Default::default()).unwrap_err();
-        assert_eq!(error.to_string(), "The database holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing.");
+        let fts = file_with(
+            &root,
+            "fts.sqlite",
+            "CREATE TABLE t(v); CREATE VIRTUAL TABLE notes USING fts5(body)",
+            None,
+        );
+        let error =
+            check_components(&components(&root, fts, None, None), &Default::default()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The database holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing."
+        );
 
-        Connection::open(&identity).unwrap().execute_batch("CREATE VIRTUAL TABLE places USING rtree(id, x0, x1)").unwrap();
-        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
-        assert_eq!(error.to_string(), "The accounts component holds CREATE VIRTUAL TABLE places, and Konae runs no virtual tables. Drop it before importing.");
+        Connection::open(&identity)
+            .unwrap()
+            .execute_batch("CREATE VIRTUAL TABLE places USING rtree(id, x0, x1)")
+            .unwrap();
+        let error = check_components(
+            &components(&root, plain.clone(), Some(identity), None),
+            &Default::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The accounts component holds CREATE VIRTUAL TABLE places, and Konae runs no virtual tables. Drop it before importing."
+        );
 
-        Connection::open(&usage).unwrap().execute_batch("CREATE VIRTUAL TABLE seen USING fts5(body)").unwrap();
-        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
-        assert_eq!(error.to_string(), "The usage component holds CREATE VIRTUAL TABLE seen, and Konae runs no virtual tables. Drop it before importing.");
+        Connection::open(&usage)
+            .unwrap()
+            .execute_batch("CREATE VIRTUAL TABLE seen USING fts5(body)")
+            .unwrap();
+        let error = check_components(
+            &components(&root, plain, None, Some(usage)),
+            &Default::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The usage component holds CREATE VIRTUAL TABLE seen, and Konae runs no virtual tables. Drop it before importing."
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

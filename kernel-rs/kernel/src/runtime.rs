@@ -618,6 +618,26 @@ pub fn tool_error(error: &anyhow::Error) -> Value {
 /// database an import puts in place first; without it the change is planned
 /// against the live database, or a package's or an empty one for a first release.
 pub async fn validate_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+    if let Some(snapshot) = &input.initial_released {
+        anyhow::ensure!(!state.deployments.read().await.values().any(|d| d.id == input.project.id), "A published snapshot can only enter an existing app through project_import.");
+        let package = input.initial_package.as_ref().context("A published snapshot requires an initial package.")?;
+        anyhow::ensure!(package.manifest.released.as_ref().is_some_and(|published| serde_json::to_value(published).ok() == serde_json::to_value(snapshot).ok()), "Published snapshot does not match the package.");
+    }
+    validate_import_release(state, input, against).await
+}
+
+/// The owner import door has already checked permission and package integrity.
+pub async fn validate_import_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+    crate::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
+    let restored = input.restored()?;
+    validate_release_inner(state, &restored, against, input.initial_released.is_some()).await
+}
+
+pub(crate) async fn validate_published_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+    validate_release_inner(state, input, against, true).await
+}
+
+async fn validate_release_inner(state: &AppState, input: &DeployInput, against: Option<&Path>, published: bool) -> Result<super::schema_change::Change> {
     if let Some(initial_modules) = input.initial_modules.as_ref() {
         crate::modules::validate_state(initial_modules).map_err(anyhow::Error::new)?;
     }
@@ -644,7 +664,9 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
                 && !path.starts_with("_konae/")
                 && !path.starts_with("oauth/")
                 && !path.starts_with(".well-known/")
-                && path != "mcp",
+                && path != "mcp"
+                && path != "server" && !path.starts_with("server/")
+                && path != "functions" && !path.starts_with("functions/"),
             "Invalid or reserved artifact path."
         );
     }
@@ -699,6 +721,15 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         return Err(anyhow::Error::new(super::modules::require_on(&candidate_modules, "auth").unwrap_err()));
     }
     if uses_actions { super::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
+    let functions = input.project.files.get("functions.json").map(|source| crate::functions::read(source)).transpose()?;
+    if let Some(manifest) = &functions {
+        let files = input.project.files.keys().cloned().collect();
+        let actions: Value = serde_json::from_str(actions_source)?;
+        let paths = input.artifact.files.keys().cloned().collect::<Vec<_>>();
+        if published { crate::functions::validate_published(manifest, &candidate_modules, &actions["actions"], &paths)?; }
+        else { crate::functions::validate(manifest, &files, &candidate_modules, &actions["actions"], &paths)?; }
+    }
+    crate::functions::validate_artifact(functions.as_ref(), input.server_artifact.as_ref())?;
     super::calls::check_release(&super::domain::Rules::of(state), &super::http::read_secrets(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);

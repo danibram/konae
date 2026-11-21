@@ -1,3 +1,5 @@
+import { serverArtifactFromFolder } from "../kernel/functions";
+import { buildProjectEntries } from "./build-project";
 import { checksum, encodeBase64 } from "../mcp/client";
 import { sourceFilesFrom, type SourceFiles } from "./source-files";
 import { skippedName } from "./source-rules";
@@ -9,6 +11,7 @@ export type ImportedFolder = {
   settings: AppSettings;
   sources: SourceFiles;
   dist: Record<string, Uint8Array>;
+  server?: Record<string, Uint8Array>;
   data: Partial<Record<PackageComponentName, Uint8Array>>;
 };
 
@@ -23,6 +26,7 @@ export function readAppFolder(archive: Uint8Array): ImportedFolder {
   const settings = JSON.parse(text.decode(inside.get(SETTINGS_FILE)!)) as AppSettings;
   const under = (folder: string) => [...inside].filter(([path]) => path.startsWith(`${folder}/`)).map(([path, contents]) => [path.slice(folder.length + 1), contents] as const);
   const sources = sourceFilesFrom(under(SOURCES_FOLDER).filter(([path]) => !path.split("/").some(skippedName)));
+  buildProjectEntries(sources);
   const dist = Object.fromEntries(under(DIST_FOLDER));
   const data: ImportedFolder["data"] = {};
   for (const name of ["database", "identity", "usage"] as const) {
@@ -39,17 +43,21 @@ export function readAppFolder(archive: Uint8Array): ImportedFolder {
       return { path: `${id}.blob`, contents: blob };
     })]);
   }
-  return { settings, sources, dist, data };
+  return { settings, sources, dist, data, server: Object.fromEntries(under("server")) };
 }
 
 export function sourcesPayload(folder: ImportedFolder, project: { id: string; name: string; slug: string }, visibility: "public" | "private") {
+  buildProjectEntries(folder.sources);
   if (!folder.dist["index.html"]) throw new Error(`The folder has no ${DIST_FOLDER}/index.html. Build it before importing its sources.`);
   const files: Record<string, string> = {};
   const encodings: Record<string, "base64"> = {};
   for (const [path, bytes] of Object.entries(folder.dist)) {
     try { files[path] = text.decode(bytes); } catch { files[path] = encodeBase64(bytes); encodings[path] = "base64"; }
   }
+  const serverArtifact = serverArtifactFromFolder(folder.server ?? {});
   return {
+    ...(serverArtifact ? { serverArtifact } : {}),
+    ...(folder.settings.released ? { initialReleased: folder.settings.released } : {}),
     project: { ...project, ...folder.sources, manifest: { ...folder.settings.manifest, visibility } },
     visibility,
     artifact: { version: 1, entrypoint: "index.html", files, ...(Object.keys(encodings).length ? { encodings } : {}) },
@@ -67,5 +75,6 @@ export async function dataManifest(folder: ImportedFolder, projectId: string): P
     format: packageFormat, version: packageVersion, packageId: crypto.randomUUID(), createdAt: Date.now(),
     deploymentId: folder.settings.id, projectId, visibility: folder.settings.visibility,
     publishedRevision: 0, contents, excluded: [],
+    ...(folder.settings.released ? { released: folder.settings.released } : {}),
   };
 }

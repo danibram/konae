@@ -1,0 +1,22 @@
+bun test v1.3.11 (af24e281)
+
+src/components/FunctionLatency.test.tsx:
+(pass) function latency in Usage > shows percentiles against the actual limit and distinguishes uncertain writes [5.41ms]
+(pass) function latency in Usage > keeps an over-limit percentage visible while the progress bar stays bounded [0.39ms]
+(pass) function latency in Usage > does not show a zero-latency claim without measurements [0.26ms]
+
+src/lib/usage.test.ts:
+(pass) usage periods include today and use UTC across month and year boundaries [0.35ms]
+(pass) a notice the Kernel could not queue counts as not sent, with its reason in words [0.40ms]
+(pass) execution outcomes have one label in every table [0.01ms]
+(pass) the overview's compacted notices keep their reason, and a nameless notice row claims nothing
+(pass) a daily series has one point per day of the range, zero on a day with nothing recorded [0.21ms]
+(pass) daily executions keep each result as a part of the day [0.07ms]
+(pass) bytes read in the binary units the Kernel's limits name
+(pass) storage leaves backups out, ranks the parts and warns near a limit
+(pass) active accounts fill every day of the range, and a day without any reads as zero [0.19ms]
+
+ 12 pass
+ 0 fail
+ 41 expect() calls
+Ran 12 tests across 2 files. [70.00ms]

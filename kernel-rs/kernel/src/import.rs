@@ -15,6 +15,7 @@ pub const HOLDS_SOURCES: &str = "sources";
 
 const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 const SOURCES_FILE: &str = "sources.json";
+const RELEASE_FILE: &str = "release.json";
 
 /// The schema the incoming database takes before it serves: `schema.sql`
 /// and the actions that must prepare against it.
@@ -27,6 +28,7 @@ pub struct Target {
 impl Target {
     /// The release that comes with the data.
     pub fn release(input: &DeployInput) -> Result<Self> {
+        let input = input.restored()?;
         Ok(Self {
             sql: input.project.files.get("schema.sql").cloned().unwrap_or_default(),
             program: serde_json::from_str(input.project.files.get("actions.json").map(String::as_str).unwrap_or(r#"{"version":1,"actions":{}}"#))?,
@@ -93,7 +95,7 @@ impl Incoming {
 pub fn live_schema(path: &Path) -> Result<String> {
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut statement = connection.prepare(
-        "SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY rowid",
+        "SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY rowid",
     )?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     let mut schema = String::new();
@@ -248,6 +250,13 @@ async fn backup_held(state: &AppState, deployment: &Deployment, label: &str, hol
         if holds.contains(&HOLDS_SOURCES) {
             let saved = sources::read(&state.data_root, &deployment.id).await?;
             tokio::fs::write(folder.join(SOURCES_FILE), serde_json::to_vec(&saved.unwrap_or(Value::Null))?).await?;
+            let dist = crate::folder::read_dist(&layout::dist(&state.data_root, &deployment.id))?;
+            let files = dist.iter().map(|(path, bytes)| (path.clone(), base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes))).collect::<HashMap<_, _>>();
+            let server = crate::functions::read_artifact(&layout::server(&state.data_root, &deployment.id))?;
+            let settings = Settings::read(&state.data_root, &deployment.id)?;
+            let installed: Installed = serde_json::from_slice(&tokio::fs::read(layout::record(&state.data_root, &deployment.id)).await?)?;
+            let release = json!({"settings":settings,"installed":installed,"serverArtifact":server,"artifact":{"version":1,"entrypoint":"index.html","files":files,"encodings":dist.keys().map(|path| (path.clone(), "base64")).collect::<HashMap<_,_>>()}});
+            tokio::fs::write(folder.join(RELEASE_FILE), serde_json::to_vec(&release)?).await?;
         }
         Ok::<_, anyhow::Error>(())
     }
@@ -310,9 +319,57 @@ pub async fn restore_held(state: &AppState, deployment: &Deployment, record: &Da
         replace_held(state, deployment, incoming, None).await?;
     }
     if let Some(saved) = saved.filter(|saved| !saved.is_null()) {
-        sources::write(&state.data_root, &deployment.id, &saved).await?;
+        if folder.join(RELEASE_FILE).exists() {
+            restore_source_release(state, deployment, &folder, &saved).await?;
+        } else { sources::write(&state.data_root, &deployment.id, &saved).await?; }
     }
     Ok(json!({"id": record.id, "holds": record.holds, "before": before}))
+}
+
+async fn restore_source_release(state: &AppState, current: &Deployment, backup: &Path, saved: &Value) -> Result<()> {
+    let release: Value = serde_json::from_slice(&tokio::fs::read(backup.join(RELEASE_FILE)).await?)?;
+    let artifact: BuildArtifact = serde_json::from_value(release["artifact"].clone())?;
+    let files = artifact::decode(&artifact).map_err(anyhow::Error::msg)?;
+    let server: Option<crate::functions::ServerArtifact> = serde_json::from_value(release["serverArtifact"].clone())?;
+    let mut settings: Settings = serde_json::from_value(release["settings"].clone())?;
+    let installed: Installed = serde_json::from_value(release["installed"].clone())?;
+    ensure!(settings.id == current.id, "The backup belongs to another app.");
+    let mut restored = settings.clone().deployment(installed, &state.public_origin);
+    restored.signup_policy = current.signup_policy.clone();
+    restored.sign_in_methods = current.sign_in_methods.clone();
+    restored.contact_email = current.contact_email.clone();
+    settings.signup_policy = current.signup_policy.clone();
+    settings.sign_in_methods = current.sign_in_methods.clone();
+    settings.contact_email = current.contact_email.clone();
+    if let Some(snapshot) = settings.released.as_mut() {
+        snapshot.signup_policy = current.signup_policy.clone(); snapshot.sign_in_methods = current.sign_in_methods.clone(); snapshot.contact_email = current.contact_email.clone();
+        ensure!(snapshot.artifact_digest.as_deref() == Some(crate::folder::version_of(&files).as_str()), "The backup static artifact does not match its snapshot.");
+        ensure!(snapshot.server == crate::functions::validate_artifact(server.as_ref().map(|a| &a.manifest), server.as_ref())?, "The backup server artifact does not match its snapshot.");
+    }
+    let version = format!("restore-{}", Uuid::new_v4().simple());
+    let sources = sources::decode(&serde_json::from_value(saved["files"].clone())?, &serde_json::from_value(saved.get("encodings").cloned().unwrap_or(json!({})))?).map_err(anyhow::Error::msg)?;
+    let staged = sources::stage_release(&state.data_root, &current.id, &sources, saved).await?;
+    let recorded = Recorded::read(&state.data_root, &current.id).await;
+    let result = async {
+        stage_local_artifact(state, &current.id, &version, &files).await?;
+        crate::functions::stage(&staged_server(state, &current.id, &version), server.as_ref()).await?;
+        let snapshot = settings.released.clone().context("The backup has no published snapshot.")?;
+        persist_settings_and_record(state, &restored, settings, snapshot).await?;
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    if let Err(error) = result {
+        recorded.put_back().await; staged.discard().await; remove_staged_dist(state, &current.id, &version).await; return Err(error);
+    }
+    if let Err(error) = staged.swap().await {
+        recorded.put_back().await; staged.discard().await; remove_staged_dist(state, &current.id, &version).await; return Err(error);
+    }
+    if let Err(error) = switch_dist(state, &current.id, &version).await {
+        recorded.put_back().await; staged.put_back().await; remove_staged_dist(state, &current.id, &version).await; return Err(error.into());
+    }
+    state.deployments.write().await.insert(restored.hostname.clone(), restored.clone());
+    http::routes_published(&restored);
+    staged.finish().await; remove_stale_dist(state, &current.id).await;
+    Ok(())
 }
 
 async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incoming, schema: Option<(&Target, Option<&str>)>) -> Result<Change> {

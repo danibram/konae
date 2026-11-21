@@ -249,7 +249,7 @@ pub(crate) fn database_schema(root: &Path, id: &str) -> Result<String> {
     let path = layout::database(root, id);
     if !path.is_file() { return Ok(String::new()); }
     let connection = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut statement = connection.prepare("SELECT type, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 WHEN 'trigger' THEN 3 ELSE 4 END, name")?;
+    let mut statement = connection.prepare("SELECT type, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 WHEN 'trigger' THEN 3 ELSE 4 END, name")?;
     let statements = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?.into_iter()
         .map(|(kind, sql)| idempotent_schema_statement(&kind, &sql)).collect::<Result<Vec<_>>>()?;
@@ -288,7 +288,7 @@ pub(crate) fn capture_released_state(root: &Path, id: &str, settings: &crate::Se
             name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
             signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
             contact_email: settings.contact_email.clone(), manifest, actions: installed.actions.clone(), schema_sql: String::new(),
-            schema_transforms: None,
+            schema_transforms: None, server: None,
             source_digest: installed.source_digest.clone(), artifact_digest: None, released_at: installed.released_at,
         }
     });

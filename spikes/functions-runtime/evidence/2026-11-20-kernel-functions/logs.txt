@@ -1,0 +1,208 @@
++zsh:11> uname -sm
+Darwin arm64
++zsh:12> rustc -V
+rustc 1.91.0 (f8297e351 2025-10-28)
++zsh:13> git rev-parse HEAD
+c29e1fd43fbc095409bda7deda6ac39527aedd1c
++zsh:14> cargo test --locked --manifest-path kernel-rs/Cargo.toml -p kernel -p konae functions -- --include-ignored '--test-threads=1'
+   Compiling kernel v0.12.1 (/Users/dbr/htdocs/miniapp-builder/kernel-rs/kernel)
+    Finished `test` profile [unoptimized] target(s) in 7.19s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-ed8a965888c91658)
+
+running 22 tests
+test functions::tests::deploy_input_keeps_artifact_refusal_before_serde ... ok
+test functions::tests::functions_module_is_off_by_default_and_cannot_be_disabled_while_published ... ok
+test functions::tests::functions_publish_without_evaluation_and_server_only_changes_get_a_new_version ... ok
+test functions::tests::server_artifact_limits_and_correspondence ... ok
+test functions::tests::shared_function_cases ... ok
+test functions::tests::shared_server_artifact_cases_and_portable_boundaries ... ok
+test functions_http::tests::a_join_failure_reports_unknown_if_a_mutation_may_have_committed ... ok
+test functions_http::tests::admission_includes_requests_waiting_for_publication_and_releases_on_drop ... ok
+test functions_http::tests::real_functions_http_auth_transaction_publish_deadline_and_usage ... ok
+test functions_runtime::tests::admission_is_bounded_and_abandoned_waiters_release_capacity ... ok
+test functions_runtime::tests::disabled_and_expired_requests_create_no_slots_or_tasks ... ok
+test functions_runtime::tests::four_distinct_leases_coexist_and_a_fifth_busy_key_is_refused ... ok
+test functions_runtime::tests::idle_reaper_preserves_held_leases_then_stops_when_empty ... ok
+test functions_runtime::tests::queued_deadline_and_cancellation_do_not_initialize_or_invoke ... ok
+test functions_runtime::tests::real_worker_new_version_and_lru_eviction_reap_before_replacement ... ok
+test functions_runtime::tests::real_worker_reuses_actor_input_and_destroys_failed_and_idle_processes ... ok
+test functions_runtime::tests::same_key_waiters_do_not_reserve_other_execution_permits ... ok
+test functions_runtime::tests::spawn_failure_retains_initialization_progress_and_releases_worker ... ok
+test package::tests::functions_export_import_executes_the_published_bundle_with_imported_identity ... ok
+test package::tests::functions_export_import_preserves_published_bundles_accounts_rows_and_rules ... ok
+test schema_transform::tests::authorizer_blocks_external_functions_even_inside_allowed_dml ... ok
+test tests::schemas_may_call_safe_functions_but_not_dangerous_ones ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 604 filtered out; finished in 14.59s
+
+     Running unittests src/main.rs (kernel-rs/target/debug/deps/kernel-f9673b44b7afbb64)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/inventory.rs (kernel-rs/target/debug/deps/inventory-5709b92ec1004f8d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (kernel-rs/target/debug/deps/konae-e5423a63d1b3add8)
+
+running 1 test
+test mcp::tests::functions_project_import_keeps_draft_and_restores_compiled_source_backups ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 91 filtered out; finished in 1.04s
+
+     Running tests/inventory.rs (kernel-rs/target/debug/deps/inventory-0d2d397635ec5ef2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
++zsh:15> shasum -a 256 -c spikes/functions-runtime/evidence/2026-11-20-kernel-functions/source.sha256
+kernel-rs/Cargo.lock: OK
+kernel-rs/Cargo.toml: OK
+kernel-rs/functions-executor/Cargo.toml: OK
+kernel-rs/functions-executor/src/budget.rs: OK
+kernel-rs/functions-executor/src/containment.rs: OK
+kernel-rs/functions-executor/src/lib.rs: OK
+kernel-rs/functions-executor/src/protocol.rs: OK
+kernel-rs/functions-executor/src/supervisor.rs: OK
+kernel-rs/kernel/Cargo.toml: OK
+kernel-rs/kernel/examples/block-format.rs: OK
+kernel-rs/kernel/src/accounts.rs: OK
+kernel-rs/kernel/src/action-cases.json: OK
+kernel-rs/kernel/src/action_shape.rs: OK
+kernel-rs/kernel/src/app_db.rs: OK
+kernel-rs/kernel/src/artifact.rs: OK
+kernel-rs/kernel/src/auth.rs: OK
+kernel-rs/kernel/src/call-cases.json: OK
+kernel-rs/kernel/src/calls.rs: OK
+kernel-rs/kernel/src/calls.sql: OK
+kernel-rs/kernel/src/copies.rs: OK
+kernel-rs/kernel/src/copies/blocks.rs: OK
+kernel-rs/kernel/src/copies/cut.rs: OK
+kernel-rs/kernel/src/copies/cut/tests.rs: OK
+kernel-rs/kernel/src/copies/health.rs: OK
+kernel-rs/kernel/src/copies/history.rs: OK
+kernel-rs/kernel/src/copies/history_tests.rs: OK
+kernel-rs/kernel/src/copies/key.rs: OK
+kernel-rs/kernel/src/copies/operation.rs: OK
+kernel-rs/kernel/src/copies/pilot.rs: OK
+kernel-rs/kernel/src/copies/tests/activation.rs: OK
+kernel-rs/kernel/src/copies/tests/integrity.rs: OK
+kernel-rs/kernel/src/copies/validation.rs: OK
+kernel-rs/kernel/src/domain-cases.json: OK
+kernel-rs/kernel/src/domain.rs: OK
+kernel-rs/kernel/src/enter.rs: OK
+kernel-rs/kernel/src/execution.rs: OK
+kernel-rs/kernel/src/file_store.rs: OK
+kernel-rs/kernel/src/files.rs: OK
+kernel-rs/kernel/src/folder.rs: OK
+kernel-rs/kernel/src/function_data.rs: OK
+kernel-rs/kernel/src/function_data_tests.rs: OK
+kernel-rs/kernel/src/functions-artifact-cases.json: OK
+kernel-rs/kernel/src/functions-cases.json: OK
+kernel-rs/kernel/src/functions.rs: OK
+kernel-rs/kernel/src/functions_http.rs: OK
+kernel-rs/kernel/src/functions_http_tests.rs: OK
+kernel-rs/kernel/src/functions_runtime.rs: OK
+kernel-rs/kernel/src/google-client-cases.json: OK
+kernel-rs/kernel/src/google.rs: OK
+kernel-rs/kernel/src/guard-cases.json: OK
+kernel-rs/kernel/src/guard.rs: OK
+kernel-rs/kernel/src/heap.rs: OK
+kernel-rs/kernel/src/hostname-cases.json: OK
+kernel-rs/kernel/src/hostname.rs: OK
+kernel-rs/kernel/src/hosts.rs: OK
+kernel-rs/kernel/src/http-binding-cases.json: OK
+kernel-rs/kernel/src/http.rs: OK
+kernel-rs/kernel/src/import.rs: OK
+kernel-rs/kernel/src/installation.rs: OK
+kernel-rs/kernel/src/inventory.rs: OK
+kernel-rs/kernel/src/inventory.tsv: OK
+kernel-rs/kernel/src/invitations.rs: OK
+kernel-rs/kernel/src/layout.rs: OK
+kernel-rs/kernel/src/lib.rs: OK
+kernel-rs/kernel/src/limits.rs: OK
+kernel-rs/kernel/src/mail.rs: OK
+kernel-rs/kernel/src/main.rs: OK
+kernel-rs/kernel/src/maintenance.rs: OK
+kernel-rs/kernel/src/module-cases.json: OK
+kernel-rs/kernel/src/module-use-cases.json: OK
+kernel-rs/kernel/src/modules.json: OK
+kernel-rs/kernel/src/modules.rs: OK
+kernel-rs/kernel/src/notify-cases.json: OK
+kernel-rs/kernel/src/notify-column-cases.json: OK
+kernel-rs/kernel/src/notify.rs: OK
+kernel-rs/kernel/src/operator.rs: OK
+kernel-rs/kernel/src/own-page/OFL-bricolage-grotesque.txt: OK
+kernel-rs/kernel/src/own-page/OFL-jetbrains-mono.txt: OK
+kernel-rs/kernel/src/own-page/bricolage-latin-ext.woff2: OK
+kernel-rs/kernel/src/own-page/bricolage-latin.woff2: OK
+kernel-rs/kernel/src/own-page/jetbrains-mono-latin.woff2: OK
+kernel-rs/kernel/src/own-page/page.css: OK
+kernel-rs/kernel/src/own_page.rs: OK
+kernel-rs/kernel/src/package.rs: OK
+kernel-rs/kernel/src/page-cases.json: OK
+kernel-rs/kernel/src/page-release-cases.json: OK
+kernel-rs/kernel/src/page.rs: OK
+kernel-rs/kernel/src/path-cases.json: OK
+kernel-rs/kernel/src/path-state-cases.json: OK
+kernel-rs/kernel/src/path.rs: OK
+kernel-rs/kernel/src/path_name.rs: OK
+kernel-rs/kernel/src/provider-signature-cases.json: OK
+kernel-rs/kernel/src/provider.rs: OK
+kernel-rs/kernel/src/recovery.rs: OK
+kernel-rs/kernel/src/refusal-codes.json: OK
+kernel-rs/kernel/src/refusal.rs: OK
+kernel-rs/kernel/src/release-cases.json: OK
+kernel-rs/kernel/src/root-relative-cases.json: OK
+kernel-rs/kernel/src/runtime.rs: OK
+kernel-rs/kernel/src/schedule-cases.json: OK
+kernel-rs/kernel/src/schedule.rs: OK
+kernel-rs/kernel/src/schema-change-cases.json: OK
+kernel-rs/kernel/src/schema-reserved-cases.json: OK
+kernel-rs/kernel/src/schema-transform-cases.json: OK
+kernel-rs/kernel/src/schema_change.rs: OK
+kernel-rs/kernel/src/schema_transform.rs: OK
+kernel-rs/kernel/src/security.rs: OK
+kernel-rs/kernel/src/seo.rs: OK
+kernel-rs/kernel/src/setting-cases.json: OK
+kernel-rs/kernel/src/signal-cases.json: OK
+kernel-rs/kernel/src/signature-cases.json: OK
+kernel-rs/kernel/src/signature-preset-cases.json: OK
+kernel-rs/kernel/src/signature-presets.json: OK
+kernel-rs/kernel/src/size.rs: OK
+kernel-rs/kernel/src/source-digest-cases.json: OK
+kernel-rs/kernel/src/source-revision-cases.json: OK
+kernel-rs/kernel/src/sources-cases.json: OK
+kernel-rs/kernel/src/sources.rs: OK
+kernel-rs/kernel/src/sql-rule-cases.json: OK
+kernel-rs/kernel/src/sql_rules.rs: OK
+kernel-rs/kernel/src/sqlite_bench.rs: OK
+kernel-rs/kernel/src/transfers.rs: OK
+kernel-rs/kernel/src/usage.rs: OK
+kernel-rs/kernel/src/usage/function_latency.rs: OK
+kernel-rs/kernel/tests/inventory.rs: OK
+kernel-rs/konae/Cargo.toml: OK
+kernel-rs/konae/src/admission.rs: OK
+kernel-rs/konae/src/clerk.rs: OK
+kernel-rs/konae/src/conversations.rs: OK
+kernel-rs/konae/src/editor.rs: OK
+kernel-rs/konae/src/guide.rs: OK
+kernel-rs/konae/src/main.rs: OK
+kernel-rs/konae/src/mcp.rs: OK
+kernel-rs/konae/src/oauth.rs: OK
+kernel-rs/konae/src/owner-login.html: OK
+kernel-rs/konae/src/owner-page/owner.css: OK
+kernel-rs/konae/src/owner_page.rs: OK
+kernel-rs/konae/src/owners.rs: OK
+kernel-rs/konae/src/project-templates.json: OK
+kernel-rs/konae/src/sdk-guide.json: OK
+kernel-rs/konae/src/state.rs: OK
+kernel-rs/konae/tests/inventory.rs: OK
++zsh:16> shasum -a 256 -c spikes/functions-runtime/evidence/2026-11-20-kernel-functions/worker.sha256
+/tmp/konae-deno-core-target/release/konae-functions-spike: OK
++zsh:17> git diff --check

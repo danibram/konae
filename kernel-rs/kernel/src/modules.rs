@@ -438,6 +438,7 @@ pub async fn set(
 }
 
 fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, state: &Value) -> bool {
+    if crate::functions::published_use(root, id, module) { return true; }
     match module {
         "files" => uses_files(root, id, state),
         "auth" => uses_auth(root, id),

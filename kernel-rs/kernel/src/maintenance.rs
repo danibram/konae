@@ -131,7 +131,7 @@ fn maintenance_page(name: &str, message: &str) -> Response {
     response
 }
 
-fn refusal(message: &str) -> Response {
+pub(crate) fn refusal(message: &str) -> Response {
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": message, "maintenance": true}))).into_response();
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("300"));

@@ -8,6 +8,7 @@ import type { OwnerSession } from "./owner-session";
 import { readOwnerProjectCount } from "../lib/project-sources";
 import { dailyActiveAccounts, dailyExecutions, dailyUsage, executionTotals, featureRows, formatBytes, kindTotal, noticeOutcomes, outcomeLabel, pageViews, readUsageOverview, readUsageSummary, storageParts, storageRows, usageRange, type UsageApp, type UsageSummary } from "../lib/usage";
 import { DailyChart } from "./UsageChart";
+import { FunctionLatency } from "./FunctionLatency";
 import "./usage.css";
 
 const number = new Intl.NumberFormat("en");
@@ -157,6 +158,7 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   const actionNames = [...new Set([...summary.actions.filter((a) => a.kind !== "call").map((a) => a.name), ...summary.metrics.filter((m) => m.feature === "execution").map((m) => m.name)])].sort();
   return <>
     <div className="usage-app-link"><a className="usage-address" href={summary.url} target="_blank" rel="noopener">{addressOf(summary.url)} <ArrowUpRight size={14} aria-hidden="true" /></a><a href={projectHref(summary.projectId)}>Open project</a></div>
+    <FunctionLatency summary={summary.functionLatency} />
     {notices.notSent > 0 && <Alert tone="warning" className="usage-error" title={`${number.format(notices.notSent)} email ${notices.notSent === 1 ? "notice was" : "notices were"} not sent`}>{[...new Set(notices.reasons.map((r) => r.label))].map((label) => label[0].toUpperCase() + label.slice(1)).join(". ")}. The actions themselves completed; only the email is missing.{notices.reasons.some((r) => r.reason === "no-transport") && " Whoever runs this installation can connect an email service."}</Alert>}
     {/* Only what makes this period's numbers incomplete stays in view; how they are counted waits in the disclosure. */}
     {incomplete && <section className="usage-coverage" aria-label="Data coverage">

@@ -1,0 +1,3 @@
+   Compiling konae-functions-executor v0.0.0 (/Users/dbr/htdocs/miniapp-builder/kernel-rs/functions-executor)
+   Compiling konae-functions-spike v0.0.0 (/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host)
+    Finished `release` profile [optimized] target(s) in 10.60s

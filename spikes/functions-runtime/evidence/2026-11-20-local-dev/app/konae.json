@@ -1,0 +1,91 @@
+{
+  "id": "app_0832f699-b596-448d-aff7-258b67483ea7",
+  "kernel": "0.12.1",
+  "manifest": {
+    "version": 1
+  },
+  "modules": {
+    "actions": {
+      "on": true
+    },
+    "auth": {
+      "on": true
+    },
+    "calls": {
+      "on": false
+    },
+    "files": {
+      "fileAccess": null,
+      "on": false
+    },
+    "functions": {
+      "on": true
+    },
+    "http": {
+      "on": false
+    },
+    "seo": {
+      "canonical": null,
+      "image": null,
+      "on": false
+    }
+  },
+  "name": "Functions local demo",
+  "released": {
+    "actions": "{\n  \"version\": 1,\n  \"actions\": {\n    \"notes.list\": {\n      \"kind\": \"query\",\n      \"access\": \"authenticated\",\n      \"statement\": \"SELECT id, title, created_at FROM notes WHERE owner_id = ? ORDER BY created_at DESC LIMIT 100\",\n      \"bindings\": [{ \"source\": \"actor\", \"field\": \"id\" }]\n    },\n    \"notes.create\": {\n      \"kind\": \"mutation\",\n      \"access\": \"authenticated\",\n      \"statement\": \"INSERT INTO notes (owner_id, title, created_at) VALUES (?, ?, ?)\",\n      \"bindings\": [\n        { \"source\": \"actor\", \"field\": \"id\" },\n        { \"source\": \"input\", \"key\": \"title\", \"type\": \"string\", \"maxLength\": 80 },\n        { \"source\": \"kernel\", \"field\": \"now\" }\n      ]\n    },\n    \"notes.batch\": {\n      \"kind\": \"mutation\",\n      \"access\": \"authenticated\",\n      \"guard\": \"No notes were added because the batch is empty or has invalid titles.\",\n      \"statement\": \"INSERT INTO notes (owner_id, title, created_at) SELECT ?1, item.value, ?2 FROM json_each(?3) AS item WHERE json_valid(?3) AND json_type(?3) = 'array' AND json_array_length(?3) BETWEEN 1 AND 10 AND NOT EXISTS (SELECT 1 FROM json_each(?3) AS candidate WHERE candidate.type != 'text' OR length(trim(candidate.value)) NOT BETWEEN 1 AND 80)\",\n      \"bindings\": [\n        { \"source\": \"actor\", \"field\": \"id\" },\n        { \"source\": \"kernel\", \"field\": \"now\" },\n        { \"source\": \"input\", \"key\": \"titlesJson\", \"type\": \"string\", \"maxLength\": 2000 }\n      ]\n    },\n    \"notes.delete\": {\n      \"kind\": \"mutation\",\n      \"access\": \"authenticated\",\n      \"statement\": \"DELETE FROM notes WHERE id = ? AND owner_id = ?\",\n      \"bindings\": [\n        { \"source\": \"input\", \"key\": \"id\", \"type\": \"number\" },\n        { \"source\": \"actor\", \"field\": \"id\" }\n      ]\n    }\n  }\n}\n",
+    "artifactDigest": "3db20d4cf55aa08112b21edffaab41e88b4331c22a715198aa7cdd96348043bc",
+    "contactEmail": null,
+    "manifest": {
+      "version": 1
+    },
+    "name": "Functions local demo",
+    "releasedAt": 1795196060678,
+    "schemaSql": "CREATE TABLE IF NOT EXISTS notes (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  owner_id TEXT NOT NULL,\n  title TEXT NOT NULL,\n  created_at INTEGER NOT NULL\n);\nCREATE INDEX IF NOT EXISTS notes_owner ON notes(owner_id, created_at);\n",
+    "server": {
+      "abi": "konae-functions/1",
+      "hashes": {
+        "notes": "a9de886d668f018c5592918d1f17273092f78efe93faca589f9aff4ab0dca4a1"
+      },
+      "manifest": {
+        "functions": {
+          "notes": {
+            "access": "authenticated",
+            "actions": [
+              "notes.batch",
+              "notes.create",
+              "notes.list"
+            ],
+            "entry": "functions/notes.ts",
+            "methods": [
+              "GET",
+              "POST"
+            ],
+            "mount": "/api/notes"
+          }
+        },
+        "version": 1
+      },
+      "version": 1
+    },
+    "signInMethods": [
+      "password"
+    ],
+    "signupPolicy": {
+      "allowlist": [],
+      "mode": "open"
+    },
+    "slug": "functions-local-demo",
+    "sourceDigest": "25b02fee991c8fa31d17c2d0c37fea42cda871c4eed4a829be2237d29e26db70",
+    "visibility": "private"
+  },
+  "signInMethods": [
+    "password"
+  ],
+  "signupPolicy": {
+    "allowlist": [],
+    "mode": "open"
+  },
+  "slug": "functions-local-demo",
+  "updatedAt": 0,
+  "visibility": "private"
+}

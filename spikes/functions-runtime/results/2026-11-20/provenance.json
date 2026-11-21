@@ -1,0 +1,220 @@
+{
+  "source_files": [
+    {
+      "path": "spikes/functions-runtime/run.py",
+      "sha256": "f7a6f315fed12f062985440f3b4ea58254459fc6aeb19acdd45d71dd9f7549da"
+    },
+    {
+      "path": "spikes/functions-runtime/benchmark.py",
+      "sha256": "911124729d32a91661ace3bf1925c125c841b4a498453d1f9c83085ce1111196"
+    },
+    {
+      "path": "spikes/functions-runtime/observe.py",
+      "sha256": "fac85b31bffb166c8d08eb8be864646d41734e7f75985df9efce976a1a374f19"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/Cargo.toml",
+      "sha256": "6cfb1b7b96d33ce7687f636bde74d84a0ca92cb96d8b95f1673e972f5836efaf"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/Cargo.lock",
+      "sha256": "660f6adc6791842b7dfc5d214f48493fac37aca219b76fa3995a3b59a0f43428"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/smoke.py",
+      "sha256": "a99a0e47f668ddfe03ee26dc55c7dd26699fd346ee05b0276ea18a7f821298f6"
+    },
+    {
+      "path": "spikes/functions-runtime/app/package-lock.json",
+      "sha256": "cad986469e1719397732f021593acc617fd26c117ba45d123e9729579d50ce55"
+    },
+    {
+      "path": "spikes/functions-runtime/app/package.json",
+      "sha256": "2f08c61a4b24af3cf18f158f4cacf8dd376d6b72068f0558297922dd7160ec19"
+    },
+    {
+      "path": "spikes/functions-runtime/app/tsconfig.json",
+      "sha256": "7d8ec239325c9143ff20f4967f1a08dfcc7ee20ba97f25b32b7a662f6bd855e7"
+    },
+    {
+      "path": "spikes/functions-runtime/checks/probe_runtime.py",
+      "sha256": "efefb10bff88c6ce47a1d6adac8f9956476c7c37656a9bd1a3f4fe3ce299b456"
+    },
+    {
+      "path": "spikes/functions-runtime/checks/run_all.py",
+      "sha256": "6e7bf1da8ae5b894316598d6a16b93622e2aad5c5625d7299a5431e92431e2ac"
+    },
+    {
+      "path": "spikes/functions-runtime/checks/verify.py",
+      "sha256": "2963894e4cdd4a4b22fda71dc6d0253377c8eb51bb1ce4fe387acf8025aaec61"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/package-lock.json",
+      "sha256": "60f0bae27e20ac03b7ee2d06f298205822d9263963537433ef9aefa1d46315a2"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/package.json",
+      "sha256": "48d67cf64b9d4caaecad4ea18fd061e51c55652e6695d032d576ae367c3b3551"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/next/handlers.mjs",
+      "sha256": "e953f89980ef705d8a90e46f08df6d79d9a0da0405a9da633477ef2afe703f28"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/next/next.config.mjs",
+      "sha256": "23e75502c1d3b4948f238eead27f982464c48cfc8bcabb4f4cc9c0a3ab960295"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/next/start.mjs",
+      "sha256": "6e676ea140b9e70ac2677531e1ad8520af8ae3438cb08575eaf100908bc3bdcf"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/next/dispatch.mjs",
+      "sha256": "5d9172d89bf44c32182039e83eb474557df22443fb136dee176967c445523e24"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/tests/correctness.test.mjs",
+      "sha256": "8ee9f78214350078a760c507e077099f95b7f1521bd8e5ab0e0e8ff1d2466674"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/lib/host.mjs",
+      "sha256": "57808c4da19555310fdc55699d5093791e5b48e68d84089373bbe8d769f3f105"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/lib/database.mjs",
+      "sha256": "49053cfc93963f9d50185a59769dab5d7aca26447aaabec2264cce2820551516"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/node/server.mjs",
+      "sha256": "7f168cd9102e9d5f37ca2da2322ac0cc1eba48cb01f6334a7eaf560def691889"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/next/app/route.js",
+      "sha256": "95c2a1d591eca84f6e88cb8ad573fdb6b716e9cbaacf29b0a15f84ed09276272"
+    },
+    {
+      "path": "spikes/functions-runtime/baselines/next/app/[...path]/route.js",
+      "sha256": "5596d73939a315b37170bb6e6cec15141c5551c82bff7c0f55e6814f8f2ba158"
+    },
+    {
+      "path": "spikes/functions-runtime/app/dist/orders.js",
+      "sha256": "715143f4f158380976a54ad928584f0728dab65ac730a12483413e4b8b7d9669"
+    },
+    {
+      "path": "spikes/functions-runtime/app/dist/preferences.js",
+      "sha256": "a628f2de2e3e60491ddf8b9eaa73509210396a4c81d3867694d7a7df988f9857"
+    },
+    {
+      "path": "spikes/functions-runtime/app/dist/schema.js",
+      "sha256": "a19d2e87ae0a5342f6402ca713c067c1b6c8b3c412fe09f97f048a134b876cab"
+    },
+    {
+      "path": "spikes/functions-runtime/app/src/schema.ts",
+      "sha256": "ab7980c55d714cf5afb2adaf19fd63962a6c206933eb066c90c5cc42df781fa3"
+    },
+    {
+      "path": "spikes/functions-runtime/app/src/contract.ts",
+      "sha256": "5068674cf1581741c7f178ce1aff9e68697a838c60eb57db0ace1ea27c814834"
+    },
+    {
+      "path": "spikes/functions-runtime/app/src/orders.ts",
+      "sha256": "5bbd43ad009f955b1e0a091ecd5cd1b415b8cf57870d2aa88f6a585da1cf150c"
+    },
+    {
+      "path": "spikes/functions-runtime/app/src/preferences.ts",
+      "sha256": "a08c506aca61dc01021690bdc5d0822980abc2bc455d4bd24fed1a15935b45bb"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/src/cache.rs",
+      "sha256": "6ab4b70b7c1dee770ae939b4461b608fc3f5a698f1577b21018fe1c85e4d7742"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/src/runtime.rs",
+      "sha256": "08f23c679bf468be5b483a9f63d5bfbab51b409b65294777defc5f4669ca609b"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/src/bootstrap.js",
+      "sha256": "d84a01a9df5444d1436090ad6d9c6810636c3dd01e497f2180fef3516a3d3850"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/src/data.rs",
+      "sha256": "369ec28645c81211f189d6cb3a33e9d22c545d10a07803c446cd8d72dd09eb7e"
+    },
+    {
+      "path": "spikes/functions-runtime/rust-host/src/main.rs",
+      "sha256": "c1c5bf406f0e2eb6de20950287ce856517a19e51e2e9617bd6ed1b74b74fcd78"
+    }
+  ],
+  "binary_sha256": "d59381ace482cf10373418cfebe8077c21d9341a70bf9a6b9b94b60d966355e8",
+  "hardware": "Hardware:\n\n    Hardware Overview:\n\n      Model Name: MacBook Pro\n      Model Identifier: Mac15,6\n      Model Number: MRX63Y/A\n      Chip: Apple M3 Pro\n      Total Number of Cores: 11 (5 Performance and 6 Efficiency)\n      Memory: 18 GB\n      System Firmware Version: 18000.161.9\n      OS Loader Version: 18000.161.9\n      ",
+  "process_load": {
+    "note": "Snapshot sorted by CPU; only the highest 15 processes are retained. The host was shared.",
+    "top": [
+      "77477  80.9 kernel-rs/target/debug/konae",
+      "77406  79.8 /System/Library/PrivateFrameworks/AppleNeuralEngine.framework/XPCServices/ANECompilerService.xpc/Contents/MacOS/ANECompilerService",
+      "76462  69.3 next-server (v16.4.6)",
+      "  438  51.2 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+      "34132  44.5 /Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper",
+      "34033  27.1 /Applications/Slack.app/Contents/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer)",
+      "84028  22.1 /Applications/bb.app/Contents/Frameworks/bb Helper.app/Contents/MacOS/bb Helper",
+      "76747  19.6 /opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python",
+      "71998  16.3 /Applications/Notion.app/Contents/Frameworks/Notion Helper.app/Contents/MacOS/Notion Helper",
+      "77526  11.2 /opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python",
+      "22286  10.9 /Library/SystemExtensions/4CF4ECD7-3EF8-4E4D-A3F9-02449E3D1DC6/io.kandji.KandjiAgent.ESF-Extension.systemextension/Contents/MacOS/io.kandji.KandjiAgent.ESF-Extension",
+      "34030   9.7 /Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper",
+      "48630   8.4 /Applications/bb.app/Contents/Frameworks/bb Helper (Renderer).app/Contents/MacOS/bb Helper (Renderer)",
+      "50829   8.4 auditd",
+      "  428   6.8 /usr/sbin/coreaudiod"
+    ]
+  },
+  "node_versions": {
+    "node": "26.0.0",
+    "acorn": "8.16.0",
+    "ada": "3.4.4",
+    "amaro": "1.1.8",
+    "ares": "1.34.6",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.3",
+    "lief": "0.17.0",
+    "llhttp": "9.4.1",
+    "merve": "1.2.2",
+    "modules": "147",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.69.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "3.6.2",
+    "simdjson": "4.6.3",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.0",
+    "tz": "2026a",
+    "undici": "8.0.2",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "14.6.202.33-node.19",
+    "zlib": "1.2.12",
+    "zstd": "1.5.7"
+  },
+  "profile_script_sha256": "0cf3f9135b7f25ea8131ce0c3f6041abc30eb50d29c85372568490aff6e4b5d1",
+  "rust_sqlite_version": "3.50.2",
+  "rust_sqlite_evidence": "libsqlite3-sys 0.35.0/sqlite3/sqlite3.h, SQLITE_VERSION",
+  "post_measurement_changes": [
+    {
+      "path": "spikes/functions-runtime/checks/probe_runtime.py",
+      "measured_snapshot_sha256": "efefb10bff88c6ce47a1d6adac8f9956476c7c37656a9bd1a3f4fe3ce299b456",
+      "final_sha256": "2375d7229d169f3de0897ad7d04029b9301b79a7ca73c45bbd24482932bb8f7d",
+      "reason": "After the functional run, the reviewer added record_artifacts and its imports/calls only. HTTP, fixtures, SQL, cache, timeouts and criteria were unchanged. See checks/review.md."
+    },
+    {
+      "path": "spikes/functions-runtime/checks/run_all.py",
+      "measured_snapshot_sha256": "6e7bf1da8ae5b894316598d6a16b93622e2aad5c5625d7299a5431e92431e2ac",
+      "final_sha256": "dc60094c65f73bc43deee3684338cfc9f6fd552509b3d0e998c7796e36416130",
+      "reason": "After the functional run, the reviewer added record_artifacts and its imports/calls only. HTTP, fixtures, SQL, cache, timeouts and criteria were unchanged. See checks/review.md."
+    }
+  ],
+  "final_hash_check_at": "2026-11-20T10:53:36.366550+00:00"
+}

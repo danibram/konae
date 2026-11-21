@@ -1,0 +1,70 @@
+   Compiling kernel v0.12.1 (/Users/dbr/htdocs/miniapp-builder/kernel-rs/kernel)
+    Finished `test` profile [unoptimized] target(s) in 5.10s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-aafb35ea378e93b2)
+
+running 5 tests
+test app_db::tests::a_borrower_does_not_see_the_last_insert_of_an_earlier_one ... ok
+test app_db::tests::a_closed_wal_database_opens_read_only ... ok
+test app_db::tests::a_file_renamed_over_the_path_is_read_and_not_the_old_one ... ok
+test app_db::tests::a_kept_connection_is_lent_again ... ok
+test app_db::tests::a_kept_connection_starts_a_new_deadline ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 608 filtered out; finished in 2.14s
+
+    Finished `test` profile [unoptimized] target(s) in 0.31s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-aafb35ea378e93b2)
+
+running 18 tests
+test schema_change::tests::a_confirmation_refuses_new_values_that_were_not_in_the_reported_loss ... ok
+test schema_change::tests::a_dropped_column_needs_the_confirmation_of_its_plan_and_keeps_every_other_column ... ok
+test schema_change::tests::a_dropped_or_changed_index_applies_without_confirmation ... ok
+test schema_change::tests::a_dropped_table_and_a_retyped_column_say_what_they_lose ... ok
+test schema_change::tests::a_fresh_database_marks_every_transformation_as_baseline_skipped ... ok
+test schema_change::tests::a_new_column_add_column_refuses_is_rebuilt_without_confirmation ... ok
+test schema_change::tests::a_new_table_column_and_index_apply_and_keep_every_row ... ok
+test schema_change::tests::a_rebuild_keeps_foreign_keys_and_refuses_to_break_them ... ok
+test schema_change::tests::a_rebuild_that_cannot_keep_its_rows_changes_nothing ... ok
+test schema_change::tests::a_rebuilt_autoincrement_table_never_hands_out_a_deleted_id_again ... ok
+test schema_change::tests::a_schema_that_fails_its_second_run_is_refused_as_the_gate_refuses_it ... ok
+test schema_change::tests::an_unchanged_schema_changes_nothing_and_a_second_pass_is_empty ... ok
+test schema_change::tests::column_definitions_come_back_as_written ... ok
+test schema_change::tests::reserved_schema_names_match_the_gate ... ok
+test schema_change::tests::the_schema_change_cases_answer_as_written ... ok
+test schema_change::tests::transformations_keep_foreign_key_cascades_and_count_them_for_the_bound ... ok
+test schema_change::tests::transformations_plan_actual_rows_and_bind_confirmation_to_them ... ok
+test schema_change::tests::transformations_roll_back_when_actions_do_not_match_final_schema ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 595 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized] target(s) in 0.12s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-aafb35ea378e93b2)
+
+running 1 test
+test tests::a_mutation_reads_back_its_changed_rows_for_the_notice_only ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 612 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized] target(s) in 0.12s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-aafb35ea378e93b2)
+
+running 1 test
+test tests::an_action_result_stops_being_read_once_it_passes_2_mib ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 612 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized] target(s) in 0.14s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-aafb35ea378e93b2)
+
+running 2 tests
+test tests::action_result_budget_counts_column_names_before_converting_values ... ok
+test tests::action_result_budget_counts_controls_in_lossy_text_before_conversion ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 611 filtered out; finished in 0.07s
+
+    Finished `test` profile [unoptimized] target(s) in 0.12s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-aafb35ea378e93b2)
+
+running 1 test
+test tests::app_databases_are_capped_in_size ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 612 filtered out; finished in 0.01s

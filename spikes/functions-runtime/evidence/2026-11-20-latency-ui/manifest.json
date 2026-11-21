@@ -1,0 +1,11 @@
+{
+  "command": "bun test src/components/FunctionLatency.test.tsx src/lib/usage.test.ts",
+  "sourceSha256": {
+    "src/lib/usage.ts": "8420824eda4ad472a7c2af043cbc3c6d2d35a64f3e409c1c542a78627ce2d03b",
+    "src/components/FunctionLatency.tsx": "70992057e1326336384163f5fea0928adc4eb2e139e13737462d002873bd9f5f",
+    "src/components/FunctionLatency.test.tsx": "3daf22afd98bb6f647103cbd5dda82d7472f885ed579d7ce022cee86d0419cdb",
+    "src/components/UsagePage.tsx": "788bca7b06a94c053fc95be72c4a7cab4ec43ab3c719fac573dbbfe3c841da3b",
+    "src/components/usage.css": "2dd35f8df9d85d401f99cf083b806bc33ace0672400bd466b31c9a413211124b"
+  },
+  "browser": "Playwright with installed Chrome, isolated temporary profile, component fixture with synthetic data"
+}

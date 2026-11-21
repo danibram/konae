@@ -187,6 +187,9 @@ context="${work}/src"
 run mkdir -p "$context"
 run git archive --format=tar -o "${work}/src.tar" "$revision"
 run tar -xf "${work}/src.tar" -C "$context"
+runner_bundle="${work}/functions-runner"
+run sh "${context}/scripts/build-functions-runner.sh" amd64 "$runner_bundle"
+runner_sha256=$(shasum -a 256 "${runner_bundle}/konae-functions-runner" | awk '{print $1}')
 
 if [ "$PUSH" -eq 1 ]; then
   output="--push"
@@ -199,6 +202,8 @@ build() {
   local image="${REGISTRY}/${OWNER}/${name}"
   run docker buildx build \
     --platform "$PLATFORM" \
+    --build-context "functions-runner=${runner_bundle}" \
+    --build-arg "FUNCTIONS_RUNNER_SHA256=${runner_sha256}" \
     --file "${context}/${dockerfile}" \
     --tag "${image}:${version}" \
     --tag "${image}:${major_minor}" \
