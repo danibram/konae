@@ -400,7 +400,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn shared_server_artifact_cases_and_portable_boundaries() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("functions-artifact-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../functions-artifact-cases.json")).unwrap();
         for case in cases {
             let outcome = (|| -> Checked<Option<ServerArtifact>> {
                 let source = if case["sourceFromArtifact"] == true { Some(case["artifact"]["manifest"].to_string()) }
@@ -450,7 +450,7 @@ pub(crate) mod tests {
 
     #[test]
     fn shared_function_cases() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("functions-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../functions-cases.json")).unwrap();
         for case in cases {
             let outcome = read(case["source"].as_str().unwrap()).and_then(|manifest| {
                 let files = serde_json::from_value(case["files"].clone()).unwrap();

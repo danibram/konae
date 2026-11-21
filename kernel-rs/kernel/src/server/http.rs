@@ -59,7 +59,7 @@ async fn logical_request(State(state): State<AppState>, mut request: Request, ne
 
 async fn logical_route(State(state): State<AppState>, request: Request, next: axum::middleware::Next) -> Response {
     let request = if request.extensions().get::<axum::extract::MatchedPath>().is_some_and(|path| path.as_str() == "/{*path}") {
-        match functions_http::dispatch(&state, request).await {
+        match functions::http::dispatch(&state, request).await {
             Ok(response) => return response,
             Err(request) => request,
         }

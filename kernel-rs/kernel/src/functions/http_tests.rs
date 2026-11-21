@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     functions::tests::{publish, release},
-    functions_runtime::Runtime,
+    functions::runtime::Runtime,
 };
 use konae_functions_executor::MemoryPolicy;
 use rusqlite::Connection;

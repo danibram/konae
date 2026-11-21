@@ -34,9 +34,9 @@ pub mod execution;
 pub mod file_store;
 pub mod files;
 pub mod functions;
-pub mod function_data;
-pub mod functions_runtime;
-pub mod functions_http;
+pub use functions::{
+    http as functions_http, invocation as function_data, runtime as functions_runtime,
+};
 pub mod guard;
 pub mod heap;
 pub mod installation;
@@ -111,7 +111,7 @@ pub struct AppState {
     pub installation: Arc<installation::Installation>,
     /// Where an app user's file uploads and deletes are recorded.
     pub audit: Option<runtime::AuditSink>,
-    pub functions: Arc<functions_runtime::Runtime>,
+    pub functions: Arc<functions::runtime::Runtime>,
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -136,7 +136,7 @@ impl AppState {
             guards: Arc::new(Guards::new(Vec::new())),
             installation: Arc::new(installation::Installation::for_test()),
             audit: None,
-            functions: Arc::new(functions_runtime::Runtime::disabled()),
+            functions: Arc::new(functions::runtime::Runtime::disabled()),
         }
     }
 }

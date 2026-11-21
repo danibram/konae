@@ -1,10 +1,9 @@
 use crate::{
     AppState, Deployment, Operation,
-    function_data::{self, Admission, InvocationConfig},
-    functions::Function,
-    functions_runtime::RunProgress,
     usage::{FunctionOutcome, FunctionTiming},
 };
+use super::{Function, invocation as function_data, runtime::RunProgress};
+use super::invocation::{Admission, InvocationConfig};
 use axum::{
     Json,
     body::Body,
@@ -257,7 +256,7 @@ struct Timed {
     outcome: FunctionOutcome,
 }
 struct PreparedRun {
-    lease: crate::functions_runtime::Lease,
+    lease: super::runtime::Lease,
     config: InvocationConfig,
     input: Input,
     body: Arc<IngressBody>,
@@ -1114,5 +1113,5 @@ fn respond(output: Output) -> Response {
 }
 
 #[cfg(test)]
-#[path = "functions_http_tests.rs"]
+#[path = "http_tests.rs"]
 mod tests;

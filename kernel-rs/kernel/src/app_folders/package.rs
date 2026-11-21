@@ -1176,13 +1176,13 @@ mod tests {
                     delegated_root: root.into(),
                 })
                 .unwrap_or(konae_functions_executor::MemoryPolicy::DevelopmentPolling);
-            a.functions = Arc::new(crate::functions_runtime::Runtime::configured(
+            a.functions = Arc::new(crate::functions::runtime::Runtime::configured(
                 worker.clone(),
                 policy.clone(),
                 std::time::Duration::from_secs(2),
                 std::time::Duration::from_millis(100),
             ));
-            b.functions = Arc::new(crate::functions_runtime::Runtime::configured(
+            b.functions = Arc::new(crate::functions::runtime::Runtime::configured(
                 worker.clone(),
                 policy,
                 std::time::Duration::from_secs(2),
@@ -1462,7 +1462,7 @@ mod tests {
             assert_eq!(replay.status(), reqwest::StatusCode::CONFLICT);
             assert_eq!(
                 replay.json::<Value>().await.unwrap()["code"],
-                crate::function_data::IDEMPOTENCY_REPLAY_CODE
+                crate::functions::invocation::IDEMPOTENCY_REPLAY_CODE
             );
             let response = client
                 .get(format!("http://{address}/api/orders"))

@@ -1,4 +1,5 @@
-use crate::{ActionProgram, functions::Function, refusal::Refusal};
+use crate::{ActionProgram, refusal::Refusal};
+use super::Function;
 use konae_functions_executor::{Budget, BudgetError, MutationOutcomeState, Output};
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
@@ -819,5 +820,5 @@ fn bounded_json(value: &impl serde::Serialize, maximum: usize) -> std::result::R
 }
 
 #[cfg(test)]
-#[path = "function_data_tests.rs"]
+#[path = "invocation_tests.rs"]
 mod tests;

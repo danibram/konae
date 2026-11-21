@@ -143,7 +143,7 @@ pub async fn state_from_env(
             &std::env::var("KONAE_TRUSTED_PROXIES").unwrap_or_default(),
         )?)),
         accounts: account_settings,
-        functions: Arc::new(functions_runtime::Runtime::from_env()?),
+        functions: Arc::new(functions::runtime::Runtime::from_env()?),
         audit,
         installation: Arc::new(installation),
     };

@@ -112,46 +112,7 @@ impl Runtime {
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
-        let Some(executable) = std::env::var_os("KONAE_FUNCTIONS_RUNNER") else {
-            return Ok(Self::disabled());
-        };
-        let executable = PathBuf::from(executable);
-        anyhow::ensure!(
-            executable.is_absolute() && executable.is_file(),
-            "KONAE_FUNCTIONS_RUNNER must name an absolute executable file"
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            anyhow::ensure!(
-                executable.metadata()?.permissions().mode() & 0o111 != 0,
-                "KONAE_FUNCTIONS_RUNNER must be executable"
-            );
-        }
-        let policy = if std::env::var("KONAE_FUNCTIONS_DEVELOPMENT").as_deref() == Ok("1") {
-            MemoryPolicy::DevelopmentPolling
-        } else if let Some(root) = std::env::var_os("KONAE_FUNCTIONS_CGROUP") {
-            konae_functions_executor::validate_linux_worker_identity()
-                .map_err(|_| anyhow::anyhow!("KONAE_FUNCTIONS_UID and KONAE_FUNCTIONS_GID must name a separate worker identity, and the Kernel must hold CAP_KILL, CAP_SETUID and CAP_SETGID"))?;
-            let delegated_root = PathBuf::from(root);
-            anyhow::ensure!(
-                delegated_root.is_absolute(),
-                "KONAE_FUNCTIONS_CGROUP must be absolute"
-            );
-            konae_functions_executor::validate_linux_worker_containment(&delegated_root)
-                .map_err(|error| anyhow::anyhow!("KONAE_FUNCTIONS_CGROUP must be a writable cgroup v2 subtree with memory, pids and cgroup.kill enabled: {error}"))?;
-            MemoryPolicy::LinuxCgroup { delegated_root }
-        } else {
-            anyhow::bail!(
-                "KONAE_FUNCTIONS_CGROUP is required when KONAE_FUNCTIONS_RUNNER is set, unless KONAE_FUNCTIONS_DEVELOPMENT=1"
-            )
-        };
-        Ok(Self::configured(
-            executable,
-            policy,
-            env_duration("KONAE_FUNCTIONS_TIMEOUT_MS", 1000)?,
-            env_duration("KONAE_FUNCTIONS_IDLE_MS", 60_000)?,
-        ))
+        kernel_environment::create()
     }
 
     pub(crate) fn admit(&self, budget: &Budget) -> Result<OwnedSemaphorePermit, String> {
@@ -462,19 +423,66 @@ async fn wait<T>(budget: &Budget, future: impl Future<Output = T>) -> Result<T, 
     }
 }
 
-fn env_duration(name: &str, default: u64) -> anyhow::Result<Duration> {
-    let milliseconds = match std::env::var(name) {
-        Ok(value) => value
-            .parse::<u64>()
-            .map_err(|_| anyhow::anyhow!("{name} must be a positive millisecond count"))?,
-        Err(std::env::VarError::NotPresent) => default,
-        Err(error) => return Err(error.into()),
-    };
-    anyhow::ensure!(
-        milliseconds > 0 && milliseconds <= 86_400_000,
-        "{name} must be between 1 and 86400000"
-    );
-    Ok(Duration::from_millis(milliseconds))
+mod kernel_environment {
+    use super::*;
+
+    pub(super) fn create() -> anyhow::Result<Runtime> {
+        let Some(executable) = std::env::var_os("KONAE_FUNCTIONS_RUNNER") else {
+            return Ok(Runtime::disabled());
+        };
+        let executable = PathBuf::from(executable);
+        anyhow::ensure!(
+            executable.is_absolute() && executable.is_file(),
+            "KONAE_FUNCTIONS_RUNNER must name an absolute executable file"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            anyhow::ensure!(
+                executable.metadata()?.permissions().mode() & 0o111 != 0,
+                "KONAE_FUNCTIONS_RUNNER must be executable"
+            );
+        }
+        let policy = if std::env::var("KONAE_FUNCTIONS_DEVELOPMENT").as_deref() == Ok("1") {
+            MemoryPolicy::DevelopmentPolling
+        } else if let Some(root) = std::env::var_os("KONAE_FUNCTIONS_CGROUP") {
+            konae_functions_executor::validate_linux_worker_identity()
+                .map_err(|_| anyhow::anyhow!("KONAE_FUNCTIONS_UID and KONAE_FUNCTIONS_GID must name a separate worker identity, and the Kernel must hold CAP_KILL, CAP_SETUID and CAP_SETGID"))?;
+            let delegated_root = PathBuf::from(root);
+            anyhow::ensure!(
+                delegated_root.is_absolute(),
+                "KONAE_FUNCTIONS_CGROUP must be absolute"
+            );
+            konae_functions_executor::validate_linux_worker_containment(&delegated_root)
+                .map_err(|error| anyhow::anyhow!("KONAE_FUNCTIONS_CGROUP must be a writable cgroup v2 subtree with memory, pids and cgroup.kill enabled: {error}"))?;
+            MemoryPolicy::LinuxCgroup { delegated_root }
+        } else {
+            anyhow::bail!(
+                "KONAE_FUNCTIONS_CGROUP is required when KONAE_FUNCTIONS_RUNNER is set, unless KONAE_FUNCTIONS_DEVELOPMENT=1"
+            )
+        };
+        Ok(Runtime::configured(
+            executable,
+            policy,
+            env_duration("KONAE_FUNCTIONS_TIMEOUT_MS", 1000)?,
+            env_duration("KONAE_FUNCTIONS_IDLE_MS", 60_000)?,
+        ))
+    }
+
+    fn env_duration(name: &str, default: u64) -> anyhow::Result<Duration> {
+        let milliseconds = match std::env::var(name) {
+            Ok(value) => value
+                .parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("{name} must be a positive millisecond count"))?,
+            Err(std::env::VarError::NotPresent) => default,
+            Err(error) => return Err(error.into()),
+        };
+        anyhow::ensure!(
+            milliseconds > 0 && milliseconds <= 86_400_000,
+            "{name} must be between 1 and 86400000"
+        );
+        Ok(Duration::from_millis(milliseconds))
+    }
 }
 
 #[cfg(test)]
