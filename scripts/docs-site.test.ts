@@ -97,7 +97,7 @@ describe("the docs site", () => {
     const registered = new Set<string>();
     for (const crate of ["kernel", "konae"]) {
       const dir = path.join(repo, "kernel-rs", crate, "src");
-      for (const file of readdirSync(dir).filter((name) => name.endsWith(".rs"))) {
+      for (const file of readdirSync(dir, { recursive: true }).filter((name) => name.endsWith(".rs"))) {
         for (const match of readFileSync(path.join(dir, file), "utf8").matchAll(/\btool\(\s*"([a-z_]+)"/g)) registered.add(match[1]);
       }
     }

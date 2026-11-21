@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(listed["modules"]["actions"]["state"]["on"], false);
         let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "app_legacy_modules")).unwrap()).unwrap();
         assert_eq!(rewritten["modules"]["files"]["on"], false);
-        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["actions".to_owned(), "auth".to_owned(), "calls".to_owned(), "files".to_owned(), "http".to_owned(), "seo".to_owned()].into());
+        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["actions".to_owned(), "auth".to_owned(), "calls".to_owned(), "files".to_owned(), "functions".to_owned(), "http".to_owned(), "seo".to_owned()].into());
         assert!(!layout::database(&root, "app_legacy_modules").exists());
         assert_eq!(rewritten["modules"]["seo"]["on"], false);
         std::fs::remove_dir_all(root).unwrap();

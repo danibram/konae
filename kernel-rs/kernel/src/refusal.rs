@@ -110,7 +110,7 @@ mod tests {
 
     const GROUPS: &[&str] = &[
         "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "page", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
-        "secret", "setting", "signal", "signature", "signin", "sources", "statement", "module",
+        "secret", "setting", "signal", "signature", "signin", "sources", "statement", "module", "function",
     ];
 
     fn refusal_cases() -> Vec<(String, String, Option<String>)> {
@@ -126,8 +126,9 @@ mod tests {
             let value: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(&file)).unwrap()).unwrap();
             let list = value.get("cases").cloned().unwrap_or(value);
             for case in list.as_array().unwrap() {
-                if case["error"].is_string() {
-                    cases.push((file.clone(), case["case"].as_str().unwrap_or("").to_owned(), case["code"].as_str().map(str::to_owned)));
+                if case["error"].is_string() || case["code"].is_string() && case["message"].is_string() {
+                    let name = case["case"].as_str().or_else(|| case["name"].as_str()).unwrap_or("");
+                    cases.push((file.clone(), name.to_owned(), case["code"].as_str().map(str::to_owned)));
                 }
             }
         }
@@ -167,16 +168,20 @@ mod tests {
     fn every_code_the_kernel_names_is_in_the_table() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut named = 0;
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|extension| extension != "rs") {
-                continue;
-            }
-            let source = std::fs::read_to_string(&path).unwrap();
-            for part in source.split("refuse(\"").skip(1) {
-                let code = &part[..part.find('"').unwrap()];
-                named += 1;
-                assert!(super::table().contains_key(code), "{} names {code}, which refusal-codes.json does not hold", path.display());
+        let mut dirs = vec![dir];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    let source = std::fs::read_to_string(&path).unwrap();
+                    for part in source.split("refuse(\"").skip(1) {
+                        let code = &part[..part.find('"').unwrap()];
+                        named += 1;
+                        assert!(super::table().contains_key(code), "{} names {code}, which refusal-codes.json does not hold", path.display());
+                    }
+                }
             }
         }
         assert!(named > 100);

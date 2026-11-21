@@ -137,7 +137,7 @@ describe("runtime.js and the preview client expose exactly the contract", () => 
 
 describe("every documented message is one the code returns", () => {
   const kernel = ["kernel-rs/kernel/src", "kernel-rs/konae/src"]
-    .flatMap((dir) => readdirSync(path.join(root, dir)).filter((file) => file.endsWith(".rs")).map((file) => read(`${dir}/${file}`)))
+    .flatMap((dir) => readdirSync(path.join(root, dir), { recursive: true }).filter((file) => file.endsWith(".rs")).map((file) => read(`${dir}/${file}`)))
     .join("\n");
   const preview = ["src/runtime/host.ts", "src/runtime/security.ts", "src/kernel/actions.ts", "src/mcp/preview.ts"].map(read).join("\n");
 

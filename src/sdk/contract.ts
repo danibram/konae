@@ -29,7 +29,7 @@ export type SdkCall = {
   summary: string;
   /** Whether a visitor without a session may use it on a public Deployment. */
   signedOut: boolean;
-  /** The runtime MCP tools the published SDK calls, in kernel-rs/kernel/src/runtime.rs runtime_tools(). */
+  /** The runtime MCP tools the published SDK calls, in kernel-rs/kernel/src/server/runtime.rs runtime_tools(). */
   tools: string[];
   args: SdkArgument[];
   returns: string;

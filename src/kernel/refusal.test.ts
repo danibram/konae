@@ -9,8 +9,12 @@ function refusalCases(): { file: string; case: string; code?: string }[] {
   const found: { file: string; case: string; code?: string }[] = [];
   for (const file of readdirSync(dir).filter((name) => name.endsWith("-cases.json")).sort()) {
     const value = JSON.parse(readFileSync(path.join(dir, file), "utf8"));
-    const cases: { case: string; error?: unknown; code?: string }[] = Array.isArray(value) ? value : value.cases;
-    for (const item of cases) if (typeof item.error === "string") found.push({ file, case: item.case, code: item.code });
+    const cases: { case?: string; name?: string; error?: unknown; message?: unknown; code?: string }[] = Array.isArray(value) ? value : value.cases;
+    for (const item of cases) {
+      if (typeof item.error === "string" || typeof item.code === "string" && typeof item.message === "string") {
+        found.push({ file, case: item.case ?? item.name ?? "", code: item.code });
+      }
+    }
   }
   return found;
 }
@@ -29,7 +33,7 @@ describe("refusal codes (ADR-0004)", () => {
   });
 
   test("every code the editor names is in the table", () => {
-    const sources = ["src/kernel/actions.ts", "src/kernel/calls.ts", "src/kernel/route-declaration.ts", "src/kernel/sql-rules.ts", "src/agent/release-check.ts", "src/agent/gate.ts", "src/lib/domain-name.ts", "src/lib/source-rules.ts"];
+    const sources = ["src/kernel/actions.ts", "src/kernel/calls.ts", "src/kernel/functions.ts", "src/kernel/route-declaration.ts", "src/kernel/sql-rules.ts", "src/agent/release-check.ts", "src/agent/gate.ts", "src/lib/domain-name.ts", "src/lib/source-rules.ts"];
     const codes = new Set<string>(refusalCodes());
     let named = 0;
     for (const source of sources) {
