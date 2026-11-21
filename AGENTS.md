@@ -79,7 +79,7 @@ These are not bugs to paper over. Say them when they matter.
 
 - `src/` is the editor. `src/components/ProjectDashboard.tsx` is the project list, `src/components/AgentPanel.tsx` is the conversation, and `src/App.tsx` is the file editor.
 - `src/agent/system-prompt.ts` is what the build agent is told. `src/agent/gate.ts` is the Validation Gate. `src/lib/query-bound.ts` is the row limit both doors share.
-- Backend ownership and paths live in [Konae architecture](docs/architecture.md#modules-of-kernel). Start with the module that owns the rule. The Kernel's `app_folders/layout.rs` names the App Folder paths, and `server/operator.rs` holds the `kernel` commands.
+- Backend ownership and paths live in [Konae architecture](docs/architecture.md#modules-of-kernel). Start with the module that owns the rule. The Kernel's `app_folders/layout.rs` names the paths in an app folder, and `server/operator.rs` holds the `kernel` commands.
 - `kernel-rs/konae` links the Kernel and owns the Owner's MCP and Projects. `guide.rs` defines the `platform_guide` topics, including `rules` and `pieces`.
 - `src/kernel/actions.ts` parses `actions.json` in the editor, and `kernel-rs/kernel/src/actions/shape.rs` parses it in the Kernel. Shared case files live in `kernel-rs/kernel/src/`.
 - `scripts/konae.ts` is the `konae` CLI. Its remote commands are calls to the owner's MCP, and `src/deployments/release.ts` holds the publish sequence the editor runs too. `src/lib/app-folder.ts` writes the files every app folder carries, its own `AGENTS.md` among them.

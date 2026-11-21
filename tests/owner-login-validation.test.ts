@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-const ownerLogin = readFileSync(new URL("../kernel-rs/konae/src/owner-login.html", import.meta.url), "utf8");
+const ownerLogin = readFileSync(new URL("../kernel-rs/konae/src/owners/login.html", import.meta.url), "utf8");
 
 function section(start: string, end: string) {
   const from = ownerLogin.indexOf(start);

@@ -50,6 +50,8 @@ async function exportFolder(kernel: Kernel, deploymentId: string): Promise<Folde
       runtime: await readFile(path.join(repo, "src/mcp/runtime.js"), "utf8"),
       staticArtifact: await readFile(path.join(repo, "src/lib/static-artifact.js"), "utf8"),
       localBuilder: await readFile(path.join(repo, "src/lib/local-builder.js"), "utf8"),
+      parserSource: await readFile(path.join(repo, "node_modules/@babel/parser/lib/index.js"), "utf8"),
+      parserLicense: await readFile(path.join(repo, "node_modules/@babel/parser/LICENSE"), "utf8"),
     }));
     return entries;
   } finally {

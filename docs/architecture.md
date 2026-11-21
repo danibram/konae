@@ -68,13 +68,13 @@ The Kernel groups code under `kernel-rs/kernel/src/` by the decisions it makes. 
 | --- | --- |
 | `server/` | Startup, route composition, runtime MCP, transfer protocol, middleware, and operator commands |
 | `deployments/` | The live Deployment, publishing, artifact activation, and applied settings |
-| `app_folders/` | Folder layout, startup from an App Folder, saved sources, import, and export |
+| `app_folders/` | Folder layout, startup from an app folder, saved sources, import, and export |
 | `app_accounts/` | Signup Policy, account verification, sessions, invitations, and Google sign-in |
 | `app_data/` | App database connections, schema changes, Owner SQL, and app database backups |
 | `actions/` | Action declarations, bindings, SQL rules, and execution |
 | `files/` | File access policy, the app's index, upload, listing, reads, and deletion |
 | `functions/` | Manifest and artifact checks, HTTP admission, worker reuse, and transactions for Server Actions called by Functions |
-| `integrations/` | HTTP Actions, callers and signatures, and the Call Action outbox |
+| `integrations/` | HTTP Actions, callers and signatures, and the call action outbox |
 | `routing/` | Hostnames, domains, path addresses, pages, static responses, and SEO |
 | `modules/` | The registry, module state, options, and dependencies |
 | `installation/`, `copies/` | Installation stores, mail delivery, maintenance, copies, restore, and revocation records |

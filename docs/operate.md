@@ -106,6 +106,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `KONAE_KERNEL_PORT` | `8787` (`8790` under `bun run dev:local`, `8796` under `konae dev`) | Port the Kernel listens on. |
+| `KONAE_EXECUTION_MODE` | `live` | Set to `test` for a loopback Kernel that records test effects and disables installation copies. Test mode requires a loopback `KONAE_BIND`. |
 | `KONAE_BIND` | `127.0.0.1` (`0.0.0.0` in both images) | Address the Kernel listens on. |
 | `KONAE_DATA_DIR` | `/data` (`/kernel` in the `kernel` image, `data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory. See [Data directory and copies](#data-directory-and-copies). |
 | `KONAE_FUNCTIONS_RUNNER` | unset (the runner path in both images) | Absolute path to the packaged JavaScript worker. When set, the Kernel requires either `KONAE_FUNCTIONS_CGROUP` or explicit development mode. |
@@ -151,7 +152,13 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_COPY_S3` | unset | `1` sends scheduled copies to `copies/` in `KONAE_S3_BUCKET`. |
 | `KONAE_COPY_INTERVAL_SECONDS` | `3600` | Seconds between copies when a copy target is set. The first copy runs at startup. |
 | `KONAE_COPY_HEALTH_DIR` | `$KONAE_DATA_DIR/.copy-health` | Directory for per-target attempt records and verified restore receipts. |
+| `KONAE_COPY_STAGE_BYTES` | available staging space | Upper bound in bytes for the local staging area of a copy. Available disk space can lower the bound. |
+| `KONAE_COPY_READERS` | `512` | Maximum number of open file readers the Kernel can hold while preparing a copy. |
 | `KONAE_COPY_SECRET` | unset | Secret of at least 32 characters that encrypts every file of a copy sent to S3 with AES-256-GCM. `restore` needs the same secret to open such a copy. The secret also signs each copy's manifest and each revocation entry sent to S3, and `restore` from S3 refuses a copy or an entry whose signature is missing or wrong. Directory copies stay unencrypted and unsigned. |
+| `KONAE_COPY_V3_DIR` | unset | Local block-copy repository outside the data directory. The path ends in `copies-v3/<32 lowercase hex digits>`. Requires `KONAE_COPY_SECRET`. |
+| `KONAE_COPY_V3_S3` | unset | 32-digit lowercase hex ID for a block-copy repository in the configured S3 bucket. Use a different ID for each repository. Requires `KONAE_COPY_SECRET`. |
+| `KONAE_COPY_V3_SECRET` | derived from `KONAE_COPY_SECRET` | Optional data secret for new v3 blocks. Use at least 32 bytes. |
+| `KONAE_COPY_V3_PREVIOUS_SECRETS` | unset | JSON array of earlier v3 data secrets. Keep the secrets needed to read retained copies. Each secret needs at least 32 bytes. |
 | `KONAE_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are refused. |
 | `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0014). The public origin, and on `konae` the MCP origin, become `<scheme>://app.<domain>`, and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
 | `KONAE_SCHEME` | `http` for `localhost`, `https` otherwise | Scheme of the derived origins, `http` or `https`. Read only with `KONAE_DOMAIN`. Any other value stops the Kernel. |
