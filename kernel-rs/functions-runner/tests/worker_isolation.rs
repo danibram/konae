@@ -6,7 +6,10 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -137,6 +140,39 @@ fn v8_watchdog_reuses_a_synchronized_worker_after_a_loop() {
         "deadline_exceeded"
     );
     assert_eq!(worker.pid(), Some(pid));
+    let output = invoke(&mut worker, input("/ok", "bob"), Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.body).unwrap(),
+        json!({"alive": true})
+    );
+    assert_eq!(worker.pid(), Some(pid));
+}
+
+#[test]
+fn cancellation_before_watchdog_timeout_reuses_the_runner_worker() {
+    let bundle = Bundle::new(
+        "export async function handle(request, context) { if (new URL(request.url).pathname === '/cancel') { await context.actions.call('wait', {}); } return Response.json({ alive: true }); }",
+    );
+    let mut worker = worker(&bundle, Duration::from_secs(2));
+    let pid = worker.pid().unwrap();
+    let budget = Budget::new(Duration::from_secs(2));
+    let callback_budget = budget.clone();
+    let callback_entered = Arc::new(AtomicBool::new(false));
+    let callback_entered_copy = callback_entered.clone();
+    let mut callback = move |operation: &str, _args: Value| {
+        assert_eq!(operation, "action");
+        callback_entered_copy.store(true, Ordering::Release);
+        callback_budget.cancel();
+        Err("cancelled".into())
+    };
+
+    let error = worker
+        .invoke_with(input("/cancel", "alice"), &budget, &mut callback)
+        .unwrap_err();
+    assert!(callback_entered.load(Ordering::Acquire));
+    assert_eq!(konae_functions_executor::error_code(&error), "cancelled");
+    assert_eq!(worker.pid(), Some(pid));
+
     let output = invoke(&mut worker, input("/ok", "bob"), Duration::from_secs(2)).unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&output.body).unwrap(),

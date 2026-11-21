@@ -329,6 +329,19 @@ mod watchdog_tests {
         assert!(stopped.load(Ordering::Acquire));
         assert!(matches!(watchdog, Watchdog::Empty));
     }
+
+    #[test]
+    fn dropping_an_armed_watchdog_before_its_deadline_keeps_the_isolate_alive() {
+        let mut runtime = deno_core::JsRuntime::new(Default::default());
+        let watchdog = ExecutionWatchdog::arm_at(
+            runtime.v8_isolate().thread_safe_handle(),
+            std::time::Instant::now() + Duration::from_secs(60),
+        );
+
+        drop(watchdog);
+
+        runtime.execute_script("watchdog-test", "1 + 1").unwrap();
+    }
 }
 
 pub fn worker_main() -> Result<()> {
