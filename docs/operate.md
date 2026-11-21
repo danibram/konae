@@ -189,7 +189,7 @@ The editor, the `konae` CLI, the test configurations and an exported folder read
 
 Operators can rehearse a retained restore with a post-cut revocation on an isolated host. [Rehearse loss of the installation volume](./recovery-drill.md).
 
-Each app is one app folder in the data directory. `kernel-rs/kernel/src/layout.rs` names every path, and [the architecture](./architecture.md#the-app-folder) describes each file.
+Each app is one app folder in the data directory. `kernel-rs/kernel/src/app_folders/layout.rs` names every path, and [the architecture](./architecture.md#the-app-folder) describes each file.
 
 ```text
 <KONAE_DATA_DIR>/

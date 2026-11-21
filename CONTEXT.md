@@ -39,7 +39,7 @@ An app as Konae's project list knows it: its ID, its name, its owner, its saved 
 _Avoid_: workspace, repo, app (when the editable source is meant)
 
 **App Folder**:
-The app's files and state. `konae init` writes `konae.json`, `app/`, generated developer files and build scripts. A build creates `dist/`; local development and the Kernel create or use `data/`. The Kernel opens a portable folder with `konae.json`, `app/`, `dist/` and `data/`; it keeps installation state in `.konae/`. An export omits `.konae/`. `kernel-rs/kernel/src/layout.rs` names the Kernel paths (ADR-0001).
+The app's files and state. `konae init` writes `konae.json`, `app/`, generated developer files and build scripts. A build creates `dist/`; local development and the Kernel create or use `data/`. The Kernel opens a portable folder with `konae.json`, `app/`, `dist/` and `data/`; it keeps installation state in `.konae/`. An export omits `.konae/`. `kernel-rs/kernel/src/app_folders/layout.rs` names the Kernel paths (ADR-0001).
 _Avoid_: kit, package, workspace, repo
 
 **Capsule**:
@@ -219,7 +219,7 @@ The person who runs an installation: its settings, its copies, its file store an
 _Avoid_: owner, admin
 
 **Kernel Commands**:
-What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs the installation commands and adds `owner-code-create`, `owner-code-list`, `owner-code-revoke`, `owner-account-suspend`, `owner-account-resume` and, with Clerk, `owner-suspend`. Under Konae the owner tools do what the commands on one app do.
+What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/server/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs the installation commands and adds `owner-code-create`, `owner-code-list`, `owner-code-revoke`, `owner-account-suspend`, `owner-account-resume` and, with Clerk, `owner-suspend`. Under Konae the owner tools do what the commands on one app do.
 _Avoid_: admin page, CLI (that is `konae`)
 
 **Runtime Endpoint**:

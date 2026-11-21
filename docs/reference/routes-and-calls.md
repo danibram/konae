@@ -24,7 +24,7 @@ The editor preview opens one `srcDoc` document without an app URL or page histor
 
 ## HTTP routes
 
-Turn on `http` with `module_set` before a route runs. A first release also needs `actions` on. An action declared `anonymous` may answer one method and path on its Deployment's host, so a project receives a webhook or serves JSON without a server of its own. `kernel-rs/kernel/src/http.rs` implements it, and [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
+Turn on `http` with `module_set` before a route runs. A first release also needs `actions` on. An action declared `anonymous` may answer one method and path on its Deployment's host, so a project receives a webhook or serves JSON without a server of its own. `kernel-rs/kernel/src/integrations/http.rs` implements it, and [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
 
 ```json
 "orders.receive": {
@@ -125,7 +125,7 @@ curl -X POST "https://orders.example.net/hooks/orders" \
 
 ### Webhooks from outside services
 
-A service the owner does not control signs its webhook its own way and posts its own nested JSON. A route takes it as it arrives when its signature names the provider's `"scheme"` and its `"fields"` say where each input sits in the body. `kernel-rs/kernel/src/provider.rs` implements it.
+A service the owner does not control signs its webhook its own way and posts its own nested JSON. A route takes it as it arrives when its signature names the provider's `"scheme"` and its `"fields"` say where each input sits in the body. `kernel-rs/kernel/src/integrations/provider.rs` implements it.
 
 ```json
 "issues.receive": {
@@ -197,7 +197,7 @@ A person reads by the [file rules](./actions.md#runtime-endpoint). With the `fil
 
 ## Calls between apps
 
-Turn on `calls` with `module_set` before an outgoing call runs. A first release also needs `actions` on. An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, so a signing secret or an API key the request needs stays in the Kernel. `kernel-rs/kernel/src/calls.rs` implements it.
+Turn on `calls` with `module_set` before an outgoing call runs. A first release also needs `actions` on. An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, so a signing secret or an API key the request needs stays in the Kernel. `kernel-rs/kernel/src/integrations/calls.rs` implements it.
 
 ```json
 "tasks.escalate": {

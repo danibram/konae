@@ -8,7 +8,7 @@ Konae admits owners it did not invite, and apps admit strangers, so an address s
 
 ### One account core for owners and app users
 
-`kernel-rs/kernel/src/auth.rs` issues every account in a scope. Konae's owners have one scope in `owners.sqlite`, and each Deployment has its own in the app's `data/identity.sqlite`. No outside provider is needed to sign in or to run an installation. Konae may still accept owners from Clerk, which keeps its own accounts.
+`kernel-rs/kernel/src/app_accounts/auth.rs` issues every account in a scope. Konae's owners have one scope in `owners.sqlite`, and each Deployment has its own in the app's `data/identity.sqlite`. No outside provider is needed to sign in or to run an installation. Konae may still accept owners from Clerk, which keeps its own accounts.
 
 - An account is pending, active or suspended. Only an active account gets a session. A session check joins on the state, so a suspension ends live sessions without a sweep, and Konae reads an owner's state on every use of a delegated token.
 - An account holds at most 20 open sessions. A sign-in past that ends the oldest, so one account cannot fill its app's identity file.
