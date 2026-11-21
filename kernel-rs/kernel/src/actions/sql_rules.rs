@@ -1,5 +1,5 @@
 
-use super::refusal::{refuse, Refusal};
+use crate::refusal::{refuse, Refusal};
 use super::{sql_tokens, ActionDefinition, SqlTok, SqlTokKind};
 
 const MUTATION_WORDS: [&str; 4] = ["INSERT", "UPDATE", "DELETE", "REPLACE"];
@@ -95,7 +95,7 @@ fn refused_functions(tokens: &[SqlTok]) -> Vec<String> {
         .windows(2)
         .filter(|pair| matches!(pair[0].kind, SqlTokKind::Word | SqlTokKind::Ident) && pair[1].is_symbol("("))
         .map(|pair| pair[0].text.to_ascii_lowercase())
-        .filter(|name| super::denied_function(name))
+        .filter(|name| crate::app_data::denied_function(name))
         .collect()
 }
 
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn statements_and_schemas_are_refused_with_the_editors_words() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("sql-rule-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../sql-rule-cases.json")).unwrap();
         assert!(cases.len() >= 12);
         for case in cases {
             let outcome = if let Some(schema) = case["schema"].as_str() {

@@ -90,11 +90,11 @@ impl Drop for AppConnection {
 pub fn open(path: &Path) -> anyhow::Result<AppConnection> {
     let connection = kept_or_open(path, || {
         let connection = Connection::open(path)?;
-        super::restrict_database(&connection)?;
+        crate::app_data::restrict_database(&connection)?;
         connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
         Ok::<_, anyhow::Error>(connection)
     })?;
-    super::arm_deadline(&connection)?;
+    crate::app_data::arm_deadline(&connection)?;
     // Each mutation starts with a fresh last inserted rowid.
     unsafe { rusqlite::ffi::sqlite3_set_last_insert_rowid(connection.handle(), 0) };
     Ok(connection)
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn a_kept_connection_is_lent_again() {
         let path = scratch("lent");
-        super::super::initialize_database(&path).unwrap();
+        crate::initialize_database(&path).unwrap();
         Connection::open(&path).unwrap().execute_batch("CREATE TABLE t(x)").unwrap();
         assert_eq!(count(&path), 0);
         assert_eq!(pool().by_path.get(&path).map(Vec::len), Some(1));
@@ -205,19 +205,19 @@ mod tests {
     #[test]
     fn a_file_renamed_over_the_path_is_read_and_not_the_old_one() {
         let path = scratch("renamed");
-        super::super::initialize_database(&path).unwrap();
+        crate::initialize_database(&path).unwrap();
         Connection::open(&path).unwrap().execute_batch("CREATE TABLE t(x)").unwrap();
         assert_eq!(count(&path), 0);
         let replacement = path.with_extension("next.sqlite");
         Connection::open(&replacement).unwrap().execute_batch("CREATE TABLE t(x); INSERT INTO t VALUES (1), (2)").unwrap();
-        super::super::replace_database_file(&replacement, &path).unwrap();
+        crate::replace_database_file(&replacement, &path).unwrap();
         assert_eq!(count(&path), 2, "the kept connection to the old file is not lent");
     }
 
     #[test]
     fn a_borrower_does_not_see_the_last_insert_of_an_earlier_one() {
         let path = scratch("rowid");
-        super::super::initialize_database(&path).unwrap();
+        crate::initialize_database(&path).unwrap();
         Connection::open(&path).unwrap().execute_batch("CREATE TABLE t(x)").unwrap();
         open(&path).unwrap().execute("INSERT INTO t VALUES (1)", []).unwrap();
         let connection = open(&path).unwrap();
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn a_closed_wal_database_opens_read_only() {
         let path = scratch("read-only");
-        super::super::initialize_database(&path).unwrap();
+        crate::initialize_database(&path).unwrap();
         Connection::open(&path).unwrap().execute_batch("CREATE TABLE t(x); INSERT INTO t VALUES (1)").unwrap();
         assert_eq!(count(&path), 1);
         forget(&path);
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn a_kept_connection_starts_a_new_deadline() {
         let path = scratch("deadline");
-        super::super::initialize_database(&path).unwrap();
+        crate::initialize_database(&path).unwrap();
         Connection::open(&path).unwrap().execute_batch("CREATE TABLE t(x)").unwrap();
         assert_eq!(count(&path), 0);
         std::thread::sleep(std::time::Duration::from_millis(2100));

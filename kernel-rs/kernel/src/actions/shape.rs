@@ -1,8 +1,8 @@
 
 use serde_json::Value;
 
-use super::refusal::{refuse, Refusal};
-use super::{ActionDefinition, ActionProgram};
+use crate::refusal::{refuse, Refusal};
+use crate::{ActionDefinition, ActionProgram};
 
 pub const MAX_ACTIONS: usize = 100;
 const MAX_NAME_CHARS: usize = 100;
@@ -27,7 +27,7 @@ pub fn read(source: &str) -> anyhow::Result<ActionProgram> {
                 if let Err(refused) = check_types(name, &actions[*name]) {
                     for earlier in &names[..at] {
                         let action: ActionDefinition = serde_json::from_value(actions[*earlier].clone())?;
-                        super::validate_action(earlier, &action)?;
+                        crate::validate_action(earlier, &action)?;
                     }
                     return Err(refused.into());
                 }
@@ -121,11 +121,11 @@ pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
     names.sort();
     check_names(&names)?;
     for name in names {
-        super::validate_action(name, &program.actions[name])?;
+        crate::validate_action(name, &program.actions[name])?;
     }
-    super::http::validate_routes(program)?;
-    super::page::check_program(program)?;
-    super::calls::check_program(program)
+    crate::http::validate_routes(program)?;
+    crate::page::check_program(program)?;
+    crate::calls::check_program(program)
 }
 
 /// The checks that come before an action's SQL: its name, access, kind,
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn the_kernel_refuses_the_action_shapes_the_editor_refuses_with_the_same_message() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("action-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../action-cases.json")).unwrap();
         assert!(cases.len() >= 25);
         for case in cases {
             let source = serde_json::json!({"version": 1, "actions": case["actions"]}).to_string();
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn page_declarations_match_the_editor_refusals() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("page-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../page-cases.json")).unwrap();
         for case in cases {
             let source = serde_json::json!({"version": 1, "actions": case["actions"]}).to_string();
             let outcome = super::read(&source).map(|_| ()).map_err(|error_value| {

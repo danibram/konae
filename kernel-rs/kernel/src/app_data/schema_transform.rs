@@ -12,9 +12,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    denied_function,
+    app_data::{denied_function, schema_change},
     refusal::{Refusal, refuse},
-    schema_change,
 };
 
 const FORMAT_VERSION: u32 = 1;
@@ -1172,7 +1171,7 @@ mod tests {
     #[test]
     fn shared_static_cases_run_through_parse_with_exact_words() {
         let cases: serde_json::Value =
-            serde_json::from_str(include_str!("schema-transform-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../schema-transform-cases.json")).unwrap();
         for case in cases["cases"]
             .as_array()
             .unwrap()
@@ -1200,7 +1199,7 @@ mod tests {
     #[test]
     fn shared_runtime_cases_run_through_sqlite_engine() {
         let cases: serde_json::Value =
-            serde_json::from_str(include_str!("schema-transform-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../schema-transform-cases.json")).unwrap();
         for case in cases["cases"]
             .as_array()
             .unwrap()

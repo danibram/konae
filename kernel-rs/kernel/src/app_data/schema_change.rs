@@ -1,5 +1,6 @@
 
-use super::{denied_function, limit_database_size, notify, refusal::refuse, ActionProgram, MAX_APP_DATABASE_BYTES};
+use super::{denied_function, limit_database_size, MAX_APP_DATABASE_BYTES};
+use crate::{actions::ActionProgram, notify, refusal::refuse};
 use anyhow::Result;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, OptionalExtension};
@@ -98,7 +99,7 @@ pub(crate) fn is_internal_table(name: &str) -> bool {
 /// transaction, and checks that every action of `program` prepares against
 /// the result. Nothing is kept when any step fails.
 pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>) -> Result<Change> {
-    if let Some(refusal) = super::sql_rules::schema_refusal(schema) {
+    if let Some(refusal) = crate::actions::sql_rules::schema_refusal(schema) {
         anyhow::bail!(refusal);
     }
     let scratch = Scratch::load(schema)?;
@@ -176,7 +177,7 @@ pub fn apply_with_transforms(
         drop(connection);
         return apply(path, schema, program, mode);
     }
-    if let Some(refusal) = super::sql_rules::schema_refusal(schema) {
+    if let Some(refusal) = crate::actions::sql_rules::schema_refusal(schema) {
         anyhow::bail!(refusal);
     }
     Scratch::connection(schema)?;
@@ -659,7 +660,7 @@ mod tests {
 
     #[test]
     fn reserved_schema_names_match_the_gate() {
-        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("schema-reserved-cases.json")).unwrap();
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("../schema-reserved-cases.json")).unwrap();
         for case in cases {
             let error = schema_connection(case["schema"].as_str().unwrap()).unwrap_err();
             crate::refusal::assert_case::<()>(&case, Err(crate::refusal::of(&error).expect("coded schema refusal").clone()));
@@ -991,7 +992,7 @@ mod tests {
 
     #[test]
     fn the_schema_change_cases_answer_as_written() {
-        let file: Value = serde_json::from_str(include_str!("schema-change-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../schema-change-cases.json")).unwrap();
         for case in file["cases"].as_array().unwrap() {
             let (root, path) = database();
             apply(&path, case["live"].as_str().unwrap(), &program(&[]), Mode::Apply(None)).unwrap();
