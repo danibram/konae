@@ -12,14 +12,13 @@ use std::{
 use anyhow::{Context, Result};
 use aws_sdk_s3::Client as S3Client;
 use axum::{
-    Json, Router, ServiceExt,
+    Json, Router,
     body::Body,
     extract::{Path as AxumPath, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use tower::ServiceBuilder;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
@@ -84,7 +83,7 @@ pub use routing::{deployment_for, deployment_for_host, deployment_for_request};
 pub use routing::{deployment_url, safe_slug, content_type};
 
 use auth::{AuthError, AuthService, AuthUser};
-use limits::{Guards, trusted_proxies};
+use limits::Guards;
 
 #[derive(Clone)]
 pub struct AppState {

@@ -1,4 +1,5 @@
 mod settings;
+mod validation;
 mod input;
 mod release;
 mod lookup;
@@ -18,3 +19,6 @@ pub use records::write_record_for_test;
 #[cfg(test)]
 pub(crate) use settings::released_settings;
 pub(crate) use records::{Recorded, persist_settings_and_record};
+
+pub use validation::{validate_import_release, validate_release};
+pub(crate) use validation::validate_published_release;

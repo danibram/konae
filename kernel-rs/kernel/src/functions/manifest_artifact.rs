@@ -406,7 +406,13 @@ pub(crate) mod tests {
                 let source = if case["sourceFromArtifact"] == true { Some(case["artifact"]["manifest"].to_string()) }
                     else { case["source"].as_str().map(str::to_owned) };
                 let manifest = source.as_deref().map(read).transpose()?;
-                let artifact = case.get("artifact").filter(|value| !value.is_null()).map(parse_server_artifact).transpose()?;
+                let mut artifact = case.get("artifact").filter(|value| !value.is_null()).map(parse_server_artifact).transpose()?;
+                if let Some(bytes) = case["filledBundleBytes"].as_u64() {
+                    for bundle in artifact.as_mut().unwrap().bundles.values_mut() {
+                        let padding = "x".repeat(bytes as usize - bundle.len() - 4);
+                        bundle.push_str(&format!("/*{padding}*/"));
+                    }
+                }
                 validate_artifact(manifest.as_ref(), artifact.as_ref())?;
                 Ok(artifact)
             })();

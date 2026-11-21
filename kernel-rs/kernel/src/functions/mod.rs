@@ -1,6 +1,6 @@
 pub mod http;
 pub mod invocation;
-pub mod manifest_artifact;
+mod manifest_artifact;
 pub mod runtime;
 
 pub use manifest_artifact::*;

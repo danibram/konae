@@ -627,5 +627,33 @@
     ],
     "code": "function.mount-conflict",
     "message": "Function other mount /api/orders/item overlaps function orders."
+  },
+  {
+    "name": "function names start with a letter",
+    "source": "{\"version\":1,\"functions\":{\"1handler\":{}}}",
+    "files": [],
+    "modules": {
+      "functions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [],
+    "code": "function.name-invalid",
+    "message": "Function 1handler must have a name of 1 to 64 ASCII letters, digits, underscores or hyphens, starting with a letter."
+  },
+  {
+    "name": "function count is capped before reading declarations",
+    "source": "{\"version\":1,\"functions\":{\"f1\":{},\"f2\":{},\"f3\":{},\"f4\":{},\"f5\":{},\"f6\":{},\"f7\":{},\"f8\":{},\"f9\":{},\"f10\":{},\"f11\":{},\"f12\":{},\"f13\":{},\"f14\":{},\"f15\":{},\"f16\":{},\"f17\":{},\"f18\":{},\"f19\":{},\"f20\":{},\"f21\":{},\"f22\":{},\"f23\":{},\"f24\":{},\"f25\":{},\"f26\":{},\"f27\":{},\"f28\":{},\"f29\":{},\"f30\":{},\"f31\":{},\"f32\":{},\"f33\":{}}}",
+    "files": [],
+    "modules": {
+      "functions": {
+        "on": true
+      }
+    },
+    "actions": {},
+    "staticPaths": [],
+    "code": "function.count-over",
+    "message": "functions.json may declare at most 32 functions."
   }
 ]

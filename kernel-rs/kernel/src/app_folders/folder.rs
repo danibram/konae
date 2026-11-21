@@ -162,7 +162,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         schema_confirmation: None,
     };
     if candidate_sources || rebuilt || fresh_sources { runtime::validate_release(state, &input, None).await?; }
-    else { runtime::validate_published_release(state, &input, None).await?; }
+    else { crate::deployments::validate_published_release(state, &input, None).await?; }
     let program: crate::ActionProgram = serde_json::from_str(&actions)?;
     let _database = crate::database_lock(state, id).await;
     let database = layout::database(root, id);

@@ -1,4 +1,6 @@
-use crate::*;
+use std::collections::HashMap;
+
+use crate::{AppState, Deployment};
 
 pub fn find_project_deployment(
     deployments: &HashMap<String, Deployment>,
