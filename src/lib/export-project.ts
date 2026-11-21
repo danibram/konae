@@ -56,8 +56,9 @@ export async function createProjectExport(
     const entry = entries.find((item) => item.path === `${SOURCES_FOLDER}/${file}`);
     return entry === undefined ? "" : typeof entry.contents === "string" ? entry.contents : new TextDecoder().decode(entry.contents);
   };
+  const { parserSource, parserLicense } = await import("../kernel/parser-assets");
   const actionsSource = entries.some((item) => item.path === `${SOURCES_FOLDER}/actions.json`) ? text("actions.json") : '{"version":1,"actions":{}}';
-  entries.push(...generatedFiles({ settings, actionsSource, schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource, localBuilder: localBuilderSource }));
+  entries.push(...generatedFiles({ settings, actionsSource, schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource, localBuilder: localBuilderSource, parserSource, parserLicense }));
   const appSourceEntries = entries.filter((entry) => entry.path.startsWith(`${SOURCES_FOLDER}/`)).map((entry) => [
     entry.path.slice(SOURCES_FOLDER.length + 1),
     entry.contents instanceof Uint8Array ? entry.contents : new TextEncoder().encode(entry.contents),

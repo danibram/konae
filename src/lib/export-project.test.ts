@@ -82,6 +82,8 @@ test("a draft's export writes a file that is not text as its bytes", async () =>
   const entries = new Map(readTar(new Uint8Array(await result.blob.arrayBuffer())).map((entry) => [entry.path, entry.contents]));
   expect(entries.get("notes/app/public/logo.png")).toEqual(png);
   expect(entries.get("notes/dist/logo.png")).toEqual(png);
+  expect(new TextDecoder().decode(entries.get("notes/scripts/babel-parser.cjs"))).toContain("parseExpression");
+  expect(new TextDecoder().decode(entries.get("notes/scripts/BABEL-PARSER-LICENSE"))).toContain("Permission is hereby granted");
 });
 
 test("a draft export writes only module states the owner or template chose", async () => {

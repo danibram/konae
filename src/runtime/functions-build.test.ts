@@ -37,15 +37,18 @@ test("editor builds separate ESM bytes and preview never imports server entry", 
   expect(preview.script).not.toContain("SERVER_PRIVATE_BYTES");
 });
 
-test("local and refreshed folder builders run with the old dependency set", async () => {
+test("local and refreshed folder builds validate candidate server bundles", async () => {
   const root = await folder();
   const local = await buildLocal(root);
   expect(local.serverArtifact?.bundles.orders).toContain("SERVER_TOP_LEVEL_SENTINEL");
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
   expect(JSON.stringify(local.artifact.files)).not.toContain("SERVER_PRIVATE_BYTES");
-  const generated = generatedFiles({ settings: { id: project.id, name: project.name, slug: project.slug, visibility: "public", kernel: "0.12.1", manifest: {}, modules: project.modules }, actionsSource: '{"version":1,"actions":{}}', schemaSource: "", runtime: "", staticArtifact: await readFile("src/lib/static-artifact.js", "utf8"), localBuilder: await readFile("src/lib/local-builder.js", "utf8") });
+  const generated = generatedFiles({ settings: { id: project.id, name: project.name, slug: project.slug, visibility: "public", kernel: "0.12.1", manifest: {}, modules: project.modules }, actionsSource: '{"version":1,"actions":{}}', schemaSource: "", runtime: "", staticArtifact: await readFile("src/lib/static-artifact.js", "utf8"), localBuilder: await readFile("src/lib/local-builder.js", "utf8"), parserSource: await readFile("node_modules/@babel/parser/lib/index.js", "utf8"), parserLicense: await readFile("node_modules/@babel/parser/LICENSE", "utf8") });
+  const generatedBuilder = generated.find((entry) => entry.path === "scripts/local-builder.mjs")?.contents as string;
   for (const entry of generated) { await mkdir(path.dirname(path.join(root, entry.path)), { recursive: true }); await writeFile(path.join(root, entry.path), entry.contents); }
-  expect(generated.find((entry) => entry.path === "scripts/build.mjs")?.contents).not.toContain("@babel/parser");
+  expect(generated.find((entry) => entry.path === "scripts/build.mjs")?.contents).toContain("babel-parser.cjs");
+  expect(generated.some((entry) => entry.path === "scripts/babel-parser.cjs")).toBe(true);
+  expect(generated.some((entry) => entry.path === "scripts/BABEL-PARSER-LICENSE")).toBe(true);
   await mkdir(path.join(root, "node_modules"));
   await symlink(path.resolve("node_modules/esbuild"), path.join(root, "node_modules/esbuild"));
   const process = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -53,6 +56,16 @@ test("local and refreshed folder builders run with the old dependency set", asyn
   expect({ exitCode: await process.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
   expect(await readFile(path.join(root, "app/package-lock.json"), "utf8")).toBe(files["package-lock.json"]);
+
+  await writeFile(path.join(root, "scripts/local-builder.mjs"), `export async function bundleModule() { return { script: "", styles: "" }; }
+export async function bundleFunctions(app, manifest) { return { version: 1, abi: "konae-functions/1", manifest, bundles: { orders: 'if (false) import("dep"); export const handle = () => null;' } }; }
+`);
+  const malformed = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const [malformedCode, malformedError] = await Promise.all([malformed.exited, new Response(malformed.stderr).text()]);
+  expect(malformedCode).not.toBe(0);
+  expect(malformedError).toContain("Function orders bundle must be a self-contained ESM module exporting handle.");
+  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
+  await writeFile(path.join(root, "scripts/local-builder.mjs"), generatedBuilder);
 
   await writeFile(path.join(root, "app/functions/orders.ts"), "export default () => null;");
   const invalid = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });

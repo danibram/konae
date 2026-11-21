@@ -102,7 +102,7 @@ export function secretNames(actionsSource: string): string[] {
  * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
  * both local build doors run.
  */
-export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string }): FolderEntry[] {
+export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
   return [
@@ -117,6 +117,8 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
     { path: "scripts/local-builder.mjs", contents: input.localBuilder },
+    { path: "scripts/babel-parser.cjs", contents: input.parserSource },
+    { path: "scripts/BABEL-PARSER-LICENSE", contents: input.parserLicense },
     { path: "scripts/runtime.js", contents: input.runtime },
   ];
 }
@@ -318,7 +320,7 @@ let serverArtifact;
 if (functions && Object.keys(functions.functions).length) {
   validateFunctions(functions, { ...functionContext, staticPaths: Object.keys(artifact.files) });
   serverArtifact = await bundleFunctions(app, functions, development);
-  validateServerArtifactEnvelope(functions, serverArtifact);
+  validateServerArtifact(functions, serverArtifact);
 }
 const server = path.join(root, 'server');
 await rm(server, { recursive: true, force: true });

@@ -20,15 +20,19 @@ const settings: AppSettings = {
   id: "notes-1", name: "Notes", slug: "notes", visibility: "private",
   signupPolicy: { mode: "invitation" }, signInMethods: ["password"], kernel: "0.1.0", manifest: { version: 1, routing: "pages" },
 };
+const repo = path.resolve(import.meta.dir, "../..");
+const parserSource = readFileSync(path.join(repo, "node_modules/@babel/parser/lib/index.js"), "utf8");
+const parserLicense = readFileSync(path.join(repo, "node_modules/@babel/parser/LICENSE"), "utf8");
+const generated = (input: Omit<Parameters<typeof generatedFiles>[0], "parserSource" | "parserLicense">) => generatedFiles({ ...input, parserSource, parserLicense });
 
 test("the app folder's AGENTS.md tells a person or agent to escape text written into the page", () => {
-  const files = generatedFiles({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "" });
+  const files = generated({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "" });
   const guide = files.find((file) => file.path === "AGENTS.md")?.contents as string;
   expect(guide).toContain("`textContent` or the template's `escapeHtml`, in attributes too");
 });
 
 test("the folder's .env.example names the image of the Kernel version its konae.json carries", () => {
-  const entries = (kernel: string) => generatedFiles({ settings: { ...settings, kernel }, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "" });
+  const entries = (kernel: string) => generated({ settings: { ...settings, kernel }, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "" });
   const env = (kernel: string) => entries(kernel).find((file) => file.path === ".env.example")?.contents as string;
   expect(env("0.6.0")).toContain("\nKONAE_KERNEL_IMAGE=ghcr.io/danibram/konae-kernel:0.6.0\n");
   expect(env("0.7.1")).toContain("\nKONAE_KERNEL_IMAGE=ghcr.io/danibram/konae-kernel:0.7.1\n");
@@ -38,7 +42,7 @@ test("the folder's .env.example names the image of the Kernel version its konae.
 });
 
 test("the folder's AGENTS.md says when dist/ needs npm install and when it does not", () => {
-  const files = generatedFiles({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "" });
+  const files = generated({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "" });
   const guide = files.find((file) => file.path === "AGENTS.md")?.contents as string;
   const build = JSON.parse(files.find((file) => file.path === "package.json")?.contents as string).scripts.build;
   expect(build).toBe("node scripts/build.mjs");
@@ -48,10 +52,9 @@ test("the folder's AGENTS.md says when dist/ needs npm install and when it does 
 });
 
 test("a generated scripts/build.mjs builds its folder", () => {
-  const repo = path.resolve(import.meta.dir, "../..");
   const root = mkdtempSync(path.join(os.tmpdir(), "konae-generated-folder-"));
   try {
-    const entries = generatedFiles({
+    const entries = generated({
       settings,
       actionsSource: `{"version":1,"actions":{}}`,
       schemaSource: "",

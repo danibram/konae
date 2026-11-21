@@ -46,7 +46,7 @@ import { importWithLocalKernel, rehearsePulledSnapshot } from "./rehearse";
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
-type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; typeScriptLibs: Record<string, string> };
+type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string; typeScriptLibs: Record<string, string> };
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -514,13 +514,10 @@ async function hasPackageBuild(root: string) {
 }
 
 async function refreshPageBuilder(root: string, sdk: boolean, authored: ReadonlySet<string> = new Set()) {
-  const buildScript = (await folderFiles(root, await readSettings(root))).find((entry) => entry.path === "scripts/build.mjs")!.contents;
-  const resources = [
-    ["scripts/build.mjs", buildScript],
-    ["scripts/local-builder.mjs", embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8")],
-    ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
-    ...(sdk ? [["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")] as const] : []),
-  ] as const;
+  const generated = await folderFiles(root, await readSettings(root));
+  const resources = generated.filter((entry) => entry.path === "scripts/build.mjs" || entry.path === "scripts/local-builder.mjs"
+    || entry.path === "scripts/static-artifact.mjs" || entry.path === "scripts/babel-parser.cjs" || entry.path === "scripts/BABEL-PARSER-LICENSE"
+    || sdk && entry.path === "scripts/runtime.js").map(({ path: relative, contents }) => [relative, contents] as const);
   for (const [relative, contents] of resources) {
     if (authored.has(relative)) continue;
     const target = path.join(root, relative);
@@ -901,6 +898,8 @@ async function folderFiles(root: string, settings: AppSettings) {
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
     localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),
+    parserSource: embeddedResources?.parserSource ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/lib/index.js"), "utf8"),
+    parserLicense: embeddedResources?.parserLicense ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/LICENSE"), "utf8"),
   });
 }
 

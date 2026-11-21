@@ -8,12 +8,12 @@ export type FunctionsManifest = { version: 1; functions: Record<string, Function
 export type ServerArtifact = { version: 1; abi: typeof FUNCTIONS_ABI; manifest: FunctionsManifest; bundles: Record<string, string> };
 export type FunctionsContext = { files: Iterable<string>; modules?: Record<string, { on?: boolean }>; actions?: Record<string, unknown>; staticPaths?: string[] };
 
-type BundleAstNode = { type: string; [key: string]: unknown };
-
-function bundleAstNode(value: unknown): value is BundleAstNode {
+function functionsContract(refuse: (code: Parameters<typeof refusal>[0], message: string) => Error = (code, message) => Object.assign(new Error(message), { code }), parseBundle: typeof parseEsm) {
+  const FUNCTIONS_ABI = "konae-functions/1";
+  const refusal = refuse;
+function bundleAstNode(value: unknown): value is { type: string; [key: string]: unknown } {
   return value !== null && typeof value === "object" && !Array.isArray(value) && typeof (value as { type?: unknown }).type === "string";
 }
-
 function bundleBindingHasHandle(value: unknown): boolean {
   const pending = [value];
   while (pending.length) {
@@ -22,18 +22,13 @@ function bundleBindingHasHandle(value: unknown): boolean {
     if (current.type === "Identifier" && current.name === "handle") return true;
     if (current.type === "RestElement") pending.push(current.argument);
     if (current.type === "AssignmentPattern") pending.push(current.left);
-    if (current.type === "ArrayPattern" && Array.isArray(current.elements)) {
-      for (const element of current.elements) pending.push(element);
-    }
-    if (current.type === "ObjectPattern" && Array.isArray(current.properties)) {
-      for (const property of current.properties) {
-        if (bundleAstNode(property)) pending.push(property.type === "RestElement" ? property.argument : property.value);
-      }
+    if (current.type === "ArrayPattern" && Array.isArray(current.elements)) for (const element of current.elements) pending.push(element);
+    if (current.type === "ObjectPattern" && Array.isArray(current.properties)) for (const property of current.properties) {
+      if (bundleAstNode(property)) pending.push(property.type === "RestElement" ? property.argument : property.value);
     }
   }
   return false;
 }
-
 function bundleExportedHandle(value: unknown): boolean {
   if (!bundleAstNode(value) || value.type !== "ExportNamedDeclaration") return false;
   const declaration = value.declaration;
@@ -45,15 +40,12 @@ function bundleExportedHandle(value: unknown): boolean {
   return Array.isArray(value.specifiers) && value.specifiers.some((specifier) => {
     if (!bundleAstNode(specifier) || !bundleAstNode(specifier.exported)) return false;
     const exported = specifier.exported;
-    return exported.type === "Identifier" && exported.name === "handle"
-      || exported.type === "StringLiteral" && exported.value === "handle";
+    return exported.type === "Identifier" && exported.name === "handle" || exported.type === "StringLiteral" && exported.value === "handle";
   });
 }
-
 function validServerBundle(source: string): boolean {
   let program: unknown;
-  try { program = parseEsm(source, { sourceType: "module", createImportExpressions: true }).program; }
-  catch { return false; }
+  try { program = parseBundle(source, { sourceType: "module", createImportExpressions: true }).program; } catch { return false; }
   let exportsHandle = false;
   const pending = [program];
   while (pending.length) {
@@ -69,10 +61,6 @@ function validServerBundle(source: string): boolean {
   }
   return exportsHandle;
 }
-
-function functionsContract(refuse: (code: Parameters<typeof refusal>[0], message: string) => Error = (code, message) => Object.assign(new Error(message), { code })) {
-  const FUNCTIONS_ABI = "konae-functions/1";
-  const refusal = refuse;
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -160,7 +148,7 @@ function validateFunctions(manifest: FunctionsManifest, context: FunctionsContex
   }
 }
 
-function validateServerArtifactEnvelope(manifest: FunctionsManifest | undefined, input: unknown): ServerArtifact | undefined {
+function validateServerArtifact(manifest: FunctionsManifest | undefined, input: unknown): ServerArtifact | undefined {
   if (input === undefined || input === null) {
     if (manifest && Object.keys(manifest.functions).length) throw refusal("function.artifact-missing", "Declared functions require a Server Artifact.");
     return undefined;
@@ -181,6 +169,11 @@ function validateServerArtifactEnvelope(manifest: FunctionsManifest | undefined,
   }
   if (total > 8388608) throw refusal("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.");
   if (!manifest || canonical(normalized) !== canonical(manifest)) throw refusal("function.artifact-manifest", "Server Artifact manifest does not match functions.json.");
+  for (const name of Object.keys(bundles)) {
+    if (!validServerBundle(bundles[name])) {
+      throw refusal("function.bundle-contract", `Function ${name} bundle must be a self-contained ESM module exporting handle.`);
+    }
+  }
   return { version: 1, abi: FUNCTIONS_ABI, manifest, bundles };
 }
 
@@ -188,20 +181,11 @@ function serverManifestText(manifest: FunctionsManifest, hashes: Record<string, 
   return JSON.stringify({ version: 1, abi: FUNCTIONS_ABI, manifest, hashes }, null, 2);
 }
 
-  return { parseFunctions, validateFunctions, validateServerArtifactEnvelope, serverManifestText };
+  return { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText };
 }
 
-const { parseFunctions, validateFunctions, validateServerArtifactEnvelope, serverManifestText } = functionsContract(refusal);
-export { parseFunctions, validateFunctions, serverManifestText };
-
-export function validateServerArtifact(manifest: FunctionsManifest | undefined, input: unknown): ServerArtifact | undefined {
-  const artifact = validateServerArtifactEnvelope(manifest, input);
-  if (!artifact) return undefined;
-  for (const [name, bundle] of Object.entries(artifact.bundles)) {
-    if (!validServerBundle(bundle)) throw refusal("function.bundle-contract", `Function ${name} bundle must be a self-contained ESM module exporting handle.`);
-  }
-  return artifact;
-}
+const { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText } = functionsContract(refusal, parseEsm);
+export { parseFunctions, validateFunctions, serverManifestText, validateServerArtifact };
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -240,5 +224,6 @@ export async function verifyServerFolder(files: Record<string, Uint8Array>): Pro
 }
 
 export function functionsBuildSupport(): string {
-  return `const { parseFunctions, validateFunctions, validateServerArtifactEnvelope } = (${functionsContract.toString()})();`;
+  return `const parseEsm = createRequire(import.meta.url)('./babel-parser.cjs').parse;
+const { parseFunctions, validateFunctions, validateServerArtifact } = (${functionsContract.toString()})(undefined, parseEsm);`;
 }

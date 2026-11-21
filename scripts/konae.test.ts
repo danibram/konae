@@ -221,6 +221,8 @@ describe("konae CLI", () => {
       await buildLocal(root);
       expect(await readFile(path.join(root, "scripts/static-artifact.mjs"), "utf8")).toContain("rewritePageUrls");
       expect(await readFile(path.join(root, "scripts/runtime.js"), "utf8")).toContain("page: {");
+      expect(await readFile(path.join(root, "scripts/babel-parser.cjs"), "utf8")).toContain("parseExpression");
+      expect(await readFile(path.join(root, "scripts/BABEL-PARSER-LICENSE"), "utf8")).toContain("Permission is hereby granted");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
