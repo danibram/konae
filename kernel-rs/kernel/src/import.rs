@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use crate::deployments::{Recorded, persist_settings_and_record};
 use super::package::InitialPackage;
 use super::schema_change::{self, Change, Mode};
 use super::*;

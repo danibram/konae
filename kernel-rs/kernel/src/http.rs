@@ -609,7 +609,7 @@ async fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &Hea
         }
         let path = crate::layout::identity(&state.data_root, &deployment.id);
         let token = token.to_owned();
-        return match crate::runtime_identity(state, &deployment.id, move || find_key(&path, &token)).await? {
+        return match crate::app_accounts::runtime_identity(state, &deployment.id, move || find_key(&path, &token)).await? {
             Ok(Some(key)) => Ok(Caller::Key(key)),
             Ok(None) => {
                 state.guards.key_failed(&deployment.id, client);
@@ -1137,7 +1137,7 @@ async fn run_route(
         let (worker_state, worker_deployment) = (state.clone(), deployment.clone());
         let (signature, headers) = (signature.clone(), headers.clone());
         let (method, path, query, body) = (http.method.clone(), http.path.clone(), raw_query.to_owned(), body.to_vec());
-        let proof = crate::runtime_identity(state, &deployment.id, move || {
+        let proof = crate::app_accounts::runtime_identity(state, &deployment.id, move || {
             let request = SignedRequest { method: &method, path: &path, query: &query, body: &body };
             check_route_signature(&worker_state, &worker_deployment, &signature, &headers, request)
         }).await;
