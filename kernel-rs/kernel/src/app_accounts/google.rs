@@ -11,7 +11,7 @@ use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
-use super::*;
+use crate::*;
 use auth::{IdentityIntent, IdentityOutcome, VerifiedIdentity};
 
 const FLOW_TTL_SECONDS: i64 = 10 * 60;
@@ -174,7 +174,7 @@ impl Google {
             #[serde(default)]
             crit: Vec<String>,
         }
-        let header: Header = super::base64url(parts[0])
+        let header: Header = crate::base64url(parts[0])
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .ok_or(CHECKS)?;
@@ -182,14 +182,14 @@ impl Google {
             return Err(CHECKS);
         }
         let key = self.key(&header.kid).await.ok_or(CHECKS)?;
-        let (n, e, signature) = match (super::base64url(&key.n), super::base64url(&key.e), super::base64url(parts[2])) {
+        let (n, e, signature) = match (crate::base64url(&key.n), crate::base64url(&key.e), crate::base64url(parts[2])) {
             (Ok(n), Ok(e), Ok(signature)) => (n, e, signature),
             _ => return Err(CHECKS),
         };
         RsaPublicKeyComponents { n, e }
             .verify(&RSA_PKCS1_2048_8192_SHA256, format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
             .map_err(|_| CHECKS)?;
-        let claims: Value = super::base64url(parts[1])
+        let claims: Value = crate::base64url(parts[1])
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .ok_or(CHECKS)?;
@@ -801,7 +801,7 @@ mod tests {
     }
 
     fn signed(kid: &str, claims: &Value) -> String {
-        let key = RsaKeyPair::from_pkcs8(include_bytes!("../../test-fixtures/clerk/test-key.pk8")).unwrap();
+        let key = RsaKeyPair::from_pkcs8(include_bytes!("../../../test-fixtures/clerk/test-key.pk8")).unwrap();
         let message = format!(
             "{}.{}",
             encode(json!({"alg": "RS256", "kid": kid}).to_string().as_bytes()),
@@ -824,7 +824,7 @@ mod tests {
                     let fake = jwks_fake.clone();
                     async move {
                         fake.key_fetches.fetch_add(1, Ordering::SeqCst);
-                        ([(header::CACHE_CONTROL, "public, max-age=300")], include_str!("../../test-fixtures/clerk/jwks.json"))
+                        ([(header::CACHE_CONTROL, "public, max-age=300")], include_str!("../../../test-fixtures/clerk/jwks.json"))
                     }
                 }),
             )

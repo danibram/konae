@@ -9,7 +9,7 @@ use axum::{
 use base64::Engine;
 use serde_json::Value;
 
-use super::BuildArtifact;
+use crate::BuildArtifact;
 
 pub const ROUTING_MESSAGE: &str = "Routing must be \"pages\" or \"spa\".";
 #[derive(Clone, Copy, Debug, PartialEq)]

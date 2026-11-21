@@ -1,6 +1,6 @@
 
-use super::refusal::{refuse, Refusal};
-use super::*;
+use crate::refusal::{refuse, Refusal};
+use crate::*;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -369,7 +369,7 @@ fn then(name: &str, value: Option<&Value>, inputs: &[&str]) -> Result<Option<The
         Some(Value::Object(mapped)) => mapped.clone(),
         Some(_) => return Err(invalid()),
     };
-    if mapped.len() > super::action_shape::MAX_ACTIONS || mapped.iter().any(|(key, pointer)| key.is_empty() || !pointer.is_string()) {
+    if mapped.len() > crate::action_shape::MAX_ACTIONS || mapped.iter().any(|(key, pointer)| key.is_empty() || !pointer.is_string()) {
         return Err(invalid());
     }
     let mut pairs: Vec<(String, String)> =
@@ -511,11 +511,11 @@ fn host_of(url: &url::Url) -> String {
     url.host_str().unwrap_or("").trim_end_matches('.').to_ascii_lowercase()
 }
 
-fn editor_host(rules: &super::domain::Rules, host: &str) -> bool {
+fn editor_host(rules: &crate::domain::Rules, host: &str) -> bool {
     rules.installation_hosts.iter().any(|editor| editor == host)
 }
 
-fn installation_host(rules: &super::domain::Rules, host: &str) -> bool {
+fn installation_host(rules: &crate::domain::Rules, host: &str) -> bool {
     !rules.suffix.is_empty() && (host == rules.suffix || host.ends_with(&format!(".{}", rules.suffix)))
 }
 
@@ -524,12 +524,12 @@ fn installation_host(rules: &super::domain::Rules, host: &str) -> bool {
 /// calls. The cases are in release-cases.json, which the Validation Gate
 /// runs too.
 /// `secrets` is the app's secrets store (`http::secrets_store`).
-pub fn check_release(rules: &super::domain::Rules, secrets: &Connection, program: &ActionProgram) -> Result<()> {
-    super::http::require_secrets(secrets, program)?;
+pub fn check_release(rules: &crate::domain::Rules, secrets: &Connection, program: &ActionProgram) -> Result<()> {
+    crate::http::require_secrets(secrets, program)?;
     check_calls(rules, secrets, program)
 }
 
-fn check_calls(rules: &super::domain::Rules, db: &Connection, program: &ActionProgram) -> Result<()> {
+fn check_calls(rules: &crate::domain::Rules, db: &Connection, program: &ActionProgram) -> Result<()> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     for name in names {
@@ -546,7 +546,7 @@ fn check_calls(rules: &super::domain::Rules, db: &Connection, program: &ActionPr
         if let Some(auth) = &call.auth {
             let secret = auth.secret();
             anyhow::ensure!(
-                super::http::project_secret(db, secret)?.is_some(),
+                crate::http::project_secret(db, secret)?.is_some(),
                 refuse(
                     "call.secret-unset",
                     format!("Action {name} calls with the secret {secret}, which is not set for this project. Set it with secret_set before publishing.")
@@ -609,7 +609,7 @@ enum Target {
 
 async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static str, bool)> {
     let host = host_of(url);
-    let rules = super::domain::Rules::of(state);
+    let rules = crate::domain::Rules::of(state);
     if editor_host(&rules, &host) {
         return Err(("editor-host", false));
     }
@@ -617,8 +617,8 @@ async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static st
         return Ok(Target::App(deployment));
     }
     // A name the app held before hostname_set reaches it, as the 308 does for a browser.
-    if let Some(id) = super::hostname::held_by(state, &host) {
-        if let Some(deployment) = super::deployment_by_id(state, &id).await {
+    if let Some(id) = crate::hostname::held_by(state, &host) {
+        if let Some(deployment) = crate::deployment_by_id(state, &id).await {
             return Ok(Target::App(deployment));
         }
     }
@@ -955,7 +955,7 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
     .await;
     match queued {
         Ok(Ok(Some(id))) => {
-            super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Call(name.to_owned()));
+            crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Call(name.to_owned()));
             wake().notify_one();
             Json(json!({"result": {"callId": id, "queued": true}})).into_response()
         }
@@ -1292,7 +1292,7 @@ fn nonce() -> String {
 }
 
 fn caller_address(deployment_id: &str) -> IpAddr {
-    let digest = super::digest(deployment_id.as_bytes());
+    let digest = crate::digest(deployment_id.as_bytes());
     let bytes = hex::decode(&digest[..14]).unwrap_or_default();
     let mut octets = [0u8; 16];
     octets[0] = 0xfd;
@@ -1313,7 +1313,7 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
         finish(&data_root, &job.id, &attempt, None)?;
         return Ok(());
     }
-    if super::maintenance::pause(&data_root, &deployment.id).is_some() {
+    if crate::maintenance::pause(&data_root, &deployment.id).is_some() {
         return release(&data_root, &job.id, PAUSE_WAIT_MS, false, &Attempt::default());
     }
     let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
@@ -1360,7 +1360,7 @@ async fn send(
     let secret = match &call.auth {
         None => None,
         Some(auth) => {
-            let found = super::http::read_secrets(&state.data_root, &deployment.id).and_then(|db| super::http::project_secret(&db, auth.secret()));
+            let found = crate::http::read_secrets(&state.data_root, &deployment.id).and_then(|db| crate::http::project_secret(&db, auth.secret()));
             match found {
                 Ok(Some(value)) => Some(value),
                 Ok(None) => return Err(("secret-unset", false)),
@@ -1374,8 +1374,8 @@ async fn send(
     headers.extend(extra_headers.iter().cloned());
     match (&call.auth, secret) {
         (Some(Auth::Sign { header, .. }), Some(secret)) => {
-            let signed = super::http::SignedRequest { method: &call.method, path: &path, query: &query, body };
-            headers.push((header.clone(), super::http::sign(&secret, now_ms() / 1000, &nonce(), &signed)));
+            let signed = crate::http::SignedRequest { method: &call.method, path: &path, query: &query, body };
+            headers.push((header.clone(), crate::http::sign(&secret, now_ms() / 1000, &nonce(), &signed)));
         }
         (Some(Auth::Key { .. }), Some(secret)) => headers.push(("authorization".into(), format!("Bearer {secret}"))),
         _ => {}
@@ -1397,7 +1397,7 @@ async fn send_in_process(
     headers: &[(String, String)],
     body: &[u8],
 ) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
-    if super::maintenance::pause(&state.data_root, &app.id).is_some() {
+    if crate::maintenance::pause(&state.data_root, &app.id).is_some() {
         return Ok((503, br#"{"error":"This app is paused."}"#.to_vec()));
     }
     let mut map = HeaderMap::new();
@@ -1406,7 +1406,7 @@ async fn send_in_process(
         let name = axum::http::HeaderName::from_bytes(name.as_bytes()).map_err(|_| ("invalid-header", false))?;
         map.insert(name, HeaderValue::from_str(value).map_err(|_| ("invalid-header", false))?);
     }
-    let response = super::http::call_route(state, app, method, path, query, body, &map, caller_address(&caller.id)).await;
+    let response = crate::http::call_route(state, app, method, path, query, body, &map, caller_address(&caller.id)).await;
     let status = response.status().as_u16();
     match axum::body::to_bytes(response.into_body(), MAX_ANSWER_BYTES).await {
         Ok(bytes) => Ok((status, bytes.to_vec())),
@@ -1508,28 +1508,28 @@ async fn run_then(
         run_action(database_path(state, &deployment.id), mutation, params).await
     };
     match result {
-        Ok(ran) => match super::guard::outcome(&then.action, mutation, &ran.answer) {
-            super::guard::Outcome::Refused(message) => {
-                super::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "refused");
-                super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(then.action.clone()));
+        Ok(ran) => match crate::guard::outcome(&then.action, mutation, &ran.answer) {
+            crate::guard::Outcome::Refused(message) => {
+                crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "refused");
+                crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Refused(then.action.clone()));
                 ("refused", Some(message))
             }
             outcome => {
-                super::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "ok");
-                super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Action(then.action.clone()));
-                if matches!(outcome, super::guard::Outcome::Changed) {
-                    super::usage::signal(&state.data_root, &deployment.id, &then.action, mutation, &values, None);
-                    super::notify::record(
+                crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "ok");
+                crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Action(then.action.clone()));
+                if matches!(outcome, crate::guard::Outcome::Changed) {
+                    crate::usage::signal(&state.data_root, &deployment.id, &then.action, mutation, &values, None);
+                    crate::notify::record(
                         state, deployment, &then.action, mutation, &values,
-                        super::notify::Caller { account: None, actor_id: None },
-                        ran.changed(super::now_ms()),
+                        crate::notify::Caller { account: None, actor_id: None },
+                        ran.changed(crate::now_ms()),
                     ).await;
                 }
                 ("done", None)
             }
         },
         Err(error_value) => {
-            super::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "failed");
+            crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "failed");
             ("failed", Some(error_value.to_string()))
         },
     }
@@ -1611,9 +1611,9 @@ mod tests {
     #[test]
     fn release_checks_refuse_what_the_gate_refuses_with_the_same_message() {
         use base64::Engine;
-        let file: Value = serde_json::from_str(include_str!("release-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../release-cases.json")).unwrap();
         let hosts = file["rules"]["installationHosts"].as_array().unwrap();
-        let rules = super::super::domain::Rules {
+        let rules = crate::domain::Rules {
             suffix: file["rules"]["suffix"].as_str().unwrap().to_owned(),
             installation_hosts: hosts.iter().map(|host| host.as_str().unwrap().to_owned()).collect(),
         };
@@ -1622,7 +1622,7 @@ mod tests {
         for case in cases {
             let name = case["case"].as_str().unwrap();
             let root = std::env::temp_dir().join(format!("konae-release-case-{}", uuid::Uuid::new_v4()));
-            let db = super::super::http::secrets_store(&root, "project_a").unwrap();
+            let db = crate::http::secrets_store(&root, "project_a").unwrap();
             for (index, secret) in case["secrets"].as_array().unwrap().iter().enumerate() {
                 // A value that is not base64 when the case says it is no svix key.
                 let value = if secret["svixKey"] == json!(false) {
@@ -1631,9 +1631,9 @@ mod tests {
                     format!("whsec_{}", base64::engine::general_purpose::STANDARD.encode(format!("release-case-key-{index}")))
                 };
                 let set = json!({"name": secret["name"], "value": value, "use": secret["use"]});
-                super::super::http::secrets_call(&db, "project_a", None, "secret_set", &set).unwrap();
+                crate::http::secrets_call(&db, "project_a", None, "secret_set", &set).unwrap();
             }
-            let listed = super::super::http::secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
+            let listed = crate::http::secrets_call(&db, "project_a", None, "secrets_list", &json!({})).unwrap();
             for secret in case["secrets"].as_array().unwrap() {
                 let row = listed["secrets"].as_array().unwrap().iter().find(|row| row["name"] == secret["name"]).unwrap();
                 assert_eq!(row["use"], secret["use"], "{name}: secrets_list answers the use the case set");
@@ -1651,13 +1651,13 @@ mod tests {
     /// The editor runs the same file in src/kernel/calls.test.ts.
     #[test]
     fn declarations_refuse_what_the_editor_refuses_with_the_same_message() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("call-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../call-cases.json")).unwrap();
         assert!(cases.len() >= 40);
         for case in cases {
             let outcome = if let Some(connects) = case.get("connects") {
                 check_connects(&json!({"connects": connects}))
             } else {
-                super::super::action_shape::check_program(&program(&case["actions"]))
+                crate::action_shape::check_program(&program(&case["actions"]))
             };
             crate::refusal::assert_case(&case, outcome);
         }
@@ -1746,7 +1746,7 @@ mod tests {
     fn each_calling_app_gets_its_own_synthetic_client_address() {
         let first = caller_address("dep_one");
         assert_eq!(first, caller_address("dep_one"));
-        assert_ne!(super::super::limits::client_key(first), super::super::limits::client_key(caller_address("dep_two")));
+        assert_ne!(crate::limits::client_key(first), crate::limits::client_key(caller_address("dep_two")));
         assert!(!public_address(first));
     }
 
@@ -1862,7 +1862,7 @@ mod tests {
         assert_eq!(outbox["calls"][0]["then"], json!({"action": "hook.logged", "state": "done", "message": null}));
 
         // A paused app keeps its call waiting, uncounted.
-        super::super::maintenance::pause_for_test(&root, &app.id, true);
+        crate::maintenance::pause_for_test(&root, &app.id, true);
         assert_eq!(enqueue(&state, &app, "hook.send", &json!({})).await.status(), StatusCode::OK);
         assert_eq!(run_once(&state).await.unwrap(), 1);
         let waiting = connection(&root).unwrap().query_row(

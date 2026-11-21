@@ -1,5 +1,5 @@
 
-use super::*;
+use crate::*;
 use auth::{
     AuthSession, IssuedChallenge, NewPassword, Purpose, Verification,
     deployment_scope,
@@ -311,7 +311,7 @@ fn app_delivery(state: &AppState, deployment: &Deployment, email: &str, client: 
         creator: Some(project_creator(state, &deployment.project_id).unwrap_or_else(|| "operator".into())),
         app_name: deployment.project_name.clone(),
         inviter: None,
-        page: format!("{}/_konae/account", super::domain::app_url(state, deployment)),
+        page: format!("{}/_konae/account", crate::domain::app_url(state, deployment)),
     }
 }
 
@@ -432,8 +432,8 @@ pub async fn complete_app(
         })
     })
     .await?;
-    let operation = if purpose == Purpose::Recovery { super::usage::Operation::Login } else { super::usage::Operation::Signup };
-    super::usage::count(&state.data_root, &deployment.id, operation);
+    let operation = if purpose == Purpose::Recovery { crate::usage::Operation::Login } else { crate::usage::Operation::Signup };
+    crate::usage::count(&state.data_root, &deployment.id, operation);
     Ok(session)
 }
 
@@ -494,7 +494,7 @@ pub fn app_session_cookie(cookie_name: &str, session: &AuthSession) -> HeaderVal
     HeaderValue::from_str(&format!(
         "{cookie_name}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
         session.token,
-        super::cookie_secure(cookie_name)
+        crate::cookie_secure(cookie_name)
     ))
     .unwrap()
 }
@@ -573,7 +573,7 @@ async fn signup_app_unverified(
     }
     let auth = app_store(state, deployment)?;
     let session = blocking(move || auth.create_account(account)).await?;
-    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Signup);
+    crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Signup);
     Ok(session)
 }
 
@@ -779,12 +779,12 @@ pub mod tests {
 
     pub async fn app_signup(fixture: &Fixture, host: &str, email: &str) -> Response {
         let body = json!({"email": email, "password": PASSWORD});
-        super::super::signup(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_konae/auth/signup", body)).await
+        crate::signup(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_konae/auth/signup", body)).await
     }
 
     async fn app_login(fixture: &Fixture, host: &str, email: &str, password: &str) -> Response {
         let body = json!({"email": email, "password": password});
-        super::super::login(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_konae/auth/login", body)).await
+        crate::login(State(fixture.state.clone()), host_headers(host), request("POST", host, "/_konae/auth/login", body)).await
     }
 
     pub async fn app_answer(fixture: &Fixture, host: &str, path: &str, token: &str, password: &str) -> Response {
@@ -807,7 +807,7 @@ pub mod tests {
     #[tokio::test]
     async fn app_signup_waits_for_verification_and_a_get_changes_nothing() {
         let fixture = fixture(Verification::Required, true);
-        let login = super::super::login_page(State(fixture.state.clone()), host_headers(APP_HOST)).await;
+        let login = crate::login_page(State(fixture.state.clone()), host_headers(APP_HOST)).await;
         let login = String::from_utf8(axum::body::to_bytes(login.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
         assert!(login.contains("formnovalidate") && login.contains("a link to choose your password"));
         let response = app_signup(&fixture, APP_HOST, "person@example.test").await;
@@ -846,7 +846,7 @@ pub mod tests {
         let mut headers = host_headers(host);
         headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
         let body = json!({"email": email, "password": password});
-        let response = super::super::login(State(fixture.state.clone()), headers, request("POST", host, "/_konae/auth/login", body)).await;
+        let response = crate::login(State(fixture.state.clone()), headers, request("POST", host, "/_konae/auth/login", body)).await;
         let status = response.status();
         let body: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 1 << 16).await.unwrap()).unwrap();
         (status, body["error"].as_str().unwrap_or_default().to_owned())

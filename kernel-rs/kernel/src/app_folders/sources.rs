@@ -573,7 +573,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_digest_matches_every_case_the_editor_runs() {
-        let cases: Value = serde_json::from_str(include_str!("source-digest-cases.json")).unwrap();
+        let cases: Value = serde_json::from_str(include_str!("../source-digest-cases.json")).unwrap();
         for case in cases["cases"].as_array().unwrap() {
             let files = decode_document(case).unwrap();
             let expected = case["digest"].as_str().unwrap();
@@ -859,7 +859,7 @@ mod tests {
 
     #[test]
     fn the_source_rules_match_every_case_the_editor_runs() {
-        let file: Value = serde_json::from_str(include_str!("sources-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../sources-cases.json")).unwrap();
         let cases = file["cases"].as_array().unwrap();
         assert!(cases.len() >= 20);
         for case in cases {

@@ -8,7 +8,7 @@ use crate::Settings;
 
 pub(crate) fn registry() -> &'static Value {
     static REGISTRY: OnceLock<Value> = OnceLock::new();
-    REGISTRY.get_or_init(|| serde_json::from_str(include_str!("modules.json")).expect("modules.json is generated JSON"))
+    REGISTRY.get_or_init(|| serde_json::from_str(include_str!("../modules.json")).expect("modules.json is generated JSON"))
 }
 
 pub fn defaults() -> BTreeMap<String, Value> {
@@ -216,7 +216,7 @@ pub fn check_in_use_action(module: &str, action: &str) -> std::result::Result<()
 }
 
 pub fn release_use_order() -> Vec<String> {
-    let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).expect("module cases are valid JSON");
+    let cases: Vec<Value> = serde_json::from_str(include_str!("../module-cases.json")).expect("module cases are valid JSON");
     cases.into_iter().find(|case| case["rule"] == "release-order").and_then(|case| case["order"].as_array().cloned())
         .unwrap_or_default().into_iter().filter_map(|module| module.as_str().map(str::to_owned)).collect()
 }
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn module_cases_match_the_editor_answers() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../module-cases.json")).unwrap();
         assert!(cases.len() >= 6);
         for case in cases {
             if case["rule"] == "release-order" { continue; }
@@ -594,14 +594,14 @@ mod tests {
 
     #[test]
     fn release_module_use_order_matches_the_shared_case() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../module-cases.json")).unwrap();
         let order = cases.into_iter().find(|case| case["rule"] == "release-order").unwrap()["order"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
         assert_eq!(release_use_order(), order);
     }
 
     #[test]
     fn file_use_cases_match_the_kernel_rule() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../module-use-cases.json")).unwrap();
         for case in cases {
             if case.get("usesFiles").is_none() { continue; }
             let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn auth_use_cases_match_the_kernel_rule() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../module-use-cases.json")).unwrap();
         for case in cases {
             let Some(expected) = case.get("usesAuth") else { continue };
             let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn actions_use_cases_match_the_kernel_rule() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../module-use-cases.json")).unwrap();
         for case in cases {
             let Some(expected) = case.get("usesActions") else { continue };
             let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn http_and_calls_use_cases_match_the_kernel_rule() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../module-use-cases.json")).unwrap();
         for case in cases {
             let Some(files) = case.get("sourceFiles").and_then(Value::as_object) else { continue };
             let files = files.iter().map(|(name, value)| (name.as_str(), value.as_str().unwrap().as_bytes())).collect::<Vec<_>>();

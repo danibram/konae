@@ -1,6 +1,6 @@
 
-use super::refusal::{refuse, Refusal};
-use super::*;
+use crate::refusal::{refuse, Refusal};
+use crate::*;
 use axum::middleware::Next;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -242,7 +242,7 @@ async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&V
     let _project = database_lock(state, &format!("project:{}", found.project_id)).await;
     let _names = database_lock(state, "hostnames").await;
     let current = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
-    super::refusal::check_setting_expected(expected, json!(current.hostname))?;
+    crate::refusal::check_setting_expected(expected, json!(current.hostname))?;
     if current.hostname == hostname {
         return Ok(view(state, &current, false));
     }
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn names_are_checked_by_the_cases() {
-        let file: Value = serde_json::from_str(include_str!("hostname-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../hostname-cases.json")).unwrap();
         let suffix = file["context"]["suffix"].as_str().unwrap();
         let hosts: Vec<String> = serde_json::from_value(file["context"]["installationHosts"].clone()).unwrap();
         let cases = file["cases"].as_array().unwrap();

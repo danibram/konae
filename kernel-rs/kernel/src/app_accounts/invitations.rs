@@ -1,5 +1,5 @@
 
-use super::*;
+use crate::*;
 use accounts::app_store;
 use auth::{AuthSession, IssuedChallenge, NewPassword, Purpose};
 use rusqlite::params;
@@ -146,7 +146,7 @@ pub async fn accept(
             .is_some_and(|current| admits_invitation(&current.signup_policy, email))
     }))
     .await?;
-    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Signup);
+    crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Signup);
     Ok(session)
 }
 
@@ -326,8 +326,8 @@ pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, na
             let app = deployment.id.clone();
             let (value, pending) = off(move || set_suspended(&auth, &user_id, suspend, &root, &app)).await?;
             if let Some(pending) = pending {
-                let entry = super::recovery::Entry::new("app-user", Some(&deployment.id), &text("userId"), "suspended");
-                super::recovery::record(state, entry).await?;
+                let entry = crate::recovery::Entry::new("app-user", Some(&deployment.id), &text("userId"), "suspended");
+                crate::recovery::record(state, entry).await?;
                 pending.finish()?;
             }
             Ok(value)
@@ -358,7 +358,7 @@ pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, na
             // The rows that record the invitations are committed before any
             // message leaves, so a retry with the same key finds them. Each
             // message then goes through the account mail outbox and its budgets.
-            let page = format!("{}/_konae/invitation", super::domain::app_url(state, deployment));
+            let page = format!("{}/_konae/invitation", crate::domain::app_url(state, deployment));
             let invited_by = sender.email.clone();
             // With the development transport the message only reaches the
             // server's mailbox file, so the caller, who holds manage_users,
@@ -877,7 +877,7 @@ mod tests {
                 .unwrap();
             let mut headers = HeaderMap::new();
             headers.insert(header::HOST, HeaderValue::from_static(APP_HOST));
-            super::super::login(State(self.state.clone()), headers, request).await.status()
+            crate::login(State(self.state.clone()), headers, request).await.status()
         }
 
         async fn signup(&self, email: &str) -> StatusCode {
@@ -891,7 +891,7 @@ mod tests {
                 .unwrap();
             let mut headers = HeaderMap::new();
             headers.insert(header::HOST, HeaderValue::from_static(APP_HOST));
-            super::super::signup(State(self.state.clone()), headers, request).await.status()
+            crate::signup(State(self.state.clone()), headers, request).await.status()
         }
     }
 

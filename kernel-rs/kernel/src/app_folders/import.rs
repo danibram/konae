@@ -6,9 +6,9 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use crate::deployments::{Recorded, persist_settings_and_record};
-use super::package::InitialPackage;
-use super::schema_change::{self, Change, Mode};
-use super::*;
+use crate::package::InitialPackage;
+use crate::schema_change::{self, Change, Mode};
+use crate::*;
 
 /// What a backup holds besides the database file of a Data panel backup.
 pub const HOLDS_DATA: &str = "data";
@@ -453,13 +453,13 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
     for table in ["app_sessions", "account_challenges", "entry_links"] {
         connection.execute(&format!("DELETE FROM \"{table}\""), [])?;
     }
-    super::invitations::forget_tokens(&connection)?;
+    crate::invitations::forget_tokens(&connection)?;
     connection.execute_batch("DROP TABLE IF EXISTS main.api_keys")?;
-    super::http::keys_table(&connection)?;
+    crate::http::keys_table(&connection)?;
     if !live.exists() {
         return Ok(());
     }
-    let live_has_keys = super::table_exists(&Connection::open(live)?, "api_keys")?;
+    let live_has_keys = crate::table_exists(&Connection::open(live)?, "api_keys")?;
     connection.execute("ATTACH DATABASE ?1 AS live", [live.to_string_lossy().as_ref()])?;
     connection.execute(
         "INSERT INTO main.app_sessions (token_hash, user_id, expires_at, entered_by)
@@ -473,7 +473,7 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
             let names = statement.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             names
         };
-        let shared = super::http::API_KEY_COLUMNS
+        let shared = crate::http::API_KEY_COLUMNS
             .iter()
             .filter(|name| live_keys.iter().any(|live| live.eq_ignore_ascii_case(name)))
             .map(|name| format!("\"{name}\""))
@@ -697,7 +697,7 @@ mod tests {
         let bo = live.signup("bo@example.test", "bo's password").unwrap();
         {
             let db = Connection::open(root.join("live.sqlite")).unwrap();
-            super::super::http::keys_table(&db).unwrap();
+            crate::http::keys_table(&db).unwrap();
             db.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
         }
         let incoming_path = root.join("incoming.sqlite");
@@ -724,7 +724,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         AuthService::open(root.join("live.sqlite")).unwrap();
         let live = Connection::open(root.join("live.sqlite")).unwrap();
-        super::super::http::keys_table(&live).unwrap();
+        crate::http::keys_table(&live).unwrap();
         live.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
         drop(live);
         let incoming_path = root.join("incoming.sqlite");
@@ -745,7 +745,7 @@ mod tests {
         AuthService::open(&live_path).unwrap();
         {
             let db = Connection::open(&live_path).unwrap();
-            super::super::http::keys_table(&db).unwrap();
+            crate::http::keys_table(&db).unwrap();
             db.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
             let evil = format!("; ATTACH DATABASE '{}' AS o; UPDATE o.t SET v = 'changed'", victim.display());
             db.execute_batch("PRAGMA writable_schema=ON;").unwrap();
@@ -792,7 +792,7 @@ mod tests {
         let incoming_path = root.join("incoming.sqlite");
         AuthService::open(&incoming_path).unwrap();
         let incoming = Connection::open(&incoming_path).unwrap();
-        super::super::http::keys_table(&incoming).unwrap();
+        crate::http::keys_table(&incoming).unwrap();
         incoming.execute_batch(&format!("INSERT INTO api_keys {KEY_ROW} ('uploader', 'uploader-hash', 'Uploader', '[]', '[]', 1, NULL);")).unwrap();
         drop(incoming);
         carry_access(&incoming_path, &root.join("live.sqlite")).unwrap();
@@ -807,7 +807,7 @@ mod tests {
         let live_path = root.join("live.sqlite");
         AuthService::open(&live_path).unwrap();
         let live = Connection::open(&live_path).unwrap();
-        super::super::http::keys_table(&live).unwrap();
+        crate::http::keys_table(&live).unwrap();
         live.execute_batch(&format!(
             "INSERT INTO api_keys {KEY_ROW} ('k-live', 'h1', 'Live', '[]', '[]', 1, NULL), ('k-revoked', 'h2', 'Revoked', '[]', '[]', 1, 5);"
         ))

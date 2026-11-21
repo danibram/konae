@@ -23,7 +23,7 @@ struct Policy {
 
 fn policies(profile: &str) -> Result<Vec<Policy>> {
     let mut rows = Vec::new();
-    for line in include_str!("inventory.tsv").lines().skip(1) {
+    for line in include_str!("../inventory.tsv").lines().skip(1) {
         let fields: Vec<_> = line.split('\t').collect();
         let [binary, scope, component, kind, presence, writer, capture, restore, test] = fields[..] else {
             bail!("Invalid inventory row: {line}");

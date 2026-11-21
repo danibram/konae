@@ -1,6 +1,6 @@
 
-use super::refusal::{refuse, Refusal};
-use super::*;
+use crate::refusal::{refuse, Refusal};
+use crate::*;
 use sha2::Digest;
 use std::sync::{Arc, OnceLock};
 
@@ -28,7 +28,7 @@ pub struct HttpBinding {
     /// The declared callers, each of "signature", "key" and "session".
     pub callers: Option<Vec<String>>,
     /// Input keys and the JSON path each reads from a POST body.
-    pub fields: Option<Vec<(String, Vec<super::provider::Step>)>>,
+    pub fields: Option<Vec<(String, Vec<crate::provider::Step>)>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub struct SignatureBinding {
     /// The header the MAC arrives in; `svix-signature` for the svix scheme.
     pub header: String,
     pub secret: String,
-    pub scheme: super::provider::Scheme,
+    pub scheme: crate::provider::Scheme,
 }
 
 const RESERVED_SEGMENTS: [&str; 4] = ["_konae", "oauth", ".well-known", "mcp"];
@@ -81,7 +81,7 @@ pub fn binding(name: &str, action: &ActionDefinition) -> Result<Option<HttpBindi
     let signature = match record.get("signature") {
         None => None,
         Some(value) => {
-            let (header, secret, scheme) = super::provider::signature(name, method, value)?;
+            let (header, secret, scheme) = crate::provider::signature(name, method, value)?;
             Some(SignatureBinding { header, secret, scheme })
         }
     };
@@ -112,7 +112,7 @@ pub fn binding(name: &str, action: &ActionDefinition) -> Result<Option<HttpBindi
     };
     let fields = match record.get("fields") {
         None => None,
-        Some(value) => Some(super::provider::fields(name, method, action, value)?),
+        Some(value) => Some(crate::provider::fields(name, method, action, value)?),
     };
     Ok(Some(HttpBinding { method: method.to_owned(), path: path.to_owned(), signature, callers, fields }))
 }
@@ -234,14 +234,14 @@ pub fn holds_route_secret(db: &Connection, value: &str) -> Result<bool> {
 /// Whether `secret_set` with these arguments sets a route secret, the only
 /// kind whose value one owner may not reuse across apps.
 pub fn sets_route_secret(a: &Value) -> bool {
-    !super::google::is_client_name(a["name"].as_str().unwrap_or("")) && matches!(a.get("use").and_then(Value::as_str), None | Some("route"))
+    !crate::google::is_client_name(a["name"].as_str().unwrap_or("")) && matches!(a.get("use").and_then(Value::as_str), None | Some("route"))
 }
 
 /// The app's Google OAuth client ID and secret, each when the owner set it.
-pub fn google_client(db: &Connection) -> Result<super::google::StoredClient> {
-    Ok(super::google::StoredClient {
-        id: stored_secret(db, super::google::CLIENT_ID, true)?,
-        secret: stored_secret(db, super::google::CLIENT_SECRET, true)?,
+pub fn google_client(db: &Connection) -> Result<crate::google::StoredClient> {
+    Ok(crate::google::StoredClient {
+        id: stored_secret(db, crate::google::CLIENT_ID, true)?,
+        secret: stored_secret(db, crate::google::CLIENT_SECRET, true)?,
     })
 }
 
@@ -269,7 +269,7 @@ pub fn require_secrets(db: &Connection, program: &ActionProgram) -> Result<()> {
                     secrets.push(signature.secret.clone());
                 }
             }
-            Some(value) if signature.scheme == super::provider::Scheme::Svix && super::provider::svix_key(&value).is_none() => {
+            Some(value) if signature.scheme == crate::provider::Scheme::Svix && crate::provider::svix_key(&value).is_none() => {
                 let secret = &signature.secret;
                 anyhow::bail!(refuse(
                     "route.signature-svix-secret-invalid",
@@ -320,7 +320,7 @@ pub fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployme
                         "name": row.get::<_, String>(0)?,
                         "updatedAt": row.get::<_, i64>(1)?,
                         "use": row.get::<_, String>(2)?,
-                        "svixKey": super::provider::svix_key(&row.get::<_, String>(3)?).is_some(),
+                        "svixKey": crate::provider::svix_key(&row.get::<_, String>(3)?).is_some(),
                     }))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -333,17 +333,17 @@ pub fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployme
             if !((16..=512).contains(&value.len()) && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))) {
                 return Err(refuse("secret.value-invalid", VALUE_INVALID).into());
             }
-            let google_name = super::google::is_client_name(secret);
+            let google_name = crate::google::is_client_name(secret);
             let usage = match (a.get("use").and_then(Value::as_str), google_name) {
                 (None | Some("google"), true) => "google",
-                (Some(_), true) => return Err(refuse("secret.google-names-reserved", super::google::NAMES_RESERVED).into()),
-                (Some("google"), false) => return Err(refuse("secret.google-names-only", super::google::NAMES_ONLY).into()),
+                (Some(_), true) => return Err(refuse("secret.google-names-reserved", crate::google::NAMES_RESERVED).into()),
+                (Some("google"), false) => return Err(refuse("secret.google-names-only", crate::google::NAMES_ONLY).into()),
                 (None | Some("route"), false) => "route",
                 (Some("call"), false) => "call",
                 (Some(_), false) => anyhow::bail!(r#"A secret's use is "route", "call" or "google"."#),
             };
-            if secret == super::google::CLIENT_ID && value.starts_with("GOCSPX-") {
-                return Err(refuse("secret.google-id-looks-like-secret", super::google::ID_LOOKS_LIKE_SECRET).into());
+            if secret == crate::google::CLIENT_ID && value.starts_with("GOCSPX-") {
+                return Err(refuse("secret.google-id-looks-like-secret", crate::google::ID_LOOKS_LIKE_SECRET).into());
             }
             db.execute(
                 "INSERT INTO secrets(name, value, updated_at, use) VALUES(?1, ?2, ?3, ?4)
@@ -355,8 +355,8 @@ pub fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployme
         "secret_delete" => {
             let secret = a["name"].as_str().unwrap_or("");
             if let Some(deployment) = deployment {
-                if super::google::is_client_name(secret) && deployment.sign_in_methods.contains(&super::SignInMethod::Google) {
-                    return Err(refuse("secret.google-still-on", super::google::still_on(secret)).into());
+                if crate::google::is_client_name(secret) && deployment.sign_in_methods.contains(&crate::SignInMethod::Google) {
+                    return Err(refuse("secret.google-still-on", crate::google::still_on(secret)).into());
                 }
                 let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
                 let mut users = program
@@ -374,7 +374,7 @@ pub fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployme
                     users.join(", ")
                 );
                 let callers: Vec<String> =
-                    super::calls::secrets(&program).into_iter().filter(|(_, used)| used == secret).map(|(action, _)| action).collect();
+                    crate::calls::secrets(&program).into_iter().filter(|(_, used)| used == secret).map(|(action, _)| action).collect();
                 anyhow::ensure!(
                     callers.is_empty(),
                     "The published call {} uses {secret}. Publish without that auth before deleting the secret.",
@@ -434,7 +434,7 @@ fn identity_connection(state: &AppState, deployment: &Deployment) -> Result<Conn
 }
 
 fn key_hash(token: &str) -> String {
-    super::digest(token.as_bytes())
+    crate::digest(token.as_bytes())
 }
 
 fn find_key(path: &Path, token: &str) -> Result<Option<ApiKey>> {
@@ -555,7 +555,7 @@ pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str
                 tx.commit()?;
                 pending
             };
-            super::recovery::record(state, super::recovery::Entry::new("api-key", Some(&deployment.id), id, "revoked")).await?;
+            crate::recovery::record(state, crate::recovery::Entry::new("api-key", Some(&deployment.id), id, "revoked")).await?;
             pending.finish()?;
             Ok(json!({"keyId": id, "revoked": true}))
         }
@@ -1155,7 +1155,7 @@ async fn run_route(
         let released = tokio::task::spawn_blocking(move || {
             let _guard = guard;
             identity_connection(&worker_state, &worker_deployment)
-                .and_then(|db| super::provider::release(&db, &path, &key))
+                .and_then(|db| crate::provider::release(&db, &path, &key))
         }).await;
         if let Err(error_value) = released.map_err(anyhow::Error::from).and_then(|result| result) {
             eprintln!("Could not release a delivery on {}: {error_value}", http.path);
@@ -1177,7 +1177,7 @@ fn check_route_signature(
         .map_err(storage_error)?
         .ok_or_else(|| refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."))?;
     let now = now_ms() / 1000;
-    if signature.scheme == super::provider::Scheme::Konae {
+    if signature.scheme == crate::provider::Scheme::Konae {
         let header = headers.get(signature.header.as_str()).and_then(|value| value.to_str().ok());
         let db = identity_connection(state, deployment).map_err(storage_error)?;
         return match verify_signature(&db, &request, &secret, header, now).map_err(storage_error)? {
@@ -1188,17 +1188,17 @@ fn check_route_signature(
         };
     }
     let read = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).map(str::to_owned);
-    match super::provider::verify(&signature.scheme, &signature.header, &secret, &read, request.body, now) {
-        super::provider::Delivery::Valid { key, expires } => {
+    match crate::provider::verify(&signature.scheme, &signature.header, &secret, &read, request.body, now) {
+        crate::provider::Delivery::Valid { key, expires } => {
             let db = identity_connection(state, deployment).map_err(storage_error)?;
-            if super::provider::claim(&db, request.path, &key, expires, now).map_err(storage_error)? {
+            if crate::provider::claim(&db, request.path, &key, expires, now).map_err(storage_error)? {
                 Ok(Some(key))
             } else {
                 Err(refusal(StatusCode::CONFLICT, "replayed-signature"))
             }
         }
-        super::provider::Delivery::Invalid => Err(refusal(StatusCode::UNAUTHORIZED, "invalid-signature")),
-        super::provider::Delivery::Stale => Err(refusal(StatusCode::UNAUTHORIZED, "stale-timestamp")),
+        crate::provider::Delivery::Invalid => Err(refusal(StatusCode::UNAUTHORIZED, "invalid-signature")),
+        crate::provider::Delivery::Stale => Err(refusal(StatusCode::UNAUTHORIZED, "stale-timestamp")),
     }
 }
 
@@ -1226,7 +1226,7 @@ async fn run_verified(
         query
     };
     let input = match &http.fields {
-        Some(fields) => super::provider::project(fields, &table.program.actions[name], &input),
+        Some(fields) => crate::provider::project(fields, &table.program.actions[name], &input),
         None => input,
     };
     let action = &table.program.actions[name];
@@ -1236,7 +1236,7 @@ async fn run_verified(
     };
     let db_path = database_path(state, &deployment.id);
     let _guard = action_lock(state, &deployment.id, &action.kind).await;
-    super::copies::operation::action(state, &deployment.id, name, action, async {
+    crate::copies::operation::action(state, &deployment.id, name, action, async {
         let result = match state.guards.statement_permit(&deployment.id).await {
             Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
             Err(wait) => return rate_limited(wait),
@@ -1245,30 +1245,30 @@ async fn run_verified(
         let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
         match result {
             Ok(ran) => {
-                let changed = match super::guard::outcome(name, action, &ran.answer) {
-                    super::guard::Outcome::Refused(message) => {
+                let changed = match crate::guard::outcome(name, action, &ran.answer) {
+                    crate::guard::Outcome::Refused(message) => {
                         if counted {
-                            super::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
-                            super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
+                            crate::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
+                            crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Refused(name.to_owned()));
                         }
                         return refusal(StatusCode::FORBIDDEN, &message);
                     }
-                    outcome => matches!(outcome, super::guard::Outcome::Changed),
+                    outcome => matches!(outcome, crate::guard::Outcome::Changed),
                 };
                 if counted {
-                    super::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
-                    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
+                    crate::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
+                    crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Route(http.method.clone(), http.path.clone()));
                 }
                 if changed {
                     if counted {
-                        super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+                        crate::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
                     }
                     let account = match &caller {
                         Caller::Person(user) => Some(user.user_id.as_str()),
                         Caller::Key(_) | Caller::Visitor => None,
                     };
-                    let notice = super::notify::Caller { account, actor_id: caller.actor_id() };
-                    super::notify::record(state, deployment, name, action, &input, notice, ran.changed(super::now_ms())).await;
+                    let notice = crate::notify::Caller { account, actor_id: caller.actor_id() };
+                    crate::notify::record(state, deployment, name, action, &input, notice, ran.changed(crate::now_ms())).await;
                 }
                 let mut response = Json(json!({"result": ran.answer})).into_response();
                 response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -1276,7 +1276,7 @@ async fn run_verified(
             }
             Err(error_value) => {
                 if counted {
-                    super::usage::execution(&state.data_root, &deployment.id, name, "route", "failed");
+                    crate::usage::execution(&state.data_root, &deployment.id, name, "route", "failed");
                 }
                 refusal(StatusCode::BAD_REQUEST, &error_value.to_string())
             },
@@ -1307,7 +1307,7 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
         }
     };
     if response.status().is_success() && counted {
-        super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::FileRead);
+        crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::FileRead);
     }
     response.headers_mut().insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
     if !response.headers().contains_key(header::ETAG) {
@@ -1361,7 +1361,7 @@ mod tests {
 
     #[test]
     fn bindings_refuse_what_the_editor_refuses_with_the_same_message() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("http-binding-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../http-binding-cases.json")).unwrap();
         assert!(cases.len() > 15);
         for case in cases {
             let program = program(&case["actions"]);
@@ -1443,7 +1443,7 @@ mod tests {
     /// The signer in src/lib/route-signature.ts computes the same headers.
     #[test]
     fn the_signature_vectors_match_the_editors_signer() {
-        let vectors: Vec<Value> = serde_json::from_str(include_str!("signature-cases.json")).unwrap();
+        let vectors: Vec<Value> = serde_json::from_str(include_str!("../signature-cases.json")).unwrap();
         assert!(vectors.len() >= 3);
         for vector in vectors {
             let request = SignedRequest {
@@ -1674,9 +1674,9 @@ mod tests {
             secrets_call(&store(project), project, None, "secret_set", &input).map_err(|error| error.to_string())
         };
         let id = "1001-practice.apps.googleusercontent.com";
-        assert_eq!(set("project_a", "google_client_id", id, Some("route")).unwrap_err(), super::super::google::NAMES_RESERVED);
-        assert_eq!(set("project_a", "client_id", id, Some("google")).unwrap_err(), super::super::google::NAMES_ONLY);
-        assert_eq!(set("project_a", "google_client_id", "GOCSPX-pasted-in-the-wrong-field", None).unwrap_err(), super::super::google::ID_LOOKS_LIKE_SECRET);
+        assert_eq!(set("project_a", "google_client_id", id, Some("route")).unwrap_err(), crate::google::NAMES_RESERVED);
+        assert_eq!(set("project_a", "client_id", id, Some("google")).unwrap_err(), crate::google::NAMES_ONLY);
+        assert_eq!(set("project_a", "google_client_id", "GOCSPX-pasted-in-the-wrong-field", None).unwrap_err(), crate::google::ID_LOOKS_LIKE_SECRET);
         assert_eq!(set("project_a", "google_client_id", id, None).unwrap()["use"], "google");
         set("project_a", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
         set("project_b", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();

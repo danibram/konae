@@ -1,5 +1,5 @@
 
-use super::*;
+use crate::*;
 use rusqlite::params;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
@@ -21,7 +21,7 @@ pub const ADMIN_MCP_BODY_BYTES: usize = ADMIN_CHUNK.div_ceil(3) * 4 + 64 * 1024;
 pub fn chunk_bytes(principal: &str) -> usize {
     if principal.starts_with("runtime:") { CHUNK } else { ADMIN_CHUNK }
 }
-pub const MAX_TRANSFER: usize = super::size::UPLOAD_BYTES;
+pub const MAX_TRANSFER: usize = crate::size::UPLOAD_BYTES;
 /// Active transfers every principal outside the runtime shares.
 pub const MAX_ADMIN_TRANSFERS: usize = 128;
 pub const MAX_DEPLOYMENT_TRANSFERS: usize = 32;
@@ -248,7 +248,7 @@ pub async fn transfer_call(
         let component = a["component"].as_str().filter(|_| !runtime);
         let limit = match component {
             _ if runtime => state.files.limits.max_file_bytes,
-            Some(component) => super::package::component_limit(component, &state.files.limits)?,
+            Some(component) => crate::package::component_limit(component, &state.files.limits)?,
             None => MAX_TRANSFER as u64,
         };
         match component {
@@ -257,7 +257,7 @@ pub async fn transfer_call(
                 "Transfer size is outside the limit of {limit} bytes for the {component} component."
             ),
             None if runtime => anyhow::ensure!(size > 0 && size <= limit, "{}", state.files.limits.file_size_refused()),
-            None => anyhow::ensure!(size > 0 && size <= limit, "{}", super::size::upload_refused(size as usize)),
+            None => anyhow::ensure!(size > 0 && size <= limit, "{}", crate::size::upload_refused(size as usize)),
         }
         anyhow::ensure!(
             hash.len() == 64
@@ -268,7 +268,7 @@ pub async fn transfer_call(
         );
         let mut body = json!({"direction":"upload","size":size,"sha256":hash,"complete":false,"projectId":a["projectId"]});
         if let Some(component) = component {
-            super::package::ensure_upload_space(state, size)?;
+            crate::package::ensure_upload_space(state, size)?;
             body["component"] = json!(component);
         }
         return new_transfer(state, principal, body).await;
@@ -358,7 +358,7 @@ pub async fn transfer_call(
         "transfer_complete" => {
             anyhow::ensure!(t["direction"] == "upload", "Not an upload.");
             let (size, sha256) =
-                tokio::task::spawn_blocking(move || super::copies::checksum_file(&path)).await??;
+                tokio::task::spawn_blocking(move || crate::copies::checksum_file(&path)).await??;
             anyhow::ensure!(
                 size == t["size"].as_u64().unwrap() && sha256 == t["sha256"],
                 "Upload size or SHA-256 mismatch."

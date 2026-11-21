@@ -1,6 +1,6 @@
 
-use super::*;
-use super::transfers::{ADMIN_CHUNK, CHUNK, MAX_TRANSFER, download_body, transfer, transfer_call, transfer_path};
+use crate::*;
+use crate::transfers::{ADMIN_CHUNK, CHUNK, MAX_TRANSFER, download_body, transfer, transfer_call, transfer_path};
 use rusqlite::params;
 
 pub const VERSION: &str = "2025-11-25";
@@ -114,8 +114,8 @@ struct RuntimeCaller {
 
 async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std::net::SocketAddr>) -> Result<RuntimeCaller, Response> {
     let host_known = valid_host(state, headers)
-        || super::domain::is_alias_request(state, headers)
-        || super::path::on_path_host(state, headers);
+        || crate::domain::is_alias_request(state, headers)
+        || crate::path::on_path_host(state, headers);
     if !same_origin(headers) || !host_known {
         return Err(error(
             StatusCode::FORBIDDEN,
@@ -125,7 +125,7 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
     let Some(deployment) = deployment_for(state, headers).await else {
         return Err(error(StatusCode::NOT_FOUND, "Deployment not found."));
     };
-    if super::path::foreign_referer(state, headers, &deployment.id) {
+    if crate::path::foreign_referer(state, headers, &deployment.id) {
         return Err(error(StatusCode::FORBIDDEN, "A page of another app's path address cannot call this app."));
     }
     if bearer(headers).is_some_and(|token| token.starts_with("lbk_")) {
@@ -157,7 +157,7 @@ async fn put_transfer(State(state): State<AppState>, AxumPath(id): AxumPath<Stri
     if caller.anonymous {
         return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
-    let mut response = match super::transfers::receive_body(&state, &caller.principal, &id, request.into_body()).await {
+    let mut response = match crate::transfers::receive_body(&state, &caller.principal, &id, request.into_body()).await {
         Ok(result) => Json(json!({"result": result})).into_response(),
         Err(e) => error(StatusCode::BAD_REQUEST, &e.to_string()),
     };
@@ -235,7 +235,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                 transfer_call(&state, &principal, name, &arguments, true).await
             } else if account_tools().iter().any(|t| t["name"] == name) {
                 let client = state.guards.client_ip(peer, &headers);
-                match super::accounts::runtime_tool(&state, &headers, client, name, &arguments).await {
+                match crate::accounts::runtime_tool(&state, &headers, client, name, &arguments).await {
                     Ok((value, cookie)) => {
                         session_cookie = cookie;
                         Ok(value)
@@ -259,7 +259,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
     if clear_cookie {
         response
             .headers_mut()
-            .insert(header::SET_COOKIE, super::cleared_app_cookie(&state, &app, &headers));
+            .insert(header::SET_COOKIE, crate::cleared_app_cookie(&state, &app, &headers));
     }
     if let Some(cookie) = session_cookie {
         response.headers_mut().insert(header::SET_COOKIE, cookie);
@@ -472,7 +472,7 @@ pub fn transfer_tools(runtime: bool) -> Vec<Value> {
             } else {
                 "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a component of an export, which may be as large as that component's quota."
             },
-            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
+            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":crate::package::COMPONENT_NAMES}}),
             &["size", "sha256"],
             false,
         ),
@@ -586,7 +586,7 @@ pub async fn response_value(response: Response) -> Result<Value> {
     let bytes = axum::body::to_bytes(response.into_body(), MAX_TRANSFER).await?;
     let value: Value = serde_json::from_slice(&bytes)?;
     if !status.is_success() {
-        if let Some(refused) = super::refusal::from_body(&value) {
+        if let Some(refused) = crate::refusal::from_body(&value) {
             return Err(refused.into());
         }
     }
@@ -605,7 +605,7 @@ pub async fn response_value(response: Response) -> Result<Value> {
 /// refused Capsule also answers `{ error: { code, message, hint } }` (ADR-0004).
 pub fn tool_error(error: &anyhow::Error) -> Value {
     let text = json!([{"type": "text", "text": error.to_string()}]);
-    match super::refusal::of(error) {
+    match crate::refusal::of(error) {
         Some(refused) => json!({"content": text, "structuredContent": {"error": refused.to_json()}, "isError": true}),
         None => json!({"content": text, "isError": true}),
     }
@@ -617,7 +617,7 @@ pub fn tool_error(error: &anyhow::Error) -> Value {
 /// Checks a release and answers the schema change it makes. `against` is a
 /// database an import puts in place first; without it the change is planned
 /// against the live database, or a package's or an empty one for a first release.
-pub async fn validate_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+pub async fn validate_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<crate::schema_change::Change> {
     if let Some(snapshot) = &input.initial_released {
         anyhow::ensure!(!state.deployments.read().await.values().any(|d| d.id == input.project.id), "A published snapshot can only enter an existing app through project_import.");
         let package = input.initial_package.as_ref().context("A published snapshot requires an initial package.")?;
@@ -627,17 +627,17 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
 }
 
 /// The owner import door has already checked permission and package integrity.
-pub async fn validate_import_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+pub async fn validate_import_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<crate::schema_change::Change> {
     crate::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
     let restored = input.restored()?;
     validate_release_inner(state, &restored, against, input.initial_released.is_some()).await
 }
 
-pub(crate) async fn validate_published_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+pub(crate) async fn validate_published_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<crate::schema_change::Change> {
     validate_release_inner(state, input, against, true).await
 }
 
-async fn validate_release_inner(state: &AppState, input: &DeployInput, against: Option<&Path>, published: bool) -> Result<super::schema_change::Change> {
+async fn validate_release_inner(state: &AppState, input: &DeployInput, against: Option<&Path>, published: bool) -> Result<crate::schema_change::Change> {
     if let Some(initial_modules) = input.initial_modules.as_ref() {
         crate::modules::validate_state(initial_modules).map_err(anyhow::Error::new)?;
     }
@@ -670,28 +670,28 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
             "Invalid or reserved artifact path."
         );
     }
-    let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
-    let uses_files = super::modules::artifact_uses_files(artifact.values().map(Vec::as_slice))
-        || super::modules::sources_use_files(input.project.files.values().map(String::as_bytes))
+    let artifact = crate::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
+    let uses_files = crate::modules::artifact_uses_files(artifact.values().map(Vec::as_slice))
+        || crate::modules::sources_use_files(input.project.files.values().map(String::as_bytes))
         || input.project.manifest["fileAccess"] == "app-users";
-    let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
-        || super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
+    let uses_auth = crate::modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
+        || crate::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
     let action_files = input.project.files.iter().map(|(name, text)| (name.as_str(), text.as_bytes())).collect::<Vec<_>>();
-    let uses_actions = super::modules::named_sources_use_actions(action_files.iter().copied());
-    let uses_http = super::modules::sources_use_http(action_files.iter().copied());
-    let uses_calls = super::modules::sources_use_calls(action_files.iter().copied());
-    super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
-    super::calls::check_connects(&input.project.manifest)?;
-    let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
+    let uses_actions = crate::modules::named_sources_use_actions(action_files.iter().copied());
+    let uses_http = crate::modules::sources_use_http(action_files.iter().copied());
+    let uses_calls = crate::modules::sources_use_calls(action_files.iter().copied());
+    crate::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
+    crate::calls::check_connects(&input.project.manifest)?;
+    let artifact = crate::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
     let sizes = artifact.iter().map(|(path, bytes)| (path.as_str(), bytes.len()));
-    anyhow::ensure!(sizes.clone().map(|(_, bytes)| bytes).sum::<usize>() <= super::size::ARTIFACT_BYTES, "{}", super::size::artifact_refused(sizes));
+    anyhow::ensure!(sizes.clone().map(|(_, bytes)| bytes).sum::<usize>() <= crate::size::ARTIFACT_BYTES, "{}", crate::size::artifact_refused(sizes));
     drop(artifact);
-    super::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
+    crate::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
     let empty_actions = r#"{"version":1,"actions":{}}"#;
     let actions_source = input.project.files.get("actions.json").map(String::as_str).unwrap_or(empty_actions);
     let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
     let initial_modules = input.initial_modules.as_ref().or(package_modules);
-    let mut candidate_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone()).unwrap_or_else(|| super::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
+    let mut candidate_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone()).unwrap_or_else(|| crate::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
     if input.project.manifest["fileAccess"] == "app-users" {
         let files = candidate_modules.get_mut("files").expect("files is switchable");
         files["on"] = serde_json::json!(true);
@@ -701,11 +701,11 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         && initial_modules.is_none_or(|modules| !modules.contains_key("actions")) && uses_actions {
         candidate_modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
     }
-    for module in super::modules::release_use_order() {
+    for module in crate::modules::release_use_order() {
         let used = match module.as_str() { "files" => uses_files, "actions" => uses_actions, "http" => uses_http, "calls" => uses_calls, _ => false };
-        if used { super::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
+        if used { crate::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
     }
-    let program = super::action_shape::read(actions_source)?;
+    let program = crate::action_shape::read(actions_source)?;
     let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
     candidate_modules = existing_modules.unwrap_or(candidate_modules);
     if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
@@ -713,14 +713,14 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {
         candidate_modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
     }
-    if input.visibility != "public" && !super::modules::is_on(&candidate_modules, "auth") {
-        return Err(anyhow::Error::new(super::modules::check_private_auth(false).unwrap_err()));
+    if input.visibility != "public" && !crate::modules::is_on(&candidate_modules, "auth") {
+        return Err(anyhow::Error::new(crate::modules::check_private_auth(false).unwrap_err()));
     }
-    super::modules::check_requirements(&candidate_modules).map_err(anyhow::Error::new)?;
-    if uses_auth && !super::modules::is_on(&candidate_modules, "auth") {
-        return Err(anyhow::Error::new(super::modules::require_on(&candidate_modules, "auth").unwrap_err()));
+    crate::modules::check_requirements(&candidate_modules).map_err(anyhow::Error::new)?;
+    if uses_auth && !crate::modules::is_on(&candidate_modules, "auth") {
+        return Err(anyhow::Error::new(crate::modules::require_on(&candidate_modules, "auth").unwrap_err()));
     }
-    if uses_actions { super::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
+    if uses_actions { crate::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
     let functions = input.project.files.get("functions.json").map(|source| crate::functions::read(source)).transpose()?;
     if let Some(manifest) = &functions {
         let files = input.project.files.keys().cloned().collect();
@@ -730,7 +730,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         else { crate::functions::validate(manifest, &files, &candidate_modules, &actions["actions"], &paths)?; }
     }
     crate::functions::validate_artifact(functions.as_ref(), input.server_artifact.as_ref())?;
-    super::calls::check_release(&super::domain::Rules::of(state), &super::http::read_secrets(&state.data_root, &input.project.id)?, &program)?;
+    crate::calls::check_release(&crate::domain::Rules::of(state), &crate::http::read_secrets(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     anyhow::ensure!(
@@ -744,24 +744,24 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let temp = state
         .data_root
         .join(format!("validate-{}.sqlite", Uuid::new_v4()));
-    let result = (|| -> Result<super::schema_change::Change> {
-        if !super::modules::is_on(&candidate_modules, "actions") { return Ok(super::schema_change::Change::default()); }
+    let result = (|| -> Result<crate::schema_change::Change> {
+        if !crate::modules::is_on(&candidate_modules, "actions") { return Ok(crate::schema_change::Change::default()); }
         std::fs::create_dir_all(&state.data_root)?;
         if let Some(database) = against {
             std::fs::copy(database, &temp)?;
         } else if let Some(ref deployment) = existing {
             let live = database_path(state, &deployment.id);
             if live.try_exists()? {
-                super::copies::vacuum_into(&live, &temp)?;
+                crate::copies::vacuum_into(&live, &temp)?;
             } else {
                 initialize_database(&temp)?;
             }
         } else if let Some(package) = input.initial_package.as_ref() {
-            super::package::copy_database(state, package, &temp)?;
+            crate::package::copy_database(state, package, &temp)?;
         } else {
             initialize_database(&temp)?;
         }
-        super::schema_change::apply_with_transforms(
+        crate::schema_change::apply_with_transforms(
             &temp,
             input
                 .project
@@ -771,7 +771,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
                 .unwrap_or(""),
             &program,
             input.project.files.get("schema-transforms.json").map(String::as_str),
-            super::schema_change::Mode::Plan,
+            crate::schema_change::Mode::Plan,
         )
     })();
     let _ = tokio::fs::remove_file(temp).await;
@@ -782,7 +782,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
 async fn counted(state: &AppState, app: &str, headers: &HeaderMap) -> bool {
     let deployment = state.deployments.read().await.values().find(|d| d.id == app).cloned();
     match deployment {
-        Some(deployment) => !super::enter::entered_request(state, &deployment, headers).await,
+        Some(deployment) => !crate::enter::entered_request(state, &deployment, headers).await,
         None => true,
     }
 }
@@ -798,14 +798,14 @@ pub async fn runtime_call(
     if name.starts_with("auth_") {
         if let Some(id) = app {
             if let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == id) {
-                super::modules::require_on(&deployment.modules, "auth")?;
+                crate::modules::require_on(&deployment.modules, "auth")?;
             }
         }
     }
     if name == "actions_invoke" {
         if let Some(id) = app {
             if let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == id) {
-                super::modules::require_on(&deployment.modules, "actions")?;
+                crate::modules::require_on(&deployment.modules, "actions")?;
             }
         }
     }
@@ -814,9 +814,9 @@ pub async fn runtime_call(
             let result = response_value(session(State(state.clone()), headers.clone()).await).await;
             if let (Ok(session), Some(id)) = (&result, app) {
                 if counted(state, id, headers).await {
-                    super::usage::count(&state.data_root, id, super::usage::Operation::Session);
+                    crate::usage::count(&state.data_root, id, crate::usage::Operation::Session);
                     if let Some(account) = session["userId"].as_str() {
-                        super::usage::count_account(&state.data_root, id, account, super::usage::AccountKind::Open);
+                        crate::usage::count_account(&state.data_root, id, account, crate::usage::AccountKind::Open);
                     }
                 }
             }
@@ -861,7 +861,7 @@ pub async fn runtime_call(
             let result = download_body(state, principal, response.into_body()).await;
             if let (Ok(_), Some(id)) = (&result, app) {
                 if counted(state, id, headers).await {
-                    super::usage::count(&state.data_root, id, super::usage::Operation::FileRead);
+                    crate::usage::count(&state.data_root, id, crate::usage::Operation::FileRead);
                 }
             }
             result
@@ -871,7 +871,7 @@ pub async fn runtime_call(
             transfer_path(state, id)?;
             let _guard = database_lock(state, &format!("transfer:{id}")).await;
             let request_hash = digest(a.to_string().as_bytes());
-            let previous: Option<(String,String)>=super::transfers::store(state)?.query_row("SELECT request_hash,body FROM file_receipts WHERE transfer_id=?1 AND principal=?2",params![id,principal],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let previous: Option<(String,String)>=crate::transfers::store(state)?.query_row("SELECT request_hash,body FROM file_receipts WHERE transfer_id=?1 AND principal=?2",params![id,principal],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
             if let Some((hash, body)) = previous {
                 anyhow::ensure!(hash == request_hash, "Upload retry changed its metadata.");
                 return Ok(serde_json::from_str(&body)?);
@@ -881,20 +881,20 @@ pub async fn runtime_call(
                 t["complete"] == true && t["direction"] == "upload",
                 "File upload is incomplete."
             );
-            let upload = super::Upload {
+            let upload = crate::Upload {
                 name: a["name"].as_str(),
                 content_type: a.get("type").and_then(Value::as_str),
                 visibility: a.get("visibility").and_then(Value::as_str),
             };
             let source = transfer_path(state, id)?;
             let mut result =
-                response_value(super::upload_from_path(state, headers, upload, &source).await)
+                response_value(crate::upload_from_path(state, headers, upload, &source).await)
                     .await?;
             result.as_object_mut().unwrap().remove("url");
-            super::transfers::store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
+            crate::transfers::store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
             if let Some(deployment) = app {
                 if counted(state, deployment, headers).await {
-                    super::usage::count(&state.data_root, deployment, super::usage::Operation::Upload);
+                    crate::usage::count(&state.data_root, deployment, crate::usage::Operation::Upload);
                 }
             }
             let result = Ok(result);
@@ -902,11 +902,11 @@ pub async fn runtime_call(
             result
         }
         "files_update" => {
-            let response = super::files::update_file(state, headers, a["fileId"].as_str().unwrap(), a["visibility"].as_str()).await;
+            let response = crate::files::update_file(state, headers, a["fileId"].as_str().unwrap(), a["visibility"].as_str()).await;
             response_value(response).await
         }
         "files_delete" => {
-            let result = response_value(super::files::delete_file(state, headers, a["fileId"].as_str().unwrap()).await).await;
+            let result = response_value(crate::files::delete_file(state, headers, a["fileId"].as_str().unwrap()).await).await;
             if result.is_ok() {
                 audit(state, principal, name, app, &result);
             }

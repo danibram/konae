@@ -6,8 +6,8 @@ use anyhow::{Context, bail, ensure};
 use aws_sdk_s3::primitives::ByteStream;
 use rusqlite::params;
 
-use super::copies::{CopyKey, Target};
-use super::*;
+use crate::copies::{CopyKey, Target};
+use crate::*;
 
 pub const LEDGER_DIR: &str = "revocations";
 pub const LEDGER_START: &str = "started.json";
@@ -359,7 +359,7 @@ pub async fn drill_check(installation: &Installation) -> Result<bool> {
     let startup = Startup::from_env()?;
     ensure!(startup.execution_mode.is_test(), "drill-check requires KONAE_EXECUTION_MODE=test.");
     ensure!(startup.data_root.is_dir(), "The restored directory is missing.");
-    super::copies::check_activation(&startup.data_root)?;
+    crate::copies::check_activation(&startup.data_root)?;
     ensure!(hold(&startup.data_root).is_none(), "The revocation record needs reconciliation.");
     let denied = |error: Option<std::io::Error>| error.is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
     ensure!(denied(std::net::TcpListener::bind(("127.0.0.1", 0)).err()), "The drill must deny listeners before loading the Kernel.");
@@ -386,7 +386,7 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
         || matches!(args.as_slice(), [_, option, _] if option == "--from"), "{}", reconcile_usage());
     ensure!(root.is_dir(), "The restored directory is missing.");
     let _volume = crate::file_store::hold_while_stopped(&root, "reconcile")?;
-    super::copies::check_activation(&root)?;
+    crate::copies::check_activation(&root)?;
     match args.get(1).map(String::as_str) {
         Some("--without-record") if args.len() == 2 => {
             clear_hold(&root)?;
@@ -558,8 +558,8 @@ mod tests {
         let reason = apply_or_hold(&root, &crate::installation::Installation::for_test(), Ok(None)).unwrap().unwrap_err();
         assert!(reason.contains("started.json"));
         assert!(hold(&root).unwrap().contains("reconcile"));
-        assert!(super::super::maintenance::pause(&root, "any-app").is_some());
-        assert!(super::super::maintenance::holds_mail(&root, "installation"));
+        assert!(crate::maintenance::pause(&root, "any-app").is_some());
+        assert!(crate::maintenance::holds_mail(&root, "installation"));
         let broken = apply_or_hold(&root, &crate::installation::Installation::for_test(), Ok(Some(vec![b"{not json".to_vec()]))).unwrap().unwrap_err();
         assert!(broken.contains("does not parse"));
         let failed = apply_or_hold(&root, &crate::installation::Installation::for_test(), Err(anyhow::anyhow!("bucket unreachable"))).unwrap().unwrap_err();

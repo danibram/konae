@@ -1,7 +1,7 @@
 
 use axum::{http::Method, middleware::Next};
 
-use super::*;
+use crate::*;
 
 pub const MARKER_FILE: &str = "maintenance.json";
 /// How long the mail worker puts back a held job before looking again.
@@ -51,10 +51,10 @@ fn marker(data_root: &Path, id: &str) -> Option<Marker> {
 pub fn read(data_root: &Path, id: &str) -> Value {
     let own = marker(data_root, id);
     json!({
-        "maintenance": own.is_some() || super::recovery::hold(data_root).is_some(),
+        "maintenance": own.is_some() || crate::recovery::hold(data_root).is_some(),
         "since": own.as_ref().filter(|marker| !marker.unreadable).map(|marker| marker.since),
         "unreadable": own.as_ref().is_some_and(|marker| marker.unreadable),
-        "installation": super::recovery::hold(data_root),
+        "installation": crate::recovery::hold(data_root),
     })
 }
 
@@ -97,7 +97,7 @@ pub fn pause_for_test(data_root: &Path, id: &str, paused: bool) {
 /// Why a Deployment is paused: its own maintenance state, or the
 /// installation's when a restore has not reconciled its revocation record.
 pub fn pause(data_root: &Path, id: &str) -> Option<String> {
-    if let Some(message) = super::recovery::hold(data_root) {
+    if let Some(message) = crate::recovery::hold(data_root) {
         return Some(message);
     }
     marker(data_root, id).map(|marker| marker.message().to_owned())
@@ -105,7 +105,7 @@ pub fn pause(data_root: &Path, id: &str) -> Option<String> {
 
 /// Whether the mail worker must hold a job of this scope.
 pub fn holds_mail(data_root: &Path, scope: &str) -> bool {
-    super::recovery::hold(data_root).is_some()
+    crate::recovery::hold(data_root).is_some()
         || scope.strip_prefix("deployment:").and_then(|id| marker(data_root, id)).is_some()
 }
 
@@ -148,7 +148,7 @@ pub async fn guard(State(state): State<AppState>, request: Request, next: Next) 
         return next.run(request).await;
     }
     let Some(deployment) = deployment_for(&state, request.headers()).await else {
-        if let Some(message) = super::recovery::hold(&state.data_root) {
+        if let Some(message) = crate::recovery::hold(&state.data_root) {
             return refusal(&message);
         }
         return next.run(request).await;

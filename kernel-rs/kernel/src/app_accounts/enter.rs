@@ -1,5 +1,5 @@
 
-use super::*;
+use crate::*;
 use rusqlite::{OptionalExtension, params};
 
 /// How long a link works. It is shown to the person who asked for it and

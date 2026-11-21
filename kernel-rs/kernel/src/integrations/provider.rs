@@ -1,6 +1,6 @@
 
-use super::refusal::{refuse, Refusal};
-use super::*;
+use crate::refusal::{refuse, Refusal};
+use crate::*;
 use base64::Engine;
 use ring::hmac;
 
@@ -80,7 +80,7 @@ fn valid_body_prefix(prefix: &str) -> bool {
     (1..=32).contains(&prefix.len()) && prefix.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"=-_.:".contains(&byte))
 }
 
-const PRESETS: &str = include_str!("signature-presets.json");
+const PRESETS: &str = include_str!("../signature-presets.json");
 
 fn presets() -> &'static serde_json::Map<String, Value> {
     static TABLE: std::sync::OnceLock<serde_json::Map<String, Value>> = std::sync::OnceLock::new();
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn the_vectors_verify_and_a_changed_byte_does_not() {
-        let vectors: Vec<Value> = serde_json::from_str(include_str!("provider-signature-cases.json")).unwrap();
+        let vectors: Vec<Value> = serde_json::from_str(include_str!("../provider-signature-cases.json")).unwrap();
         assert!(vectors.len() >= 5);
         for vector in vectors {
             let case = vector["case"].as_str().unwrap();
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn a_preset_expands_to_its_long_form_and_refusals_name_every_wrong_key() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("signature-preset-cases.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../signature-preset-cases.json")).unwrap();
         assert!(cases.len() >= 15);
         for case in cases {
             let label = case["case"].as_str().unwrap();
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn every_preset_verifies_a_vector() {
-        let vectors: Vec<Value> = serde_json::from_str(include_str!("provider-signature-cases.json")).unwrap();
+        let vectors: Vec<Value> = serde_json::from_str(include_str!("../provider-signature-cases.json")).unwrap();
         for provider in presets().keys() {
             assert!(vectors.iter().any(|vector| vector["signature"]["provider"] == provider.as_str()), "{provider} has no vector");
         }

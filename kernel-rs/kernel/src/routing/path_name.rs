@@ -1,5 +1,5 @@
 
-use super::refusal::{refuse, Refusal};
+use crate::refusal::{refuse, Refusal};
 
 const RESERVED: &[&str] = &["_konae", "p", "app", "mcp", "www", "api", "admin", "runtime.js"];
 
@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn names_are_refused_with_the_words_the_cli_uses() {
-        let file: Value = serde_json::from_str(include_str!("path-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../path-cases.json")).unwrap();
         let cases = file["cases"].as_array().unwrap();
         assert!(cases.len() >= 30);
         for case in cases {

@@ -6,8 +6,8 @@ use std::{
 use anyhow::{Context, bail, ensure};
 use rusqlite::params;
 
-use super::transfers::{MAX_ADMIN_PRINCIPAL_TRANSFERS, new_transfer, transfer, transfer_path};
-use super::*;
+use crate::transfers::{MAX_ADMIN_PRINCIPAL_TRANSFERS, new_transfer, transfer, transfer_path};
+use crate::*;
 
 pub const PACKAGE_FORMAT: &str = "konae-package";
 pub const PACKAGE_VERSION: u64 = 1;
@@ -66,7 +66,7 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<super::path::Carried>,
+    pub path: Option<crate::path::Carried>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -208,7 +208,7 @@ pub async fn export(
     revisions: impl FnOnce(&Deployment) -> Result<Revisions>,
 ) -> Result<Value> {
     let id = deployment.id.clone();
-    let held: usize = super::transfers::store(state)?.query_row(
+    let held: usize = crate::transfers::store(state)?.query_row(
         "SELECT COUNT(*) FROM transfers WHERE principal=?1 AND expires>?2",
         params![principal, now_ms()],
         |r| r.get(0),
@@ -331,8 +331,8 @@ pub async fn export(
             })
             .collect(),
         excluded: EXCLUDED.iter().map(|item| (*item).to_owned()).collect(),
-        domain: super::domain::for_package(state, &deployment.id),
-        path: super::path::for_package(state, &deployment.id),
+        domain: crate::domain::for_package(state, &deployment.id),
+        path: crate::path::for_package(state, &deployment.id),
     };
     let mut downloads = serde_json::Map::new();
     let mut failure = None;
@@ -367,7 +367,7 @@ pub async fn export(
     if let Some(error_value) = failure {
         for created in downloads.values() {
             let id = created["transferId"].as_str().unwrap_or_default();
-            super::transfers::store(state)?.execute(
+            crate::transfers::store(state)?.execute(
                 "DELETE FROM transfers WHERE id=?1 AND principal=?2",
                 params![id, principal],
             )?;
@@ -474,8 +474,8 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
             removed += connection.execute(&format!("DELETE FROM \"{table}\""), [])?;
         }
     }
-    removed += super::http::revoke_imported_keys(&connection)?;
-    super::invitations::forget_tokens(&connection)?;
+    removed += crate::http::revoke_imported_keys(&connection)?;
+    crate::invitations::forget_tokens(&connection)?;
     Ok(removed)
 }
 
@@ -666,7 +666,7 @@ fn parse_octal(field: &[u8]) -> Result<u64> {
     u64::from_str_radix(text, 8).context("The files component has a damaged header.")
 }
 
-pub(super) fn unpack_files(
+pub(crate) fn unpack_files(
     archive: &Path,
     accounts: Option<&Connection>,
     destination: Option<(&Path, &file_store::BlockingFiles)>,
@@ -864,7 +864,7 @@ fn component_uploads(
         let upload = match principal {
             Some(principal) => transfer(state, principal, &json!({"transferId": id}))?,
             None => {
-                let body: Option<String> = super::transfers::store(state)?
+                let body: Option<String> = crate::transfers::store(state)?
                     .query_row(
                         "SELECT body FROM transfers WHERE id=?1 AND expires>?2",
                         params![id, now_ms()],
@@ -1038,9 +1038,9 @@ pub fn check_components_for_modules(
 fn no_trigger_or_view(path: &Path, label: &str, what: &str) -> Result<()> {
     let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .and_then(
-            |db| match super::sql_rules::stored_trigger_or_view(&db, what)? {
+            |db| match crate::sql_rules::stored_trigger_or_view(&db, what)? {
                 Some(refusal) => Ok(Some(refusal)),
-                None => super::sql_rules::stored_virtual_table(&db, what),
+                None => crate::sql_rules::stored_virtual_table(&db, what),
             },
         )
         .with_context(|| format!("The {label} component is not a SQLite database."))?;
@@ -1116,7 +1116,7 @@ pub async fn install(state: &AppState, package: &InitialPackage, id: &str) -> Re
         Ok::<_, anyhow::Error>(())
     })
     .await??;
-    super::domain::arrive(state, id, package.manifest.domain.as_deref()).await
+    crate::domain::arrive(state, id, package.manifest.domain.as_deref()).await
 }
 
 fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> {
@@ -1812,7 +1812,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(super::digest(&arrived), super::digest(&sent), "{id}");
+            assert_eq!(crate::digest(&arrived), crate::digest(&sent), "{id}");
         }
         let restored: Vec<Value> =
             serde_json::from_slice(&std::fs::read(target_dir.join("index.json")).unwrap()).unwrap();

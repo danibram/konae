@@ -670,7 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_folder_with_a_missing_page_template_is_refused() {
-        let cases: serde_json::Value = serde_json::from_str(include_str!("page-release-cases.json")).unwrap();
+        let cases: serde_json::Value = serde_json::from_str(include_str!("../page-release-cases.json")).unwrap();
         let expected = cases[0]["error"].as_str().unwrap();
         let root = scratch();
         let state = AppState::for_test(&root);
@@ -767,7 +767,7 @@ mod tests {
                 std::fs::copy(source.join("files-018f2b2c-4a10-7a01-8000-000000000001.blob"), data.join("018f2b2c-4a10-7a01-8000-000000000001.blob")).unwrap();
             }
             std::fs::create_dir_all(layout::private(&root, id)).unwrap();
-            let installed = crate::Installed { hostname: format!("{id}.localhost"), created_at:1, released_at:Some(2), source_digest:None, actions:include_str!("../../test-fixtures/module-mechanism-0.9.0/app/actions.json").into(), artifact_version:"v1".into(), released:None };
+            let installed = crate::Installed { hostname: format!("{id}.localhost"), created_at:1, released_at:Some(2), source_digest:None, actions:include_str!("../../../test-fixtures/module-mechanism-0.9.0/app/actions.json").into(), artifact_version:"v1".into(), released:None };
             std::fs::write(layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).unwrap();
         };
         install_fixture("legacy_uploads", "module-files-0.9.0", true);

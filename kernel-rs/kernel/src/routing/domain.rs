@@ -1,6 +1,6 @@
 
-use super::refusal::{refuse, Refusal};
-use super::*;
+use crate::refusal::{refuse, Refusal};
+use crate::*;
 use std::net::{IpAddr, SocketAddr};
 use anyhow::{bail, ensure, Context};
 use std::sync::OnceLock;
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn hostnames_are_refused_with_the_words_the_cli_uses() {
-        let file: Value = serde_json::from_str(include_str!("domain-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../domain-cases.json")).unwrap();
         let rules = Rules {
             suffix: file["context"]["suffix"].as_str().unwrap().into(),
             installation_hosts: serde_json::from_value(file["context"]["installationHosts"].clone()).unwrap(),

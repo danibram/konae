@@ -1,7 +1,7 @@
 
-use super::path_name::check_name;
-use super::refusal::{refuse, Refusal};
-use super::*;
+use crate::path_name::check_name;
+use crate::refusal::{refuse, Refusal};
+use crate::*;
 use anyhow::{bail, Context};
 use axum::http::Uri;
 use axum::middleware::Next;
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn refusals_are_given_with_the_words_and_codes_the_case_file_names() {
-        let file: Value = serde_json::from_str(include_str!("path-state-cases.json")).unwrap();
+        let file: Value = serde_json::from_str(include_str!("../path-state-cases.json")).unwrap();
         let cases = file["cases"].as_array().unwrap();
         assert!(cases.len() >= 2);
         for case in cases {

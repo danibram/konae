@@ -1,5 +1,5 @@
 
-use super::*;
+use crate::*;
 use axum::middleware::Next;
 use sha2::{Digest, Sha256};
 
@@ -76,7 +76,7 @@ pub fn hsts(state: &AppState, headers: &HeaderMap) -> Option<&'static str> {
     if !https(state) {
         return None;
     }
-    Some(if super::domain::is_alias_request(state, headers) { HSTS_ALIAS } else { HSTS })
+    Some(if crate::domain::is_alias_request(state, headers) { HSTS_ALIAS } else { HSTS })
 }
 
 /// The CSP hash source of every inline `<script>` in an HTML document.
@@ -167,13 +167,13 @@ pub async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bool {
     if installation {
         return false;
     }
-    if state.deployments.read().await.contains_key(&host) || super::domain::claimed(state, &host) {
+    if state.deployments.read().await.contains_key(&host) || crate::domain::claimed(state, &host) {
         return true;
     }
     // The path host is `<domain>`, which holds the path addresses and the home.
     // With `KONAE_DOMAIN=localhost` it is the bare `localhost`, so it is
     // an app origin before the local-editor names below are checked.
-    if super::path::path_host(state).as_deref() == Some(host.as_str()) {
+    if crate::path::path_host(state).as_deref() == Some(host.as_str()) {
         return true;
     }
     let local = public.as_deref().is_some_and(is_local_host);
@@ -188,12 +188,12 @@ pub async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bool {
 pub async fn headers(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let deployment = deployment_for_request(&state, request.headers(), request.uri().path()).await;
     let app = deployment.is_some();
-    let private = deployment.as_ref().is_some_and(super::is_private);
-    let seo_off = deployment.as_ref().is_some_and(|deployment| !super::modules::is_on(&deployment.modules, "seo"));
+    let private = deployment.as_ref().is_some_and(crate::is_private);
+    let seo_off = deployment.as_ref().is_some_and(|deployment| !crate::modules::is_on(&deployment.modules, "seo"));
     if state.execution_mode.is_test() && app {
         request.headers_mut().remove(header::IF_NONE_MATCH);
     }
-    let connects = if state.execution_mode.is_test() { Vec::new() } else { deployment.map(|deployment| super::calls::connects(&deployment.manifest)).unwrap_or_default() };
+    let connects = if state.execution_mode.is_test() { Vec::new() } else { deployment.map(|deployment| crate::calls::connects(&deployment.manifest)).unwrap_or_default() };
     let hsts = hsts(&state, request.headers());
     let response = next.run(request).await;
     let (mut parts, body) = response.into_parts();
@@ -326,8 +326,8 @@ mod tests {
             .await
             .unwrap();
         tokio::fs::write(
-            crate::layout::private(&root, id).join(super::super::domain::RECORD_FILE),
-            serde_json::to_vec(&super::super::domain::Record {
+            crate::layout::private(&root, id).join(crate::domain::RECORD_FILE),
+            serde_json::to_vec(&crate::domain::Record {
                 hostname: "editor.apps.example.com".into(),
                 token: "legacy-token".into(),
                 verified: true,

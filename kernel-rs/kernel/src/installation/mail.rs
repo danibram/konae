@@ -10,7 +10,7 @@ use ring::{
 use rusqlite::params;
 use sha2::Digest;
 
-use super::*;
+use crate::*;
 use accounts::{AccountMail, AccountMessage, DevelopmentMailbox};
 use auth::{AuthError, ChallengeOutbox, IssuedChallenge, Purpose};
 
@@ -897,7 +897,7 @@ impl MailQueue {
         transaction.execute("DELETE FROM requests WHERE at <= ?1", [at - DAY_MS]).map_err(storage)?;
         let recipient = hashed("recipient", admission.recipient);
         let recipient_in_scope = hashed("recipient", &format!("{}|{}", admission.scope, admission.recipient));
-        let client = admission.client.map(|client| hashed("client", &super::limits::client_key(client)));
+        let client = admission.client.map(|client| hashed("client", &crate::limits::client_key(client)));
         let requests = |dimension: &str, key: &str, since: i64| -> Result<u32, AuthError> {
             transaction
                 .query_row(
@@ -1022,8 +1022,8 @@ impl MailQueue {
     }
 
     async fn process(&self, job: Claimed) -> Result<bool> {
-        if super::maintenance::holds_mail(&self.data_root, &job.scope) {
-            self.release(&job.id, super::maintenance::MAIL_HOLD_MS, false, None)?;
+        if crate::maintenance::holds_mail(&self.data_root, &job.scope) {
+            self.release(&job.id, crate::maintenance::MAIL_HOLD_MS, false, None)?;
             return Ok(false);
         }
         if job.purpose == NOTIFY {
@@ -1262,7 +1262,7 @@ pub async fn status_tool(state: &AppState, refresh: bool) -> Result<Value> {
 const NOTICE_PAGE: i64 = 50;
 
 pub async fn notices_tool(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
-    let before = super::calls::page_before(a)?;
+    let before = crate::calls::page_before(a)?;
     let path = state.accounts.queue.as_ref().map(|queue| queue.database_path().to_path_buf()).unwrap_or_else(|| state.data_root.join(MAIL_DATABASE));
     let scope = format!("deployment:{}", deployment.id);
     tokio::task::spawn_blocking(move || read_notices(&path, &scope, before)).await?
@@ -2571,13 +2571,13 @@ mod tests {
 
     async fn notify(fixture: &Fixture, name: &str, input: Value, account: Option<&str>) {
         let program = notice_program();
-        let caller = super::super::notify::Caller { account, actor_id: account };
-        let changed = super::super::notify::Changed { count: 1, rows: &[], now: 0 };
-        super::super::notify::record(&fixture.state, &fixture.app, name, &program.actions[name], &input, caller, changed).await;
+        let caller = crate::notify::Caller { account, actor_id: account };
+        let changed = crate::notify::Changed { count: 1, rows: &[], now: 0 };
+        crate::notify::record(&fixture.state, &fixture.app, name, &program.actions[name], &input, caller, changed).await;
     }
 
     fn notice_usage(fixture: &Fixture) -> Vec<(String, i64)> {
-        super::super::usage::flush();
+        crate::usage::flush();
         let db = Connection::open(crate::layout::usage(&fixture.root, &fixture.app.id)).unwrap();
         let mut statement = db.prepare("SELECT name, SUM(count) FROM usage_daily WHERE kind = 'notify' GROUP BY name ORDER BY name").unwrap();
         statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
@@ -2621,9 +2621,9 @@ mod tests {
         }}))
         .unwrap();
         let rows: Vec<serde_json::Map<String, Value>> = rows.iter().map(|row| row.as_object().unwrap().clone()).collect();
-        let caller = super::super::notify::Caller { account: None, actor_id: None };
-        let changed = super::super::notify::Changed { count: rows.len() as u64, rows: &rows, now: 1_793_948_400_000 };
-        super::super::notify::record(&fixture.state, &fixture.app, "tasks.remind", &program.actions["tasks.remind"], &json!({}), caller, changed).await;
+        let caller = crate::notify::Caller { account: None, actor_id: None };
+        let changed = crate::notify::Changed { count: rows.len() as u64, rows: &rows, now: 1_793_948_400_000 };
+        crate::notify::record(&fixture.state, &fixture.app, "tasks.remind", &program.actions["tasks.remind"], &json!({}), caller, changed).await;
     }
 
     #[tokio::test]
@@ -2695,9 +2695,9 @@ mod tests {
         let fixture = fixture(Scripted::new()).await;
         let program = notice_program();
         let without = Deployment { contact_email: None, ..fixture.app.clone() };
-        let changed = super::super::notify::Changed { count: 1, rows: &[], now: 0 };
-        let caller = super::super::notify::Caller { account: None, actor_id: None };
-        super::super::notify::record(&fixture.state, &without, "alerts.raise", &program.actions["alerts.raise"], &json!({"title": "No owner email yet"}), caller, changed).await;
+        let changed = crate::notify::Changed { count: 1, rows: &[], now: 0 };
+        let caller = crate::notify::Caller { account: None, actor_id: None };
+        crate::notify::record(&fixture.state, &without, "alerts.raise", &program.actions["alerts.raise"], &json!({"title": "No owner email yet"}), caller, changed).await;
         notice_accounts(&fixture);
         notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("ben")).await;
         notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("cy")).await;
