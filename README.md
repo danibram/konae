@@ -8,7 +8,7 @@ You describe an app to an agent in the editor, or write its files in a folder. E
 
 Konae is the platform. It holds the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list. It is the editor in `src/`, the `konae` binary in `kernel-rs/konae`, which serves the built editor next to the owner's MCP, and the `konae` CLI in `scripts/konae.ts`.
 
-The Kernel runs apps. It answers Server Actions, keeps each app's accounts, files, schedule, notices, routes, calls and Usage, and serves the built pages under a Content Security Policy. It is a Rust library and the `kernel` binary in `kernel-rs/kernel`, which serves a directory of app folders with no Konae around it. Konae links the Kernel, and `konae dev` runs the `kernel` binary on one folder.
+The Kernel runs apps. It answers Server Actions and server functions, keeps each app's accounts, files, schedule, notices, routes, calls and Usage, and serves the built pages under a Content Security Policy. It is a Rust library and the `kernel` binary in `kernel-rs/kernel`, which serves a directory of app folders with no Konae around it. Konae links the Kernel, and `konae dev` runs the `kernel` binary on one folder.
 
 Owners exist only in Konae. App users exist only in their app's folder, so an exported app carries its accounts and leaves its owner behind.
 
@@ -156,7 +156,7 @@ The documentation is markdown under [`docs/`](./docs/README.md). The docs site i
 | To | Read |
 | --- | --- |
 | Learn the words | [Concepts](./docs/concepts.md) |
-| Write an app | [The Capsule](./docs/capsule.md), [Server Actions](./docs/server-actions.md), [the SDK](./docs/sdk.md) |
+| Write an app | [The Capsule](./docs/capsule.md), [Server Actions](./docs/server-actions.md), [Server functions](./docs/functions.md), [the SDK](./docs/sdk.md) |
 | Decide who gets in | [Accounts and access](./docs/accounts-and-access.md) |
 | Do one task | The guides in [`docs/guides/`](./docs/guides/) |
 | Drive it from an agent or a script | [MCP tools](./docs/mcp-tools.md), [the reference](./docs/reference/README.md), [the walkthrough](./docs/mcp-walkthrough.md), [the CLI](./docs/cli.md) |

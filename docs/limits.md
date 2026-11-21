@@ -1,5 +1,7 @@
 # Limits
 
+Server function request bodies have a separate 100,000,000-byte limit and an 8 MiB aggregate pending-chunk budget. These do not raise worker memory, action, query, response, or file limits. See [Server functions](./functions.md#separate-limits).
+
 A Capsule and a Deployment run into these numbers. The Validation Gate and the Kernel both enforce the declaration limits, and the Kernel alone enforces the runtime ones.
 
 [The reference](./reference/README.md) states each rule with its refusal. The operator can change the file, email and call limits, and [Operate an installation](./operate.md#environment-variables) lists the variables.

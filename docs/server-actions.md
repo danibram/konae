@@ -1,5 +1,7 @@
 # Server Actions
 
+Server Actions remain the named database operations used by pages and may also be called by a declared [Server function](./functions.md). Functions do not replace their access rules or expose arbitrary SQL.
+
 A Server Action is a named operation declared in `actions.json`. It is the deployed app's only database interface. The browser sends the action name and its input. The SQL and the typed bindings stay on the Kernel.
 
 ## What happens on a call
