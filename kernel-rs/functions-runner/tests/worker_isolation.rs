@@ -6,10 +6,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -149,27 +146,25 @@ fn v8_watchdog_reuses_a_synchronized_worker_after_a_loop() {
 }
 
 #[test]
-fn cancellation_before_watchdog_timeout_reuses_the_runner_worker() {
+fn cooperative_cancellation_reuses_the_runner_worker() {
     let bundle = Bundle::new(
         "export async function handle(request, context) { if (new URL(request.url).pathname === '/cancel') { await context.actions.call('wait', {}); } return Response.json({ alive: true }); }",
     );
     let mut worker = worker(&bundle, Duration::from_secs(2));
     let pid = worker.pid().unwrap();
     let budget = Budget::new(Duration::from_secs(2));
-    let callback_budget = budget.clone();
-    let callback_entered = Arc::new(AtomicBool::new(false));
-    let callback_entered_copy = callback_entered.clone();
-    let mut callback = move |operation: &str, _args: Value| {
+    let mut callback_entered = false;
+    let mut callback = |operation: &str, _args: Value| {
         assert_eq!(operation, "action");
-        callback_entered_copy.store(true, Ordering::Release);
-        callback_budget.cancel();
+        callback_entered = true;
+        budget.cancel();
         Err("cancelled".into())
     };
 
     let error = worker
         .invoke_with(input("/cancel", "alice"), &budget, &mut callback)
         .unwrap_err();
-    assert!(callback_entered.load(Ordering::Acquire));
+    assert!(callback_entered);
     assert_eq!(konae_functions_executor::error_code(&error), "cancelled");
     assert_eq!(worker.pid(), Some(pid));
 
@@ -183,18 +178,40 @@ fn cancellation_before_watchdog_timeout_reuses_the_runner_worker() {
 
 #[test]
 fn shutdown_hook_runs_on_retirement_and_cannot_fail_the_request() {
-    let bundle = Bundle::new(
-        "export function handle() { return new Response('ok'); } export function shutdown() { throw new Error('cleanup failed'); }",
+    assert_shutdown_reports_failure(
+        "export function shutdown() { throw new Error('cleanup failed'); }",
     );
+}
+
+fn assert_shutdown_reports_failure(hook: &str) {
+    let bundle = Bundle::new(&format!(
+        "export function handle() {{ return new Response('ok'); }} {hook}"
+    ));
     let mut worker = worker(&bundle, Duration::from_secs(2));
     let output = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2)).unwrap();
     assert_eq!(output.body, "ok");
     assert!(!worker.shutdown_invoked());
 
-    let error = worker.shutdown(Duration::from_millis(200)).unwrap_err();
+    let error = worker.shutdown(Duration::from_millis(250)).unwrap_err();
+    assert!(
+        worker.shutdown_invoked(),
+        "{error}; {}",
+        worker.diagnostics()
+    );
     assert_eq!(
         konae_functions_executor::error_code(&error),
         "shutdown_failed"
     );
-    assert!(worker.shutdown_invoked());
+}
+
+#[test]
+fn shutdown_watchdog_interrupts_a_synchronous_infinite_loop() {
+    assert_shutdown_reports_failure("export function shutdown() { while (true) {} }");
+}
+
+#[test]
+fn shutdown_deadline_covers_a_pending_hook_that_ignores_cancellation() {
+    assert_shutdown_reports_failure(
+        "export async function shutdown() { await new Promise(() => {}); }",
+    );
 }

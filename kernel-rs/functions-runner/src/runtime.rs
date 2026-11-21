@@ -317,27 +317,21 @@ impl Runtime {
             return Ok(());
         }
         let deadline = Instant::now() + grace;
-        let termination_margin = grace.min(Duration::from_millis(30));
-        let cancel_margin = termination_margin
-            + grace
-                .saturating_sub(termination_margin)
-                .min(Duration::from_millis(10));
-        let terminate_at = deadline - termination_margin;
-        let watchdog =
+        let terminate_at = deadline - (grace / 4).min(Duration::from_millis(30));
+        let cancel_at = terminate_at - (grace / 4).min(Duration::from_millis(10));
+        let _watchdog =
             ExecutionWatchdog::arm_at(self.js.v8_isolate().thread_safe_handle(), terminate_at);
         let callback = self.shutdown.clone();
         let args = vec![self.shutdown_handler.clone()];
-        let result = match tokio::time::timeout_at(
+        match tokio::time::timeout_at(
             terminate_at.into(),
-            self.run(&callback, args, Some(deadline - cancel_margin)),
+            self.run(&callback, args, Some(cancel_at)),
         )
         .await
         {
             Ok(result) => result.map(|_| ()),
             Err(_) => Err(anyhow!("shutdown_failed")),
-        };
-        drop(watchdog);
-        result
+        }
     }
     async fn run(
         &mut self,
