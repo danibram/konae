@@ -1948,7 +1948,10 @@ mod tests {
             "id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"old source"},"directories":[],
             "manifest":{"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"required"},"files":{"access":"deployment"}}},"updatedAt":1
         });
-        crate::Settings::new(id, "Import failure", "import-failure", &old_source["manifest"]).write(&state.data_root).await.unwrap();
+        kernel::write_record_for_test(&root, &deployment);
+        let dist = crate::layout::dist(&root, id);
+        tokio::fs::create_dir_all(&dist).await.unwrap();
+        tokio::fs::write(dist.join("index.html"), "published artifact").await.unwrap();
         super::super::sources::write(&state.data_root, id, &old_source).await.unwrap();
         let database = kernel::database_path(&state.kernel, id);
         tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
@@ -2345,7 +2348,7 @@ mod tests {
         imported_payload.as_object_mut().unwrap().remove("initialModules");
         imported_payload["initialReleased"] = serde_json::to_value(&a).unwrap();
         imported_payload["project"]["files"] = json!({"functions.json":"invalid saved draft"});
-        let normal = kernel::runtime::validate_release(&state.kernel, &kernel::functions::parse_deploy_input(imported_payload.clone()).unwrap(), None).await;
+        let normal = kernel::deployments::validate_release(&state.kernel, &kernel::functions::parse_deploy_input(imported_payload.clone()).unwrap(), None).await;
         assert!(normal.err().unwrap().to_string().contains("project_import"));
         payload.as_object_mut().unwrap().remove("initialModules");
         payload["artifact"]["files"]["index.html"] = json!("<p>B</p>");

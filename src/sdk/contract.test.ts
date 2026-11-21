@@ -217,8 +217,8 @@ describe("the rendered readers", () => {
     expect(guide).toContain("Be listed in search");
   });
 
-  test("platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls", () => {
-    const mcp = read("kernel-rs/konae/src/mcp.rs");
+  test("platform_guide serves the rendered JSON, and the starter app in the MCP module uses only contract calls", () => {
+    const mcp = read("kernel-rs/konae/src/mcp/mod.rs");
     expect(mcp).toContain(`"platform_guide" => super::guide::topic(`);
     expect(read("kernel-rs/konae/src/guide.rs")).toContain(`"sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,`);
     expect(drift(namedCalls(mcp)).notInContract).toEqual([]);

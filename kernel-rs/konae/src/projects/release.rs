@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 
 use crate::mcp::{self, Owner};
 use crate::projects::sources;
-use crate::runtime::{response_value, validate_release};
+use crate::deployments::validate_release;
+use crate::runtime::response_value;
 use crate::state::Konae;
 use crate::transfers;
 use crate::*;
@@ -480,7 +481,7 @@ pub(crate) async fn import(
                 None => None,
             };
             let change =
-                kernel::runtime::validate_import_release(state, &input, against.as_deref()).await?;
+                kernel::deployments::validate_import_release(state, &input, against.as_deref()).await?;
             anyhow::ensure!(
                 input.initial_package.is_none()
                     && input.initial_signup_policy.is_none()

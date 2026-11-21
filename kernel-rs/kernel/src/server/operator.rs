@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::installation::Installation;
 use crate::{
-    admin_database, find_project_deployment, http, invitations, layout, runtime, AppState, Deployment,
+    admin_database, copies, file_store, find_project_deployment, http, invitations, layout, recovery, runtime, AppState, Deployment,
     Settings, SignupMode, Startup,
 };
 
@@ -475,4 +475,14 @@ mod tests {
         assert!(mail_key(&root).unwrap_err().to_string().contains("holds no key"));
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+/// Runs the operator commands both binaries answer: `restore`, the file
+/// store commands and `reconcile`. Returns whether one ran.
+pub async fn operator_command(installation: &Installation) -> Result<bool> {
+    Ok(copies::history::operator_command().await?
+        || copies::operator_command(installation).await?
+        || file_store::operator_command().await?
+        || recovery::operator_command(installation).await?
+        || recovery::drill_check(installation).await?)
 }

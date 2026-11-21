@@ -9,6 +9,7 @@ use crate::{
 };
 use super::settings::released_settings;
 
+/// Persists the applied Deployment while keeping editable settings.
 pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
     persist_applied(state, deployment, None, None).await
 }

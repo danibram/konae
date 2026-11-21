@@ -1,6 +1,6 @@
 
 use super::*;
-use rusqlite::params;
+use rusqlite::{params, types::Value as SqlValue};
 use std::time::{Duration, Instant};
 
 fn state(root: &Path) -> AppState {

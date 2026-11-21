@@ -1,3 +1,4 @@
+mod http;
 mod binding;
 mod execution;
 mod lock;
@@ -25,3 +26,4 @@ pub use sql::{
     sql_tokens, unbounded_query_reason,
 };
 pub use validation::{validate_action, validate_declarations};
+pub use http::{invoke_action};

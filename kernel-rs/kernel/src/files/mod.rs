@@ -16,6 +16,6 @@ pub use upload::{upload_from_path, Upload};
 #[cfg(any(test, feature = "testing"))]
 pub use upload::upload_file;
 
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 use change::BAD_VISIBILITY;
 use index::{file_room, read_file_index};
