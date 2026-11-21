@@ -20,6 +20,7 @@ use rusqlite::hooks::{AuthContext, Authorization};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[cfg(any(test, feature = "testing"))]
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -104,6 +105,7 @@ pub use routing::{deployment_for, deployment_for_host, deployment_for_request};
 pub use routing::{deployment_url, safe_slug, content_type};
 
 use auth::{AuthError, AuthService, AuthUser};
+#[cfg(any(test, feature = "testing"))]
 use limits::Guards;
 
 pub use server::AppState;
