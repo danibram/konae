@@ -1,0 +1,250 @@
+{
+  "results": [
+    {
+      "criterion": "request-signal-aborts",
+      "status": "pass",
+      "detail": {
+        "kind": "Reply",
+        "capability": {
+          "generation": "afb471df900744eabb1aa0e850c5fb35ef0f5313301aed53c3aa1159b83a8031",
+          "request": 1,
+          "token": "e8c839183eed49a0a7d59cf6aa0f426055ae6a81310ff16450358f7f0d4a6b1d"
+        },
+        "output": {
+          "status": 200,
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ]
+          ],
+          "body": "{\"aborted\":true}"
+        }
+      },
+      "elapsed_ms": 119.91
+    },
+    {
+      "criterion": "shutdown-hook-runs",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": null
+      },
+      "elapsed_ms": 26.82
+    },
+    {
+      "criterion": "shutdown-signal-aborts",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": null
+      },
+      "elapsed_ms": 122.67
+    },
+    {
+      "criterion": "shutdown-has-no-capability",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": "capability_expired"
+      },
+      "elapsed_ms": 40.39
+    },
+    {
+      "criterion": "parent-pipe-eof-during-loop",
+      "status": "pass",
+      "detail": {
+        "exit_code": 70,
+        "reason": "EOF del supervisor interrumpe el proceso aunque JS no coopere"
+      },
+      "elapsed_ms": 68.49
+    },
+    {
+      "criterion": "invalid-utf8-refused",
+      "status": "pass",
+      "detail": {
+        "kind": "Failure",
+        "capability": {
+          "generation": "46c861def2f384f8f51b30b053775aa9355163d0e4e9c859372322b162986e1d",
+          "request": 1,
+          "token": "bcf15927d565fe2de36ef0db42352f3b2e7b8ddb989dc54dc518adf0afc5536c"
+        },
+        "code": "invalid_response"
+      },
+      "elapsed_ms": 35.14
+    },
+    {
+      "criterion": "actions-promise-rejects-canonically",
+      "status": "pass",
+      "detail": {
+        "kind": "Failure",
+        "capability": {
+          "generation": "cdac6a527a694d3c132a4838d737a0bbe856c4459b4e3cdbc2485ec62591eee7",
+          "request": 1,
+          "token": "8b50dcbfd5a4d1ad4f6a96970e7ab249998588e2b93049ac67cef28e080c169f"
+        },
+        "code": "forbidden"
+      },
+      "elapsed_ms": 32.46
+    },
+    {
+      "criterion": "anonymous-actor-is-null",
+      "status": "pass",
+      "detail": {
+        "kind": "Reply",
+        "capability": {
+          "generation": "0be6f575692aad1ad253188a69ae043f049624e066b05deacb792b5ed27b556f",
+          "request": 1,
+          "token": "bd628c6fb639fd5eaae88a4de27b4582e01c55df9cc497d05511f4a1cb8e4408"
+        },
+        "output": {
+          "status": 200,
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ]
+          ],
+          "body": "{\"actor\":null}"
+        }
+      },
+      "elapsed_ms": 30.73
+    },
+    {
+      "criterion": "response-byte-limit",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 502,
+          "body": {
+            "error": "response_too_large"
+          },
+          "raw": "{\"error\":\"response_too_large\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "30"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:05:35 GMT"
+            ]
+          ]
+        },
+        "health": {
+          "ok": true
+        },
+        "worker_reaped": true
+      },
+      "elapsed_ms": 150.64
+    },
+    {
+      "criterion": "operation-count-limit",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 429,
+          "body": {
+            "error": "operation_limit"
+          },
+          "raw": "{\"error\":\"operation_limit\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "27"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:05:36 GMT"
+            ]
+          ]
+        },
+        "health": {
+          "ok": true
+        },
+        "worker_reaped": true
+      },
+      "elapsed_ms": 146.34
+    },
+    {
+      "criterion": "heap-failure-contained",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 502,
+          "body": {
+            "error": "worker_failed"
+          },
+          "raw": "{\"error\":\"worker_failed\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "25"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:05:36 GMT"
+            ]
+          ]
+        },
+        "health": {
+          "ok": true
+        },
+        "worker_reaped": true
+      },
+      "elapsed_ms": 162.96
+    },
+    {
+      "criterion": "rss-poll-detects-finite-burst",
+      "status": "fail",
+      "detail": {
+        "error": "AssertionError: {'status': 500, 'body': {'error': 'internal_error'}, 'raw': '{\"error\":\"internal_error\"}', 'headers': [('content-type', 'application/json'), ('content-length', '26'), ('date', 'Fri, 20 Nov 2026 12:05:36 GMT')]}"
+      },
+      "elapsed_ms": 107.41
+    },
+    {
+      "criterion": "hung-shutdown-killed-and-reaped",
+      "status": "pass",
+      "detail": {
+        "eviction": {
+          "evicted": 1
+        },
+        "elapsed_ms": 12.68,
+        "worker_reaped": true
+      },
+      "elapsed_ms": 130.58
+    },
+    {
+      "criterion": "parent-sigkill-leaves-no-worker",
+      "status": "pass",
+      "detail": {
+        "parent_exit": -9,
+        "worker_disappeared": true,
+        "request": {
+          "error": "RemoteDisconnected"
+        }
+      },
+      "elapsed_ms": 152.29
+    }
+  ],
+  "summary": {
+    "pass": 13,
+    "fail": 1
+  },
+  "scope": "IPC del hijo. El padre verifica por separado kill/reap, plazos HTTP y políticas de memoria."
+}

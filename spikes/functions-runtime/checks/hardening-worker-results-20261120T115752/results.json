@@ -1,0 +1,85 @@
+{
+  "results": [
+    {
+      "criterion": "request-signal-aborts",
+      "status": "pass",
+      "detail": {
+        "kind": "Reply",
+        "capability": {
+          "generation": "335460971774cf0b8e4673572ea71d3def0341ba31764e495fdb80fd86663a47",
+          "request": 1,
+          "token": "de5fca782ac58fd6805865dee8e74a83ef8f6b699c13680aa5bd88eb65a4a8fd"
+        },
+        "output": {
+          "status": 200,
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ]
+          ],
+          "body": "{\"aborted\":true}"
+        }
+      },
+      "elapsed_ms": 66.11
+    },
+    {
+      "criterion": "shutdown-hook-runs",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": null
+      },
+      "elapsed_ms": 24.51
+    },
+    {
+      "criterion": "shutdown-signal-aborts",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": null
+      },
+      "elapsed_ms": 122.55
+    },
+    {
+      "criterion": "shutdown-has-no-capability",
+      "status": "pass",
+      "detail": {
+        "kind": "ShutdownComplete",
+        "invoked": true,
+        "error": "capability_expired"
+      },
+      "elapsed_ms": 38.65
+    },
+    {
+      "criterion": "parent-pipe-eof-during-loop",
+      "status": "pass",
+      "detail": {
+        "exit_code": 70,
+        "reason": "EOF del supervisor interrumpe el proceso aunque JS no coopere"
+      },
+      "elapsed_ms": 71.25
+    },
+    {
+      "criterion": "invalid-utf8-refused",
+      "status": "pass",
+      "detail": {
+        "kind": "Failure",
+        "capability": {
+          "generation": "17b3c144b1f89da2bdb57191c1a26f3b6ae8574e229ff7805c0b47c3aee8670a",
+          "request": 1,
+          "token": "4a0437ad7905ec29c73afdb2e304b1eaa520dc6f76fe8a49d41385b35db8ed78"
+        },
+        "code": "invalid_response"
+      },
+      "elapsed_ms": 32.7
+    }
+  ],
+  "summary": {
+    "pass": 6,
+    "fail": 0
+  },
+  "scope": "IPC del hijo. El padre verifica por separado kill/reap, plazos HTTP y políticas de memoria."
+}
