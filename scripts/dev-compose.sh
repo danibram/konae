@@ -13,7 +13,7 @@ case "$arch" in
   amd64) expected='x86-64' ;;
   arm64) expected='ARM aarch64' ;;
 esac
-runner="$output/konae-functions-spike"
+runner="$output/konae-functions-runner"
 valid=0
 if [ -x "$runner" ] && command -v file >/dev/null 2>&1; then
   description=$(file -b "$runner")

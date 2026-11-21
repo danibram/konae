@@ -39,7 +39,7 @@ impl Drop for Bundle {
 
 fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
     Worker::spawn_with_policy(
-        Path::new(env!("CARGO_BIN_EXE_konae-functions-spike")),
+        Path::new(env!("CARGO_BIN_EXE_konae-functions-runner")),
         "orders",
         bundle.path(),
         &Budget::new(timeout),

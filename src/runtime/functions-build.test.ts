@@ -53,6 +53,13 @@ test("local and refreshed folder builders run with the old dependency set", asyn
   expect({ exitCode: await process.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
   expect(await readFile(path.join(root, "app/package-lock.json"), "utf8")).toBe(files["package-lock.json"]);
+
+  await writeFile(path.join(root, "app/functions/orders.ts"), "export default () => null;");
+  const invalid = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const [code, error] = await Promise.all([invalid.exited, new Response(invalid.stderr).text()]);
+  expect(code).not.toBe(0);
+  expect(error).toContain("Function orders bundle must be a self-contained ESM module exporting handle.");
+  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
 });
 
 test("browser entries cannot import server sources", async () => {

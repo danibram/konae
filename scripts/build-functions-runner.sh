@@ -19,7 +19,7 @@ docker buildx build --platform "$platform" --target artifact \
   --output "type=local,dest=$scratch" \
   --file "$root/Dockerfile.functions-runner" "$root"
 
-runner="$scratch/konae-functions-spike"
+runner="$scratch/konae-functions-runner"
 test -x "$runner" || { echo 'el build no produjo el runner ejecutable' >&2; exit 1; }
 description=$(file -b "$runner")
 case "$description" in
@@ -27,5 +27,5 @@ case "$description" in
   *) echo "runner $description, se esperaba $arch" >&2; exit 1 ;;
 esac
 mkdir -p "$output"
-install -m 755 "$runner" "$output/konae-functions-spike"
-shasum -a 256 "$output/konae-functions-spike"
+install -m 755 "$runner" "$output/konae-functions-runner"
+shasum -a 256 "$output/konae-functions-runner"

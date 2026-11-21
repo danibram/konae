@@ -318,7 +318,7 @@ let serverArtifact;
 if (functions && Object.keys(functions.functions).length) {
   validateFunctions(functions, { ...functionContext, staticPaths: Object.keys(artifact.files) });
   serverArtifact = await bundleFunctions(app, functions, development);
-  validateServerArtifact(functions, serverArtifact);
+  validateServerArtifactEnvelope(functions, serverArtifact);
 }
 const server = path.join(root, 'server');
 await rm(server, { recursive: true, force: true });

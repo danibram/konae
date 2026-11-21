@@ -121,7 +121,7 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
     ```sh
     scripts/build-functions-runner.sh <amd64|arm64> .konae/functions-runner
     docker buildx build --build-context functions-runner=.konae/functions-runner \
-      --build-arg FUNCTIONS_RUNNER_SHA256="$(shasum -a 256 .konae/functions-runner/konae-functions-spike | awk '{print $1}')" \
+      --build-arg FUNCTIONS_RUNNER_SHA256="$(shasum -a 256 .konae/functions-runner/konae-functions-runner | awk '{print $1}')" \
       -f Dockerfile.kernel -t konae-kernel:local .
     ```
 

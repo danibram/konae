@@ -23,12 +23,63 @@ pub fn error_code(error: &anyhow::Error) -> &str {
     executor::error_code(error)
 }
 
+enum Watchdog {
+    Empty,
+    Registered(v8::IsolateHandle),
+    Armed {
+        stop: mpsc::Sender<()>,
+        thread: thread::JoinHandle<()>,
+    },
+}
+
+impl Watchdog {
+    fn arm(&mut self) {
+        let Self::Registered(isolate) = self else {
+            return;
+        };
+        let isolate = isolate.clone();
+        let (stop, signal) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            if signal.recv_timeout(CANCEL_GRACE) == Err(mpsc::RecvTimeoutError::Timeout) {
+                isolate.terminate_execution();
+            }
+        });
+        *self = Self::Armed { stop, thread };
+    }
+
+    fn disarm(&mut self) {
+        if let Self::Armed { stop, thread } = std::mem::replace(self, Self::Empty) {
+            drop(stop);
+            thread.join().expect("watchdog thread panicked");
+        }
+    }
+}
+
+struct ActiveInvocation {
+    capability: Capability,
+    watchdog: Watchdog,
+}
+
+pub(crate) struct IsolateRegistration {
+    bridge: Arc<ChildBridge>,
+    request: u64,
+}
+
+impl Drop for IsolateRegistration {
+    fn drop(&mut self) {
+        let mut active = self.bridge.active.lock().unwrap();
+        if let Some(invocation) = active.as_mut()
+            && invocation.capability.request == self.request
+        {
+            invocation.watchdog.disarm();
+        }
+    }
+}
+
 pub struct ChildBridge {
-    active: Mutex<Option<Capability>>,
+    active: Mutex<Option<ActiveInvocation>>,
     sequence: AtomicU64,
     cancelled: AtomicBool,
-    watchdog_started: AtomicBool,
-    isolate: Mutex<Option<v8::IsolateHandle>>,
     error: Mutex<Option<String>>,
     output: Mutex<io::Stdout>,
     replies: Mutex<mpsc::Receiver<ParentMessage>>,
@@ -38,24 +89,40 @@ pub struct ChildBridge {
 
 impl ChildBridge {
     fn begin(&self, capability: Capability) {
-        *self.active.lock().unwrap() = Some(capability);
-        *self.isolate.lock().unwrap() = None;
+        let mut active = self.active.lock().unwrap();
+        assert!(active.is_none());
         self.sequence.store(0, Ordering::SeqCst);
         self.body_sequence.store(0, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
-        self.watchdog_started.store(false, Ordering::SeqCst);
         self.clear_error();
+        *active = Some(ActiveInvocation {
+            capability,
+            watchdog: Watchdog::Empty,
+        });
     }
 
     fn end(&self) {
-        *self.active.lock().unwrap() = None;
-        *self.isolate.lock().unwrap() = None;
+        if let Some(mut invocation) = self.active.lock().unwrap().take() {
+            invocation.watchdog.disarm();
+        }
     }
 
-    pub(crate) fn register_isolate(&self, isolate: v8::IsolateHandle) {
-        *self.isolate.lock().unwrap() = Some(isolate);
+    pub(crate) fn register_isolate(
+        self: &Arc<Self>,
+        isolate: v8::IsolateHandle,
+    ) -> IsolateRegistration {
+        let mut active = self.active.lock().unwrap();
+        let invocation = active
+            .as_mut()
+            .expect("isolate requires an active invocation");
+        assert!(matches!(invocation.watchdog, Watchdog::Empty));
+        invocation.watchdog = Watchdog::Registered(isolate);
         if self.cancelled() {
-            self.arm_watchdog();
+            invocation.watchdog.arm();
+        }
+        IsolateRegistration {
+            bridge: self.clone(),
+            request: invocation.capability.request,
         }
     }
 
@@ -78,30 +145,25 @@ impl ChildBridge {
             .get_or_insert_with(|| code.into());
     }
 
-    fn cancel(&self) {
+    fn cancel(&self, capability: &Capability) {
+        let mut active = self.active.lock().unwrap();
+        let Some(invocation) = active
+            .as_mut()
+            .filter(|active| &active.capability == capability)
+        else {
+            return;
+        };
         self.cancelled.store(true, Ordering::SeqCst);
         self.record_error("cancelled");
-        self.arm_watchdog();
+        invocation.watchdog.arm();
     }
 
-    fn arm_watchdog(&self) {
-        if self.watchdog_started.load(Ordering::SeqCst) {
-            return;
-        }
-        let isolate = self.isolate.lock().unwrap().clone();
-        if let Some(isolate) = isolate {
-            if self
-                .watchdog_started
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
-                return;
-            }
-            thread::spawn(move || {
-                thread::sleep(CANCEL_GRACE);
-                isolate.terminate_execution();
-            });
-        }
+    fn is_active(&self, capability: &Capability) -> bool {
+        self.active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|invocation| &invocation.capability == capability)
     }
 
     fn send(&self, message: &ChildMessage) -> io::Result<()> {
@@ -140,7 +202,7 @@ impl ChildBridge {
         operation: String,
         args: Value,
     ) -> std::result::Result<Value, String> {
-        if self.active.lock().unwrap().as_ref() != Some(&capability) {
+        if !self.is_active(&capability) {
             return Err(self.reject("capability_expired"));
         }
         if self.cancelled() {
@@ -184,7 +246,7 @@ impl ChildBridge {
         sequence: u64,
         maximum: usize,
     ) -> std::result::Result<protocol::BodyChunk, String> {
-        if self.active.lock().unwrap().as_ref() != Some(&capability) {
+        if !self.is_active(&capability) {
             return Err(self.reject("capability_expired"));
         }
         if self.cancelled() {
@@ -218,6 +280,28 @@ impl ChildBridge {
             }
             _ => Err(self.reject("worker_protocol_error")),
         }
+    }
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::*;
+
+    #[test]
+    fn disarm_wakes_and_joins_an_armed_watchdog() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let (stop, signal) = mpsc::channel();
+        let watchdog_stopped = stopped.clone();
+        let thread = thread::spawn(move || {
+            assert!(signal.recv().is_err());
+            watchdog_stopped.store(true, Ordering::Release);
+        });
+        let mut watchdog = Watchdog::Armed { stop, thread };
+
+        watchdog.disarm();
+
+        assert!(stopped.load(Ordering::Acquire));
+        assert!(matches!(watchdog, Watchdog::Empty));
     }
 }
 
@@ -265,8 +349,6 @@ pub fn worker_main() -> Result<()> {
         active: Mutex::new(None),
         sequence: AtomicU64::new(0),
         cancelled: AtomicBool::new(false),
-        watchdog_started: AtomicBool::new(false),
-        isolate: Mutex::new(None),
         error: Mutex::new(None),
         output: Mutex::new(io::stdout()),
         replies: Mutex::new(reply_rx),
@@ -287,9 +369,7 @@ pub fn worker_main() -> Result<()> {
                     }
                 }
                 ParentMessage::Cancel { capability } => {
-                    if reader_bridge.active.lock().unwrap().as_ref() == Some(&capability) {
-                        reader_bridge.cancel();
-                    }
+                    reader_bridge.cancel(&capability);
                 }
                 ParentMessage::Invoke { .. }
                 | ParentMessage::Spin { .. }

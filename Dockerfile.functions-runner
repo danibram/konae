@@ -11,10 +11,10 @@ COPY kernel-rs/functions-runner/Cargo.toml kernel-rs/functions-runner/Cargo.lock
 COPY kernel-rs/functions-runner/src/main.rs kernel-rs/functions-runner/src/runtime.rs kernel-rs/functions-runner/src/worker.rs kernel-rs/functions-runner/src/bootstrap.js ./kernel-rs/functions-runner/src/
 RUN cargo build --release --locked \
     --manifest-path kernel-rs/functions-runner/Cargo.toml \
-    --bin konae-functions-spike \
+    --bin konae-functions-runner \
   && install -D -m 755 \
-    kernel-rs/functions-runner/target/release/konae-functions-spike \
-    /out/konae-functions-spike
+    kernel-rs/functions-runner/target/release/konae-functions-runner \
+    /out/konae-functions-runner
 
 FROM scratch AS artifact
-COPY --from=build /out/konae-functions-spike /konae-functions-spike
+COPY --from=build /out/konae-functions-runner /konae-functions-runner

@@ -1,4 +1,4 @@
-use crate::worker::ChildBridge;
+use crate::worker::{ChildBridge, IsolateRegistration};
 use anyhow::{Result, anyhow};
 use deno_core::{
     Extension, ExtensionFileSource, JsRuntime, ModuleLoadOptions, ModuleLoadReferrer,
@@ -156,6 +156,8 @@ impl ModuleLoader for RejectUserModules {
 }
 
 pub struct Runtime {
+    // The registration stops and joins the watchdog before Rust drops the isolate.
+    _isolate_registration: IsolateRegistration,
     js: JsRuntime,
     invoke: v8::Global<v8::Function>,
     cancel: v8::Global<v8::Function>,
@@ -197,7 +199,7 @@ impl Runtime {
             extensions,
             ..Default::default()
         });
-        bridge.register_isolate(js.v8_isolate().thread_safe_handle());
+        let isolate_registration = bridge.register_isolate(js.v8_isolate().thread_safe_handle());
         js.op_state()
             .borrow_mut()
             .put(deno_permissions::PermissionsContainer::new(
@@ -261,6 +263,7 @@ impl Runtime {
             )
         };
         Ok(Self {
+            _isolate_registration: isolate_registration,
             js,
             invoke,
             cancel,
@@ -313,8 +316,6 @@ impl Runtime {
         if !self.has_shutdown {
             return Ok(());
         }
-        self.bridge
-            .register_isolate(self.js.v8_isolate().thread_safe_handle());
         let callback = self.shutdown.clone();
         let args = vec![self.shutdown_handler.clone()];
         self.run(

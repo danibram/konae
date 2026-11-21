@@ -3,7 +3,7 @@ set -eu
 
 bundle=${1:?usage: build-functions-images.sh <runner-bundle-dir> <tag-prefix>}
 prefix=${2:?usage: build-functions-images.sh <runner-bundle-dir> <tag-prefix>}
-runner="$bundle/konae-functions-spike"
+runner="$bundle/konae-functions-runner"
 test -x "$runner" || { echo "runner no ejecutable: $runner" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker no está instalado" >&2; exit 1; }
 command -v file >/dev/null 2>&1 || { echo "file no está instalado" >&2; exit 1; }

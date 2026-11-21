@@ -29,7 +29,7 @@ RUN apt-get update \
   && mkdir -p /kernel/apps /usr/local/lib/konae
 COPY --from=build /src/target/release/kernel /usr/local/lib/konae/kernel
 ARG FUNCTIONS_RUNNER_SHA256
-COPY --from=functions-runner /konae-functions-spike /usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}
+COPY --from=functions-runner /konae-functions-runner /usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}
 RUN test -n "$FUNCTIONS_RUNNER_SHA256" \
   && printf '%s  %s\n' "$FUNCTIONS_RUNNER_SHA256" "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" | sha256sum --check --status \
   && mv "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" /usr/local/lib/konae/functions-runner

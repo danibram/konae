@@ -70,7 +70,7 @@ function validServerBundle(source: string): boolean {
   return exportsHandle;
 }
 
-function functionsContract(refuse: (code: Parameters<typeof refusal>[0], message: string) => Error = (code, message) => Object.assign(new Error(message), { code }), validateBundle: (source: string) => boolean = () => true) {
+function functionsContract(refuse: (code: Parameters<typeof refusal>[0], message: string) => Error = (code, message) => Object.assign(new Error(message), { code })) {
   const FUNCTIONS_ABI = "konae-functions/1";
   const refusal = refuse;
 function object(value: unknown): value is Record<string, unknown> {
@@ -160,7 +160,7 @@ function validateFunctions(manifest: FunctionsManifest, context: FunctionsContex
   }
 }
 
-function validateServerArtifact(manifest: FunctionsManifest | undefined, input: unknown): ServerArtifact | undefined {
+function validateServerArtifactEnvelope(manifest: FunctionsManifest | undefined, input: unknown): ServerArtifact | undefined {
   if (input === undefined || input === null) {
     if (manifest && Object.keys(manifest.functions).length) throw refusal("function.artifact-missing", "Declared functions require a Server Artifact.");
     return undefined;
@@ -181,9 +181,6 @@ function validateServerArtifact(manifest: FunctionsManifest | undefined, input: 
   }
   if (total > 8388608) throw refusal("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.");
   if (!manifest || canonical(normalized) !== canonical(manifest)) throw refusal("function.artifact-manifest", "Server Artifact manifest does not match functions.json.");
-  for (const name of Object.keys(bundles)) {
-    if (!validateBundle(bundles[name])) throw refusal("function.bundle-contract", `Function ${name} bundle must be a self-contained ESM module exporting handle.`);
-  }
   return { version: 1, abi: FUNCTIONS_ABI, manifest, bundles };
 }
 
@@ -191,10 +188,20 @@ function serverManifestText(manifest: FunctionsManifest, hashes: Record<string, 
   return JSON.stringify({ version: 1, abi: FUNCTIONS_ABI, manifest, hashes }, null, 2);
 }
 
-  return { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText };
+  return { parseFunctions, validateFunctions, validateServerArtifactEnvelope, serverManifestText };
 }
 
-export const { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText } = functionsContract(refusal, validServerBundle);
+const { parseFunctions, validateFunctions, validateServerArtifactEnvelope, serverManifestText } = functionsContract(refusal);
+export { parseFunctions, validateFunctions, serverManifestText };
+
+export function validateServerArtifact(manifest: FunctionsManifest | undefined, input: unknown): ServerArtifact | undefined {
+  const artifact = validateServerArtifactEnvelope(manifest, input);
+  if (!artifact) return undefined;
+  for (const [name, bundle] of Object.entries(artifact.bundles)) {
+    if (!validServerBundle(bundle)) throw refusal("function.bundle-contract", `Function ${name} bundle must be a self-contained ESM module exporting handle.`);
+  }
+  return artifact;
+}
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -233,5 +240,5 @@ export async function verifyServerFolder(files: Record<string, Uint8Array>): Pro
 }
 
 export function functionsBuildSupport(): string {
-  return `const { parseFunctions, validateFunctions, validateServerArtifact } = (${functionsContract.toString()})();`;
+  return `const { parseFunctions, validateFunctions, validateServerArtifactEnvelope } = (${functionsContract.toString()})();`;
 }

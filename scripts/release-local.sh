@@ -189,7 +189,7 @@ run git archive --format=tar -o "${work}/src.tar" "$revision"
 run tar -xf "${work}/src.tar" -C "$context"
 runner_bundle="${work}/functions-runner"
 run sh "${context}/scripts/build-functions-runner.sh" amd64 "$runner_bundle"
-runner_sha256=$(shasum -a 256 "${runner_bundle}/konae-functions-spike" | awk '{print $1}')
+runner_sha256=$(shasum -a 256 "${runner_bundle}/konae-functions-runner" | awk '{print $1}')
 
 if [ "$PUSH" -eq 1 ]; then
   output="--push"

@@ -48,7 +48,7 @@ COPY --from=build /src/target/release/konae /usr/local/bin/konae
 RUN test "$(od -An -tx1 -N4 /usr/local/bin/konae | tr -d ' \n')" = 7f454c46 \
   && case "$TARGETARCH:$(od -An -tx1 -j18 -N2 /usr/local/bin/konae | tr -d ' \n')" in amd64:3e00|arm64:b700) ;; *) echo "Packaged Konae ELF does not match target architecture $TARGETARCH" >&2; exit 1 ;; esac
 ARG FUNCTIONS_RUNNER_SHA256
-COPY --from=functions-runner /konae-functions-spike /usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}
+COPY --from=functions-runner /konae-functions-runner /usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}
 RUN test -n "$FUNCTIONS_RUNNER_SHA256" \
   && printf '%s  %s\n' "$FUNCTIONS_RUNNER_SHA256" "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" | sha256sum --check --status \
   && mv "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" /usr/local/lib/konae/functions-runner
