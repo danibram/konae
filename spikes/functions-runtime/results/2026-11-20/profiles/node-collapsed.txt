@@ -1,0 +1,52 @@
+Analysis of sampling node (pid 76460) every 1 millisecond
+Process:         node [76460]
+Path:            /opt/homebrew/*/node
+Load Address:    0x100898000
+Identifier:      node
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  launchd [1]
+Target Type:     live task
+
+Date/Time:       2026-11-20 11:49:05.823 +0100
+Launch Time:     2026-11-20 11:40:00.324 +0100
+OS Version:      macOS 26.6.1 (25G76)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         68.3M
+Physical footprint (peak):  110.3M
+Idle exit:                  untracked
+----
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        8649
+        kevent  (in libsystem_kernel.dylib)        3478
+        __workq_kernreturn  (in libsystem_kernel.dylib)        2181
+        semaphore_wait_trap  (in libsystem_kernel.dylib)        2181
+        writev  (in libsystem_kernel.dylib)        96
+        read  (in libsystem_kernel.dylib)        71
+        <deduplicated_symbol>  (in libnode.147.dylib)        47
+        __fcntl  (in libsystem_kernel.dylib)        28
+        Builtins_LoadIC_Megamorphic  (in libnode.147.dylib)        13
+        Builtins_GetProperty  (in libnode.147.dylib)        11
+        Builtins_KeyedLoadIC_Megamorphic  (in libnode.147.dylib)        11
+        Builtins_Call_ReceiverIsNullOrUndefined  (in libnode.147.dylib)        9
+        _xzm_free  (in libsystem_malloc.dylib)        9
+        Builtins_StringAdd_CheckNone  (in libnode.147.dylib)        8
+        ada::parser::parse_url_impl<ada::url_aggregator, true>(std::basic_string_view<char>, ada::url_aggregator const*)  (in libada.3.4.4.dylib)        8
+        Builtins_KeyedStoreIC_Megamorphic  (in libnode.147.dylib)        7
+        v8::internal::TransitionsAccessor::SearchTransition(v8::internal::Tagged<v8::internal::Name>, v8::internal::PropertyKind, v8::internal::PropertyAttributes)  (in libnode.147.dylib)        7
+        Builtins_LoadIC  (in libnode.147.dylib)        6
+        Builtins_MapConstructor  (in libnode.147.dylib)        6
+        llhttp__internal__run  (in libllhttp.9.4.1.dylib)        6
+        v8::internal::ConcurrentMarking::RunMajor(v8::JobDelegate*, v8::base::EnumSet<v8::internal::CodeFlushMode, int>, unsigned int, bool)  (in libnode.147.dylib)        6
+        v8::internal::Scavenger::ScavengeObject<v8::internal::FullHeapObjectSlot>(v8::internal::FullHeapObjectSlot, v8::internal::Tagged<v8::internal::HeapObject>)  (in libnode.147.dylib)        6
+        Builtins_CallFunction_ReceiverIsNullOrUndefined  (in libnode.147.dylib)        5
+        Builtins_RecordWriteSaveFP  (in libnode.147.dylib)        5
+        Builtins_RunMicrotasks  (in libnode.147.dylib)        5
+        mach_continuous_time  (in libsystem_kernel.dylib)        5
+        sqlite3VdbeExec  (in libsqlite3.3.53.1.dylib)        5
+        v8::internal::Runtime_DefineKeyedOwnPropertyInLiteral(int, unsigned long*, v8::internal::Isolate*)  (in libnode.147.dylib)        5
+

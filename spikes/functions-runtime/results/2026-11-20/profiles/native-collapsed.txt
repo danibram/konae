@@ -1,0 +1,36 @@
+Analysis of sampling konae-functions-spike (pid 76458) every 1 millisecond
+Process:         konae-functions-spike [76458]
+Path:            /private/tmp/*/konae-functions-spike
+Load Address:    0x100a2c000
+Identifier:      konae-functions-spike
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  launchd [1]
+Target Type:     live task
+
+Date/Time:       2026-11-20 11:48:55.585 +0100
+Launch Time:     2026-11-20 11:40:00.106 +0100
+OS Version:      macOS 26.6.1 (25G76)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         5216K
+Physical footprint (peak):  5248K
+Idle exit:                  untracked
+----
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        4142
+        kevent  (in libsystem_kernel.dylib)        1627
+        writev  (in libsystem_kernel.dylib)        104
+        __recvfrom  (in libsystem_kernel.dylib)        88
+        __fcntl  (in libsystem_kernel.dylib)        32
+        sqlite3VdbeExec  (in konae-functions-spike)        13
+        recv  (in libsystem_c.dylib)        11
+        bytes::bytes::shared_drop::h5756f1f8f1e41756  (in konae-functions-spike)        8
+        _platform_memmove  (in libsystem_platform.dylib)        6
+        _malloc_zone_malloc  (in libsystem_malloc.dylib)        5
+        _xzm_free  (in libsystem_malloc.dylib)        5
+        mach_absolute_time  (in libsystem_kernel.dylib)        5
+

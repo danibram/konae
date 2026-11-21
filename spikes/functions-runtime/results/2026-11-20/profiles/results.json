@@ -1,0 +1,38 @@
+[
+  {
+    "target": "native",
+    "sampled_pid": 76458,
+    "sample_exit": 0,
+    "verified_requests": 8768,
+    "profile": "native.txt.gz",
+    "excluded_from_benchmark": true,
+    "collapsed_profile": "native-collapsed.txt"
+  },
+  {
+    "target": "deno",
+    "sampled_pid": 76459,
+    "sample_exit": 0,
+    "verified_requests": 10659,
+    "profile": "deno.txt.gz",
+    "excluded_from_benchmark": true,
+    "collapsed_profile": "deno-collapsed.txt"
+  },
+  {
+    "target": "node",
+    "sampled_pid": 76460,
+    "sample_exit": 0,
+    "verified_requests": 14738,
+    "profile": "node.txt.gz",
+    "excluded_from_benchmark": true,
+    "collapsed_profile": "node-collapsed.txt"
+  },
+  {
+    "target": "next",
+    "sampled_pid": 76462,
+    "sample_exit": 0,
+    "verified_requests": 2631,
+    "profile": "next.txt.gz",
+    "excluded_from_benchmark": true,
+    "collapsed_profile": "next-collapsed.txt"
+  }
+]

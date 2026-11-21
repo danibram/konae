@@ -1,0 +1,27 @@
+Function worker binary pair for the request-body change
+
+Source revision: c29e1fd43fbc095409bda7deda6ac39527aedd1c
+Source state: working tree contains uncommitted changes. No commit was made.
+Build host: macOS arm64
+Target directory: /tmp/konae-deno-core-target/release
+Build profile: release, debug symbols disabled, two Cargo jobs, incremental compilation disabled
+Private Kernel-runner IPC: konae-functions-ipc/2
+Public function artifact ABI: konae-functions/1
+
+Kernel: /tmp/konae-deno-core-target/release/kernel
+SHA-256: eb376714d9b675c982d1f0548e2453614de3788df2e140c19a54120cd5349a72
+
+Runner: /tmp/konae-deno-core-target/release/konae-functions-spike
+SHA-256: ceaf07a831d502500b0d265b5333ed71dffe91476030391edab29e71cfb2f632
+
+The pair was built from this working tree and each binary reported the Mach-O arm64 format. The runner was executed as a subprocess with an IPC v1 Init. It returned `worker_protocol_mismatch` and exited with status 1 before evaluating the bundle.
+
+Kernel HTTP runtime source at build and final boundary test: `kernel-rs/kernel/src/functions_http.rs`, SHA-256 `26775b7e989dd31e7f38f94251d3d480a9a3e3250042f17fc59f4465bd85b885`. The runtime source did not change after the pair build. A later edit changed only the HTTP test fixture and documentation; the release Kernel binary was not rebuilt. The final HTTP test ran the Kernel's debug test harness with this release runner.
+
+The frozen binaries used by the parent thread were read for compatibility tests and their hashes matched after testing.
+
+Frozen Kernel: /Users/dbr/.bb/thread-storage/thr_4kbab3tzcv/kamynando-runtime/kernel
+SHA-256: ebba83825c2c33b04e2cb7507436ede176983493617d31d666e75db525b009b4
+
+Frozen runner: /Users/dbr/.bb/thread-storage/thr_4kbab3tzcv/kamynando-runtime/runner
+SHA-256: 1003e62e80e056a83ad92e4ad4ad5ca202871beaeda4d071ffe60a2705a7e104
