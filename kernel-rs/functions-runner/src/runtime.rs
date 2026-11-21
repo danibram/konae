@@ -1,4 +1,4 @@
-use crate::worker::{ChildBridge, IsolateRegistration};
+use crate::worker::{ChildBridge, ExecutionWatchdog, IsolateRegistration};
 use anyhow::{Result, anyhow};
 use deno_core::{
     Extension, ExtensionFileSource, JsRuntime, ModuleLoadOptions, ModuleLoadReferrer,
@@ -316,15 +316,28 @@ impl Runtime {
         if !self.has_shutdown {
             return Ok(());
         }
+        let deadline = Instant::now() + grace;
+        let termination_margin = grace.min(Duration::from_millis(30));
+        let cancel_margin = termination_margin
+            + grace
+                .saturating_sub(termination_margin)
+                .min(Duration::from_millis(10));
+        let terminate_at = deadline - termination_margin;
+        let watchdog =
+            ExecutionWatchdog::arm_at(self.js.v8_isolate().thread_safe_handle(), terminate_at);
         let callback = self.shutdown.clone();
         let args = vec![self.shutdown_handler.clone()];
-        self.run(
-            &callback,
-            args,
-            Some(Instant::now() + grace.saturating_sub(Duration::from_millis(5))),
+        let result = match tokio::time::timeout_at(
+            terminate_at.into(),
+            self.run(&callback, args, Some(deadline - cancel_margin)),
         )
-        .await?;
-        Ok(())
+        .await
+        {
+            Ok(result) => result.map(|_| ()),
+            Err(_) => Err(anyhow!("shutdown_failed")),
+        };
+        drop(watchdog);
+        result
     }
     async fn run(
         &mut self,

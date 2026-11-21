@@ -14,7 +14,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const CANCEL_GRACE: Duration = Duration::from_millis(10);
@@ -26,10 +26,38 @@ pub fn error_code(error: &anyhow::Error) -> &str {
 enum Watchdog {
     Empty,
     Registered(v8::IsolateHandle),
-    Armed {
-        stop: mpsc::Sender<()>,
-        thread: thread::JoinHandle<()>,
-    },
+    Armed(ExecutionWatchdog),
+}
+
+pub(crate) struct ExecutionWatchdog {
+    stop: Option<mpsc::Sender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl ExecutionWatchdog {
+    pub(crate) fn arm_at(isolate: v8::IsolateHandle, deadline: Instant) -> Self {
+        let (stop, signal) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            if signal.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                == Err(mpsc::RecvTimeoutError::Timeout)
+            {
+                isolate.terminate_execution();
+            }
+        });
+        Self {
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for ExecutionWatchdog {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("execution watchdog thread panicked");
+        }
+    }
 }
 
 impl Watchdog {
@@ -37,20 +65,15 @@ impl Watchdog {
         let Self::Registered(isolate) = self else {
             return;
         };
-        let isolate = isolate.clone();
-        let (stop, signal) = mpsc::channel();
-        let thread = thread::spawn(move || {
-            if signal.recv_timeout(CANCEL_GRACE) == Err(mpsc::RecvTimeoutError::Timeout) {
-                isolate.terminate_execution();
-            }
-        });
-        *self = Self::Armed { stop, thread };
+        *self = Self::Armed(ExecutionWatchdog::arm_at(
+            isolate.clone(),
+            Instant::now() + CANCEL_GRACE,
+        ));
     }
 
     fn disarm(&mut self) {
-        if let Self::Armed { stop, thread } = std::mem::replace(self, Self::Empty) {
-            drop(stop);
-            thread.join().expect("watchdog thread panicked");
+        if let Self::Armed(watchdog) = std::mem::replace(self, Self::Empty) {
+            drop(watchdog);
         }
     }
 }
@@ -296,7 +319,10 @@ mod watchdog_tests {
             assert!(signal.recv().is_err());
             watchdog_stopped.store(true, Ordering::Release);
         });
-        let mut watchdog = Watchdog::Armed { stop, thread };
+        let mut watchdog = Watchdog::Armed(ExecutionWatchdog {
+            stop: Some(stop),
+            thread: Some(thread),
+        });
 
         watchdog.disarm();
 
