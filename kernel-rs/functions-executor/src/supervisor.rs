@@ -885,6 +885,13 @@ mod tests {
             error_code(&validate_bundles(&oversized).unwrap_err()),
             "bundle_too_large"
         );
+        let total_oversized = (0..9)
+            .map(|index| (format!("function-{index}"), "x".repeat(1024 * 1024)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            error_code(&validate_bundles(&total_oversized).unwrap_err()),
+            "bundle_too_large"
+        );
         let invalid_name = BTreeMap::from([("orders/1".into(), "x".into())]);
         assert_eq!(
             error_code(&validate_bundles(&invalid_name).unwrap_err()),
