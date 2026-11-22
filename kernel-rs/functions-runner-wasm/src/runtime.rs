@@ -1,5 +1,5 @@
 use crate::bridge::{self, Bridge};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use konae_functions_executor::{
     WorkerError,
     protocol::{Input, Output, WorkerLimits},
@@ -10,7 +10,7 @@ use wasmtime::{
 };
 
 pub const COMPILED_ENGINE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/quickjs.cwasm"));
-const BOOTSTRAP: &[u8] = include_bytes!("../guest/out/bootstrap.js");
+const BOOTSTRAP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bootstrap.qbc"));
 
 pub struct Compiler {
     pub engine: Engine,
@@ -67,10 +67,10 @@ impl Invocation {
                 limits.heap_bytes.min(u32::MAX as usize) as u32,
             ),
         )?;
-        check_guest_code(code)?;
+        check_guest_code(code).context("Web bootstrap")?;
         let ptr = result.copy_into_guest(source.as_bytes())?;
         let code = result.call("guest_load", (ptr, source.len() as u32))?;
-        check_guest_code(code)?;
+        check_guest_code(code).context("ESM load")?;
         Ok(result)
     }
 
@@ -81,7 +81,7 @@ impl Invocation {
         if let Some(code) = self.store.data().failure.as_ref() {
             return Err(WorkerError::new(code).into());
         }
-        check_guest_code(code)?;
+        check_guest_code(code).context("handler")?;
         self.store.data().check()?;
         let ptr: u32 = self.call("guest_reply_ptr", ())?;
         let len: u32 = self.call("guest_reply_len", ())?;

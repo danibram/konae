@@ -7,7 +7,7 @@ import sys
 root = Path(sys.argv[1])
 settings = root / 'konae.json'
 config = json.loads(settings.read_text())
-config.update(visibility='public', modules={name: {'on': True} for name in ('actions', 'auth', 'functions')})
+config.update(visibility='public', signupPolicy={'mode': 'open'}, modules={name: {'on': True} for name in ('actions', 'auth', 'functions')})
 settings.write_text(json.dumps(config, indent=2) + '\n')
 
 app = root / 'app'

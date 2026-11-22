@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import select
 from pathlib import Path
 import statistics
 import struct
@@ -27,8 +28,13 @@ class Worker:
         self.request = 0
         self.send(dict(kind='Init', abi='konae-functions-ipc/2', function='probe',
                        source=source, generation='bench', limits=LIMITS))
-        ready = self.read()
-        assert ready['kind'] == 'Ready', ready
+        try:
+            ready = self.read()
+            assert ready['kind'] == 'Ready', ready
+        except BaseException:
+            self.process.kill()
+            self.process.wait()
+            raise
         self.ready_ms = self.elapsed(self.started)
 
     def __enter__(self):
@@ -36,11 +42,17 @@ class Worker:
 
     def __exit__(self, *exc):
         if self.process.poll() is None:
+            if exc[0] is not None:
+                self.process.kill()
+                self.process.wait()
+                return
             try:
                 self.send(dict(kind='Shutdown', grace_ms=250))
-                self.read()
-            finally:
-                self.process.wait(timeout=3)
+                self.read(timeout=2)
+                self.process.wait(timeout=2)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                self.process.kill()
+                self.process.wait()
 
     @staticmethod
     def elapsed(start):
@@ -51,10 +63,24 @@ class Worker:
         self.process.stdin.write(struct.pack('!I', len(payload)) + payload)
         self.process.stdin.flush()
 
-    def read(self):
-        header = self.process.stdout.read(4)
-        assert len(header) == 4, 'Worker stopped before replying'
-        return json.loads(self.process.stdout.read(struct.unpack('!I', header)[0]))
+    def read(self, timeout=10):
+        deadline = time.monotonic() + timeout
+        fd = self.process.stdout.fileno()
+
+        def exact(size):
+            message = bytearray()
+            while len(message) < size:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                    raise TimeoutError('Worker did not reply within the probe deadline')
+                chunk = os.read(fd, size - len(message))
+                if not chunk:
+                    raise RuntimeError('Worker stopped before replying')
+                message.extend(chunk)
+            return message
+
+        header = exact(4)
+        return json.loads(exact(struct.unpack('!I', header)[0]))
 
     def get(self, path='/', headers=None):
         self.request += 1

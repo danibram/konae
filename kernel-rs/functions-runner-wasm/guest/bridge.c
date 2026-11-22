@@ -102,19 +102,38 @@ EXPORT(guest_alloc) void *guest_alloc(size_t size) {
     return calloc(size + 1, 1);
 }
 
-EXPORT(guest_init) int guest_init(char *bootstrap, size_t length, size_t heap) {
+static int prepare_runtime(size_t heap) {
     runtime = JS_NewRuntime();
     if (!runtime) return HEAP_EXHAUSTED;
     JS_SetMemoryLimit(runtime, heap);
     JS_SetModuleLoaderFunc(runtime, NULL, deny_import, NULL);
     ctx = JS_NewContext(runtime);
-    if (!ctx) return HEAP_EXHAUSTED;
+    return ctx ? OK : HEAP_EXHAUSTED;
+}
+
+EXPORT(guest_pack_bootstrap) int guest_pack_bootstrap(char *source, size_t length) {
+    int code = prepare_runtime(64 * 1024 * 1024);
+    if (code != OK) return code;
+    JSValue compiled = JS_Eval(ctx, source, length, "web.js",
+                               JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    free(source);
+    if (JS_IsException(compiled)) return exception();
+    reply = (const char *)JS_WriteObject(ctx, &reply_length, compiled, JS_WRITE_OBJ_BYTECODE);
+    JS_FreeValue(ctx, compiled);
+    return reply ? OK : EXECUTION_FAILED;
+}
+
+EXPORT(guest_init) int guest_init(char *bootstrap, size_t length, size_t heap) {
+    int code = prepare_runtime(heap);
+    if (code != OK) return code;
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "op_worker_call", JS_NewCFunction(ctx, call_action, "callAction", 1));
     JS_SetPropertyStr(ctx, global, "op_worker_body_read", JS_NewCFunction(ctx, read_body, "readBody", 0));
     JS_SetPropertyStr(ctx, global, "op_worker_failure", JS_NewCFunction(ctx, fail, "fail", 1));
-    JSValue initialized = JS_Eval(ctx, bootstrap, length, "web.js", JS_EVAL_TYPE_GLOBAL);
+    JSValue compiled = JS_ReadObject(ctx, (const uint8_t *)bootstrap, length, JS_READ_OBJ_BYTECODE);
     free(bootstrap);
+    if (JS_IsException(compiled)) return exception();
+    JSValue initialized = JS_EvalFunction(ctx, compiled);
     if (JS_IsException(initialized)) return exception();
     JS_FreeValue(ctx, initialized);
     JSValue api = JS_GetPropertyStr(ctx, global, "__konae");

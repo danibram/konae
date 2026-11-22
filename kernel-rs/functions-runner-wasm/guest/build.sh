@@ -12,4 +12,4 @@ qjs=guest/out/quickjs-0.18.0
 "$WASI_SDK/bin/clang" -O3 -DNDEBUG -mexec-model=reactor -Wl,-z,stack-size=524288 \
     -I"$qjs" guest/bridge.c "$qjs/quickjs.c" "$qjs/dtoa.c" "$qjs/libregexp.c" "$qjs/libunicode.c" \
     -o guest/out/quickjs.wasm
-./node_modules/.bin/esbuild guest/bootstrap.js --bundle --minify --platform=neutral --main-fields=module,main --target=es2022 --format=iife --global-name=__konae --outfile=guest/out/bootstrap.js
+./node_modules/.bin/esbuild guest/bootstrap.js --bundle --minify --platform=neutral --main-fields=main,module --target=es2022 --format=iife --global-name=__konae --outfile=guest/out/bootstrap.js

@@ -11,26 +11,32 @@ from protocol import rss, summary
 
 
 def children(pid):
-    rows = subprocess.check_output(['ps', '-A', '-o', 'pid=,ppid=,args='], text=True)
-    r = {}
-    for row in rows.splitlines():
-        child, parent, *args = row.split()
-        if int(parent) == pid and args[-1:] == ['--function-worker']:
-            r[int(child)] = rss(int(child))
-    return r
+    rows = subprocess.check_output(['ps', '-A', '-o', 'pid=,ppid=,comm='], text=True)
+    return {int(child): rss(int(child))
+            for child, parent, *_ in map(str.split, rows.splitlines()) if int(parent) == pid}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--host', default='wasm-probe.localhost')
     parser.add_argument('--pid', type=int, required=True)
     parser.add_argument('--runs', type=int, default=30)
     args = parser.parse_args()
-    conn = HTTPConnection('localhost', args.port, timeout=10)
-    origin = f'http://localhost:{args.port}'
+    conn = HTTPConnection('127.0.0.1', args.port, timeout=10)
+    host = f'{args.host}:{args.port}'
+    origin = f'http://{host}'
+    conn.request('POST', '/_konae/auth/signup', json.dumps({
+        'email': f'wasm-{uuid.uuid4().hex}@example.test',
+        'password': 'disposable wasm benchmark',
+    }), {'Host': host, 'Origin': origin, 'Content-Type': 'application/json'})
+    signup = conn.getresponse()
+    payload = signup.read()
+    assert signup.status == 200, (signup.status, payload)
+    cookie = signup.getheader('Set-Cookie').split(';', 1)[0]
 
     def request(method):
-        headers = {'Origin': origin}
+        headers = {'Host': host, 'Origin': origin, 'Cookie': cookie}
         body = None
         path = '/api/hello'
         if method == 'POST':
@@ -60,11 +66,12 @@ def main():
         assert json.loads(last_post)['n'] == start_count + index + 1
         times['POST'].append(elapsed)
     after = children(args.pid)
-    assert before.keys() == after.keys() and len(after) == 2, (before, after)
     print(json.dumps(dict(first_get=first_get, first_post=first_post, last_post=last_post,
                           cold_get_ms=cold_get, cold_post_ms=cold_post,
                           warm_get_ms=summary(times['GET']), warm_post_ms=summary(times['POST']),
                           rss_before_kib=before, rss_after_kib=after)))
+    if len(before) != 2 or before.keys() != after.keys():
+        raise RuntimeError(f'Unexpected worker RSS samples under Kernel PID {args.pid}: {before}, {after}')
 
 
 if __name__ == '__main__':
