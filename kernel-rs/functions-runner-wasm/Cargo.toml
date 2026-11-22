@@ -1,0 +1,23 @@
+[package]
+name = "konae-functions-runner-wasm"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+konae-functions-executor = { path = "../functions-executor" }
+serde_json = "1"
+wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "runtime"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+anyhow = "1.0"
+wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "runtime", "cranelift", "parallel-compilation"] }
+
+[profile.release.build-override]
+opt-level = 3
