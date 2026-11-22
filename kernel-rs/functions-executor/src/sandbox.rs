@@ -5,10 +5,11 @@ mod linux {
     use std::{mem, os::fd::RawFd};
 
     const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
-    const LANDLOCK_ACCESS_FS_ALL: u64 = 0xffff;
+    const LANDLOCK_ACCESS_FS_ALL: u64 = 0x1_ffff;
     const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
     const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
     const LANDLOCK_ACCESS_FS_IOCTL_DEV: u64 = 1 << 15;
+    const LANDLOCK_ACCESS_FS_RESOLVE_UNIX: u64 = 1 << 16;
     const LANDLOCK_ABI_REQUIRED: libc::c_long = 2;
     const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
     const PR_SET_SECCOMP: libc::c_int = 22;
@@ -73,6 +74,9 @@ mod linux {
         if version < 5 {
             handled &= !LANDLOCK_ACCESS_FS_IOCTL_DEV;
         }
+        if version < 9 {
+            handled &= !LANDLOCK_ACCESS_FS_RESOLVE_UNIX;
+        }
         handled
     }
 
@@ -104,7 +108,7 @@ mod linux {
         if version < LANDLOCK_ABI_REQUIRED {
             return Err(fail());
         }
-        // ABI 2 supports REFER, which controls cross-directory links and renames.
+        // ABI 2 adds REFER, and ABI 9 adds RESOLVE_UNIX.
         let attr = RulesetAttr {
             handled_access_fs: landlock_handled_access_fs(version),
         };
@@ -180,6 +184,13 @@ mod linux {
             jump(BPF_JMP_JGE_K, 0x4000_0000, 0, 1),
             stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
         ]);
+        filter.extend([
+            jump(BPF_JMP_JEQ_K, libc::SYS_prlimit64 as u32, 0, 4),
+            stmt(BPF_LD_W_ABS, 16),
+            jump(BPF_JMP_JEQ_K, 0, 1, 0),
+            stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+            stmt(BPF_LD_W_ABS, 0),
+        ]);
         for syscall in [
             libc::SYS_socket,
             libc::SYS_connect,
@@ -197,7 +208,6 @@ mod linux {
             libc::SYS_setsockopt,
             libc::SYS_getsockopt,
             libc::SYS_ptrace,
-            libc::SYS_prlimit64,
             libc::SYS_process_vm_readv,
             libc::SYS_process_vm_writev,
             libc::SYS_mount,
@@ -315,32 +325,38 @@ mod linux {
                 assert_eq!(filter[4].k, 0x4000_0000);
                 assert_eq!((filter[4].jt, filter[4].jf), (0, 1));
                 assert_eq!(filter[5].k, SECCOMP_RET_KILL_PROCESS);
-                assert_eq!(
-                    denied_pair_position(&filter, libc::SYS_prlimit64),
-                    6 + 2 * 16
-                );
+                assert_eq!(filter[6].k, libc::SYS_prlimit64 as u32);
+                assert_eq!((filter[6].jt, filter[6].jf), (0, 4));
+                assert_eq!(filter[7].k, 16);
+                assert_eq!(filter[8].k, 0);
+                assert_eq!((filter[8].jt, filter[8].jf), (1, 0));
+                assert_eq!(filter[9].k, SECCOMP_RET_ERRNO | libc::EPERM as u32);
+                assert_eq!(filter[10].k, 0);
                 assert_eq!(
                     denied_pair_position(&filter, libc::SYS_rt_sigqueueinfo),
-                    6 + 2 * 30
+                    11 + 2 * 29
                 );
                 assert_eq!(
                     denied_pair_position(&filter, libc::SYS_rt_tgsigqueueinfo),
-                    6 + 2 * 31
+                    11 + 2 * 30
                 );
             }
             #[cfg(target_arch = "aarch64")]
             {
-                assert_eq!(
-                    denied_pair_position(&filter, libc::SYS_prlimit64),
-                    4 + 2 * 16
-                );
+                assert_eq!(filter[4].k, libc::SYS_prlimit64 as u32);
+                assert_eq!((filter[4].jt, filter[4].jf), (0, 4));
+                assert_eq!(filter[5].k, 16);
+                assert_eq!(filter[6].k, 0);
+                assert_eq!((filter[6].jt, filter[6].jf), (1, 0));
+                assert_eq!(filter[7].k, SECCOMP_RET_ERRNO | libc::EPERM as u32);
+                assert_eq!(filter[8].k, 0);
                 assert_eq!(
                     denied_pair_position(&filter, libc::SYS_rt_sigqueueinfo),
-                    4 + 2 * 30
+                    9 + 2 * 29
                 );
                 assert_eq!(
                     denied_pair_position(&filter, libc::SYS_rt_tgsigqueueinfo),
-                    4 + 2 * 31
+                    9 + 2 * 30
                 );
             }
         }
@@ -352,6 +368,8 @@ mod linux {
             assert_eq!(landlock_handled_access_fs(3), 0x7fff);
             assert_eq!(landlock_handled_access_fs(4), 0x7fff);
             assert_eq!(landlock_handled_access_fs(5), 0xffff);
+            assert_eq!(landlock_handled_access_fs(8), 0xffff);
+            assert_eq!(landlock_handled_access_fs(9), 0x1_ffff);
         }
     }
 }
