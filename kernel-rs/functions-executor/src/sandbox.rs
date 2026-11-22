@@ -10,6 +10,7 @@ mod linux {
     const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
     const LANDLOCK_ACCESS_FS_IOCTL_DEV: u64 = 1 << 15;
     const LANDLOCK_ACCESS_FS_RESOLVE_UNIX: u64 = 1 << 16;
+    // ABI 2 is required so the empty ruleset can deny REFER operations too.
     const LANDLOCK_ABI_REQUIRED: libc::c_long = 2;
     const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
     const PR_SET_SECCOMP: libc::c_int = 22;
