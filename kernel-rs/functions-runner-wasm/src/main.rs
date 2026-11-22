@@ -1,6 +1,9 @@
 mod bridge;
 mod engine_config;
+#[cfg(not(feature = "starling-runner"))]
 mod runtime;
+#[cfg(feature = "starling-runner")]
+mod starling;
 
 use anyhow::{Result, bail};
 use bridge::{Bridge, Request};
@@ -8,8 +11,11 @@ use konae_functions_executor::{
     WorkerError,
     protocol::{self, ChildMessage, ParentMessage},
 };
+#[cfg(not(feature = "starling-runner"))]
 use runtime::{Compiler, Invocation};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "starling-runner")]
+use starling::{Compiler, Invocation};
 use std::{
     io,
     sync::{
@@ -25,8 +31,16 @@ use std::{
 const PARENT_FAILURE_LIMIT: Duration = Duration::from_secs(65);
 
 fn main() -> Result<()> {
-    match std::env::args().nth(1).as_deref() {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
         Some("--function-worker") => worker(),
+        #[cfg(feature = "starling-runner")]
+        Some("--prepare") => starling::prepare(std::path::Path::new(
+            &args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("expected a bundle path"))?,
+        )),
+        #[cfg(not(feature = "starling-runner"))]
         Some("--engine-size") => {
             println!("{}", runtime::COMPILED_ENGINE.len());
             Ok(())
@@ -137,7 +151,7 @@ fn worker() -> Result<()> {
     });
     let bundle_hash = Sha256::digest(source.as_bytes());
     let compile_bridge = Bridge::new(
-        runtime::store_limits(limits.heap_bytes),
+        store_limits(limits.heap_bytes),
         Instant::now() + PARENT_FAILURE_LIMIT,
         None,
         replies.clone(),
@@ -171,7 +185,7 @@ fn worker() -> Result<()> {
         };
         drop(last.take());
         let bridge = Bridge::new(
-            runtime::store_limits(limits.heap_bytes),
+            store_limits(limits.heap_bytes),
             Instant::now() + PARENT_FAILURE_LIMIT,
             Some(request.clone()),
             replies.clone(),
@@ -219,4 +233,18 @@ fn worker_error_code(error: &anyhow::Error) -> &str {
         .downcast_ref::<WorkerError>()
         .map(WorkerError::code)
         .unwrap_or("worker_execution_failed")
+}
+
+#[cfg(not(feature = "starling-runner"))]
+use runtime::store_limits;
+
+#[cfg(feature = "starling-runner")]
+fn store_limits(heap: usize) -> wasmtime::StoreLimits {
+    wasmtime::StoreLimitsBuilder::new()
+        .memory_size(heap)
+        .trap_on_grow_failure(true)
+        .instances(8)
+        .memories(4)
+        .tables(8)
+        .build()
 }

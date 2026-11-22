@@ -1,10 +1,24 @@
+#[cfg(not(feature = "starling-runner"))]
 #[path = "src/engine_config.rs"]
 mod engine_config;
 
+#[cfg(not(feature = "starling-runner"))]
 use anyhow::{Context, Result, ensure};
+#[cfg(not(feature = "starling-runner"))]
 use std::{fs, path::Path};
+#[cfg(not(feature = "starling-runner"))]
 use wasmtime::{Caller, Linker, Module, Store};
 
+#[cfg(feature = "starling-runner")]
+fn main() -> anyhow::Result<()> {
+    println!(
+        "cargo:rustc-env=KONAE_STARLING_TARGET={}",
+        std::env::var("TARGET")?
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "starling-runner"))]
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=guest/out/quickjs.wasm");
     println!("cargo:rerun-if-changed=guest/out/bootstrap.js");
@@ -27,6 +41,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "starling-runner"))]
 fn pack_bootstrap(module: &Module, source: &[u8]) -> Result<Vec<u8>> {
     let mut linker = Linker::new(module.engine());
     linker.func_wrap(

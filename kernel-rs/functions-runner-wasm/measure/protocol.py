@@ -24,14 +24,14 @@ def rss(pid):
 
 
 class Worker:
-    def __init__(self, binary, source):
+    def __init__(self, binary, source, init_timeout=10):
         self.started = time.perf_counter_ns()
         self.process = subprocess.Popen([binary, '--function-worker'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.request = 0
         self.send(dict(kind='Init', abi='konae-functions-ipc/2', function='probe',
                        source=source, generation='bench', limits=LIMITS))
         try:
-            ready = self.read()
+            ready = self.read(timeout=init_timeout)
             assert ready['kind'] == 'Ready', ready
         except BaseException:
             self.process.kill()

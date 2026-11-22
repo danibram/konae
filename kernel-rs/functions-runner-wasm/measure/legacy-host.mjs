@@ -1,10 +1,27 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { serve } from '../../../spikes/functions-runtime/baselines/node_modules/@hono/node-server/dist/index.mjs';
 import { createHost } from '../../../spikes/functions-runtime/baselines/lib/host.mjs';
 
 const limits = { heap_bytes: 67108864, response_bytes: 2097152, rss_bytes: 268435456, operation_limit: 64 };
+
+function bundle(name) {
+  const source = readFileSync(new URL(`../../../spikes/functions-runtime/app/dist/${name}.js`, import.meta.url), 'utf8');
+  // The old suite used context.data. Wrap its unchanged bundle at the IPC boundary.
+  const adapter = `
+    export async function wasmHandle(request, context) {
+      return handle(request, {actor: context.actor, data: {
+        readOrder: (id) => context.actions.call('readOrder', {id}),
+        updateOrder: (id, quantity) => context.actions.call('updateOrder', {id, quantity}),
+      }});
+    }
+  `;
+  const exports = /export\s*{\s*handle\s*};\s*$/;
+  if (!exports.test(source)) throw Error('Expected the original handle export');
+  return source.replace(exports, '') + adapter + '\nexport { wasmHandle as handle };';
+}
 
 class Worker {
   constructor(name) {
@@ -16,22 +33,9 @@ class Worker {
     this.generation = randomUUID();
     this.number = 0;
     this.tail = Promise.resolve();
-    const source = readFileSync(new URL(`../../../spikes/functions-runtime/app/dist/${name}.js`, import.meta.url), 'utf8');
-    // The old suite used context.data. Wrap its unchanged bundle at the IPC boundary.
-    const adapter = `
-      export async function wasmHandle(request, context) {
-        return handle(request, {actor: context.actor, data: {
-          readOrder: (id) => context.actions.call('readOrder', {id}),
-          updateOrder: (id, quantity) => context.actions.call('updateOrder', {id, quantity}),
-        }});
-      }
-    `;
-    const exports = /export\s*{\s*handle\s*};\s*$/;
-    if (!exports.test(source)) throw Error('Expected the original handle export');
     this.send({
       kind: 'Init', abi: 'konae-functions-ipc/2', generation: this.generation,
-      function: name, source: source.replace(exports, '') + adapter +
-        '\nexport { wasmHandle as handle };',
+      function: name, source: bundle(name),
       limits,
     });
   }
@@ -107,12 +111,18 @@ class Worker {
   }
 }
 
-const orders = new Worker('orders');
-const preferences = new Worker('preferences');
-await Promise.all([orders.ready(), preferences.ready()]);
-const host = createHost({
-  directory: process.env.DATA_DIR,
-  orders: (request, context) => orders.invoke(request, context),
-  preferences: (request, context) => preferences.invoke(request, context),
-});
-serve({ hostname: '127.0.0.1', port: Number(process.env.PORT), fetch: host.fetch });
+if (process.argv[2] === '--write-bundles') {
+  for (const name of ['orders', 'preferences']) {
+    writeFileSync(join(process.argv[3], name + '.mjs'), bundle(name));
+  }
+} else {
+  const orders = new Worker('orders');
+  const preferences = new Worker('preferences');
+  await Promise.all([orders.ready(), preferences.ready()]);
+  const host = createHost({
+    directory: process.env.DATA_DIR,
+    orders: (request, context) => orders.invoke(request, context),
+    preferences: (request, context) => preferences.invoke(request, context),
+  });
+  serve({ hostname: '127.0.0.1', port: Number(process.env.PORT), fetch: host.fetch });
+}

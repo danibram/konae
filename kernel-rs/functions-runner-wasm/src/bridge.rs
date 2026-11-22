@@ -1,16 +1,20 @@
 use anyhow::{Result, bail};
 use konae_functions_executor::protocol::{self, Capability, ChildMessage, ParentMessage};
 use serde_json::Value;
+#[cfg(not(feature = "starling-runner"))]
+use std::sync::OnceLock;
 use std::{
     io,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::Receiver,
     },
     time::{Duration, Instant},
 };
-use wasmtime::{Caller, Linker, Memory, StoreLimits};
+use wasmtime::StoreLimits;
+#[cfg(not(feature = "starling-runner"))]
+use wasmtime::{Caller, Linker, Memory};
 
 pub struct Request {
     pub capability: Capability,
@@ -25,6 +29,7 @@ pub struct Bridge {
     max_operations: usize,
     operations: u64,
     body_reads: u64,
+    #[cfg(not(feature = "starling-runner"))]
     action_result: Option<Vec<u8>>,
     pub failure: Option<String>,
 }
@@ -45,6 +50,7 @@ impl Bridge {
             max_operations,
             operations: 0,
             body_reads: 0,
+            #[cfg(not(feature = "starling-runner"))]
             action_result: None,
             failure: None,
         }
@@ -64,7 +70,7 @@ impl Bridge {
         Ok(())
     }
 
-    fn failure(&mut self, code: impl Into<String>) {
+    pub(crate) fn failure(&mut self, code: impl Into<String>) {
         self.failure.get_or_insert_with(|| code.into());
     }
 
@@ -106,7 +112,7 @@ impl Bridge {
         }
     }
 
-    fn call(&mut self, args: Value) -> Result<Vec<u8>> {
+    pub(crate) fn call(&mut self, args: Value) -> Result<Vec<u8>> {
         let capability = self.capability()?;
         self.operations += 1;
         let sequence = self.operations;
@@ -140,7 +146,7 @@ impl Bridge {
         }
     }
 
-    fn body(&mut self, maximum: usize) -> Result<Vec<u8>> {
+    pub(crate) fn body(&mut self, maximum: usize) -> Result<Vec<u8>> {
         let capability = self.capability()?;
         if maximum == 0 || maximum > protocol::BODY_CHUNK_BYTES {
             bail!("worker_protocol_error");
@@ -166,6 +172,7 @@ impl Bridge {
     }
 }
 
+#[cfg(not(feature = "starling-runner"))]
 fn memory(caller: &mut Caller<'_, Bridge>) -> Result<Memory> {
     caller
         .get_export("memory")
@@ -173,6 +180,7 @@ fn memory(caller: &mut Caller<'_, Bridge>) -> Result<Memory> {
         .ok_or_else(|| anyhow::anyhow!("guest memory missing"))
 }
 
+#[cfg(not(feature = "starling-runner"))]
 fn input<'a>(
     memory: Memory,
     caller: &'a Caller<'_, Bridge>,
@@ -186,6 +194,7 @@ fn input<'a>(
         .ok_or_else(|| anyhow::anyhow!("guest buffer out of bounds"))
 }
 
+#[cfg(not(feature = "starling-runner"))]
 pub fn link(linker: &mut Linker<Bridge>) -> Result<()> {
     linker.func_wrap(
         "konae",
@@ -251,6 +260,7 @@ pub fn link(linker: &mut Linker<Bridge>) -> Result<()> {
 }
 
 // The SDK reactor imports a clock and libc stubs. The guest receives no descriptors.
+#[cfg(not(feature = "starling-runner"))]
 fn link_libc(linker: &mut Linker<Bridge>) -> Result<()> {
     let wasi = "wasi_snapshot_preview1";
     linker.func_wrap(

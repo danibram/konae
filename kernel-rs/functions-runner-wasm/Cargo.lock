@@ -484,6 +484,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "konae-functions-executor",
+ "libc",
  "serde_json",
  "sha2",
  "tempfile",

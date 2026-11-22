@@ -20,8 +20,13 @@ impl Bundle {
 }
 
 fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
+    let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
+    #[cfg(feature = "starling-runner")]
+    let launcher = starling_launcher(bundle, runner);
+    #[cfg(feature = "starling-runner")]
+    let runner = launcher.as_path();
     Worker::spawn_with_policy(
-        Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm")),
+        runner,
         "orders",
         bundle.path(),
         &Budget::new(timeout),
@@ -29,6 +34,52 @@ fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
         MemoryPolicy::DevelopmentPolling,
     )
     .unwrap()
+}
+
+#[cfg(feature = "starling-runner")]
+fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
+    use std::{env, os::unix::fs::PermissionsExt, process::Command};
+
+    let cache = env::var("KONAE_STARLING_CACHE").expect("Set KONAE_STARLING_CACHE for the tests");
+    let variable_names = [
+        "KONAE_STARLING_CACHE",
+        "KONAE_STARLING_BUILDER",
+        "KONAE_STARLING_TOOLS",
+        "KONAE_STARLING_WASMTIME",
+        "KONAE_STARLING_NODE",
+        "PATH",
+    ];
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+    let prepared = Command::new(runner)
+        .arg("--prepare")
+        .arg(bundle.path().join("orders.mjs"))
+        .output()
+        .unwrap();
+    let invalid_import = !prepared.status.success()
+        && String::from_utf8_lossy(&prepared.stderr).contains("function_import_forbidden");
+    assert!(
+        prepared.status.success() || invalid_import,
+        "{}",
+        String::from_utf8_lossy(&prepared.stderr)
+    );
+    let mut script = String::from("#!/bin/sh\n");
+    for name in variable_names {
+        if !invalid_import && name != "KONAE_STARLING_CACHE" {
+            continue;
+        }
+        if let Ok(value) = env::var(name) {
+            script.push_str(&format!("export {name}={}\n", quote(&value)));
+        }
+    }
+    assert!(Path::new(&cache).is_absolute());
+    script.push_str(&format!(
+        "exec {} \"$@\"\n",
+        quote(runner.to_str().unwrap())
+    ));
+    let launcher = bundle.path().join("worker");
+    fs::write(&launcher, script).unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
+    launcher
 }
 
 fn input(path: &str, actor: &str) -> Input {
