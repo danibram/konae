@@ -5,8 +5,13 @@ mod linux {
     use std::{mem, os::fd::RawFd};
 
     const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
-    const LANDLOCK_ACCESS_FS_ALL: u64 = 0xffff;
-    const LANDLOCK_ABI_REQUIRED: libc::c_long = 5;
+    const LANDLOCK_ACCESS_FS_ALL: u64 = 0x1_ffff;
+    const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
+    const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
+    const LANDLOCK_ACCESS_FS_IOCTL_DEV: u64 = 1 << 15;
+    const LANDLOCK_ACCESS_FS_RESOLVE_UNIX: u64 = 1 << 16;
+    // ABI 2 is required so the empty ruleset can deny REFER operations too.
+    const LANDLOCK_ABI_REQUIRED: libc::c_long = 2;
     const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
     const PR_SET_SECCOMP: libc::c_int = 22;
     const CAP_VERSION_3: u32 = 0x2008_0522;
@@ -18,6 +23,8 @@ mod linux {
     const BPF_LD_W_ABS: u16 = 0x20;
     const BPF_JMP_JEQ_K: u16 = 0x15;
     const BPF_JMP_JSET_K: u16 = 0x45;
+    #[cfg(target_arch = "x86_64")]
+    const BPF_JMP_JGE_K: u16 = 0x35;
     const BPF_RET_K: u16 = 0x06;
 
     #[repr(C)]
@@ -57,6 +64,23 @@ mod linux {
         WorkerError::new("sandbox_unavailable").into()
     }
 
+    fn landlock_handled_access_fs(version: libc::c_long) -> u64 {
+        let mut handled = LANDLOCK_ACCESS_FS_ALL;
+        if version < 2 {
+            handled &= !LANDLOCK_ACCESS_FS_REFER;
+        }
+        if version < 3 {
+            handled &= !LANDLOCK_ACCESS_FS_TRUNCATE;
+        }
+        if version < 5 {
+            handled &= !LANDLOCK_ACCESS_FS_IOCTL_DEV;
+        }
+        if version < 9 {
+            handled &= !LANDLOCK_ACCESS_FS_RESOLVE_UNIX;
+        }
+        handled
+    }
+
     fn close_inherited_descriptors() -> Result<()> {
         let result = unsafe { libc::syscall(436, 3u32, u32::MAX, 0u32) };
         if result == 0 {
@@ -85,8 +109,9 @@ mod linux {
         if version < LANDLOCK_ABI_REQUIRED {
             return Err(fail());
         }
+        // ABI 2 adds REFER, and ABI 9 adds RESOLVE_UNIX.
         let attr = RulesetAttr {
-            handled_access_fs: LANDLOCK_ACCESS_FS_ALL,
+            handled_access_fs: landlock_handled_access_fs(version),
         };
         let fd = unsafe { libc::syscall(444, &attr, mem::size_of::<RulesetAttr>(), 0u32) };
         if fd < 0 {
@@ -155,6 +180,18 @@ mod linux {
             stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
             stmt(BPF_LD_W_ABS, 0),
         ];
+        #[cfg(target_arch = "x86_64")]
+        filter.extend([
+            jump(BPF_JMP_JGE_K, 0x4000_0000, 0, 1),
+            stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
+        ]);
+        filter.extend([
+            jump(BPF_JMP_JEQ_K, libc::SYS_prlimit64 as u32, 0, 4),
+            stmt(BPF_LD_W_ABS, 16),
+            jump(BPF_JMP_JEQ_K, 0, 1, 0),
+            stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+            stmt(BPF_LD_W_ABS, 0),
+        ]);
         for syscall in [
             libc::SYS_socket,
             libc::SYS_connect,
@@ -185,6 +222,8 @@ mod linux {
             libc::SYS_kill,
             libc::SYS_tkill,
             libc::SYS_tgkill,
+            libc::SYS_rt_sigqueueinfo,
+            libc::SYS_rt_tgsigqueueinfo,
             libc::SYS_pidfd_open,
             libc::SYS_pidfd_send_signal,
             libc::SYS_pidfd_getfd,
@@ -250,6 +289,89 @@ mod linux {
         restrict_filesystem()?;
         restrict_syscalls()?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn denied_pair_position(filter: &[SockFilter], syscall: libc::c_long) -> usize {
+            filter
+                .windows(2)
+                .position(|pair| {
+                    pair[0].code == BPF_JMP_JEQ_K
+                        && pair[0].k == syscall as u32
+                        && pair[0].jt == 0
+                        && pair[0].jf == 1
+                        && pair[1].code == BPF_RET_K
+                        && pair[1].k == (SECCOMP_RET_ERRNO | libc::EPERM as u32)
+                })
+                .expect("syscall denial")
+        }
+
+        #[test]
+        fn seccomp_filter_guards_x32_and_denies_sibling_signals_and_remote_limits() {
+            let filter = seccomp_filter();
+            #[cfg(target_arch = "x86_64")]
+            let audit_arch = 0xc000_003e;
+            #[cfg(target_arch = "aarch64")]
+            let audit_arch = 0xc000_00b7;
+            assert_eq!(filter[0].k, 4);
+            assert_eq!(filter[1].k, audit_arch);
+            assert_eq!(filter[2].k, SECCOMP_RET_KILL_PROCESS);
+            assert_eq!(filter[3].k, 0);
+            #[cfg(target_arch = "x86_64")]
+            {
+                assert_eq!(filter[4].code, BPF_JMP_JGE_K);
+                assert_eq!(filter[4].k, 0x4000_0000);
+                assert_eq!((filter[4].jt, filter[4].jf), (0, 1));
+                assert_eq!(filter[5].k, SECCOMP_RET_KILL_PROCESS);
+                assert_eq!(filter[6].k, libc::SYS_prlimit64 as u32);
+                assert_eq!((filter[6].jt, filter[6].jf), (0, 4));
+                assert_eq!(filter[7].k, 16);
+                assert_eq!(filter[8].k, 0);
+                assert_eq!((filter[8].jt, filter[8].jf), (1, 0));
+                assert_eq!(filter[9].k, SECCOMP_RET_ERRNO | libc::EPERM as u32);
+                assert_eq!(filter[10].k, 0);
+                assert_eq!(
+                    denied_pair_position(&filter, libc::SYS_rt_sigqueueinfo),
+                    11 + 2 * 29
+                );
+                assert_eq!(
+                    denied_pair_position(&filter, libc::SYS_rt_tgsigqueueinfo),
+                    11 + 2 * 30
+                );
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                assert_eq!(filter[4].k, libc::SYS_prlimit64 as u32);
+                assert_eq!((filter[4].jt, filter[4].jf), (0, 4));
+                assert_eq!(filter[5].k, 16);
+                assert_eq!(filter[6].k, 0);
+                assert_eq!((filter[6].jt, filter[6].jf), (1, 0));
+                assert_eq!(filter[7].k, SECCOMP_RET_ERRNO | libc::EPERM as u32);
+                assert_eq!(filter[8].k, 0);
+                assert_eq!(
+                    denied_pair_position(&filter, libc::SYS_rt_sigqueueinfo),
+                    9 + 2 * 29
+                );
+                assert_eq!(
+                    denied_pair_position(&filter, libc::SYS_rt_tgsigqueueinfo),
+                    9 + 2 * 30
+                );
+            }
+        }
+
+        #[test]
+        fn landlock_access_mask_follows_reported_abi() {
+            assert_eq!(landlock_handled_access_fs(1), 0x1fff);
+            assert_eq!(landlock_handled_access_fs(2), 0x3fff);
+            assert_eq!(landlock_handled_access_fs(3), 0x7fff);
+            assert_eq!(landlock_handled_access_fs(4), 0x7fff);
+            assert_eq!(landlock_handled_access_fs(5), 0xffff);
+            assert_eq!(landlock_handled_access_fs(8), 0xffff);
+            assert_eq!(landlock_handled_access_fs(9), 0x1_ffff);
+        }
     }
 }
 

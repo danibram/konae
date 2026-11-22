@@ -1,0 +1,27 @@
+delegated_cgroup_kill=present
+    Finished `test` profile [unoptimized] target(s) in 0.62s
+  Executable unittests src/lib.rs (/target/debug/deps/kernel-6d2cab2cf7849625)
+Linux 7.0.14-linuxkit aarch64 GNU/Linux
+
+running 1 test
+test functions::http::tests::real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_content_length ... three_partial_uploads_rss_kib kernel=46848 workers=82220; each upload has one 64KiB chunk pending
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 633 filtered out; finished in 12.86s
+
+
+running 1 test
+test functions::http::tests::real_functions_http_auth_transaction_publish_deadline_and_usage ...
+thread 'functions::http::tests::real_functions_http_auth_transaction_publish_deadline_and_usage' (93) panicked at kernel/src/functions/http_tests.rs:1073:5:
+assertion `left == right` failed
+  left: 504
+ right: 413
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    functions::http::tests::real_functions_http_auth_transaction_publish_deadline_and_usage
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 633 filtered out; finished in 6.13s

@@ -730,7 +730,7 @@ fn worker_identity() -> Result<(libc::uid_t, libc::gid_t)> {
         .find_map(|line| line.strip_prefix("CapEff:\t"))
         .and_then(|value| u64::from_str_radix(value, 16).ok())
         .ok_or_else(unavailable)?;
-    let required = (1u64 << 5) | (1u64 << 6) | (1u64 << 7);
+    let required = (1u64 << 6) | (1u64 << 7);
     if effective & required != required {
         return Err(unavailable());
     }
