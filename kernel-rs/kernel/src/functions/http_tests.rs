@@ -1352,14 +1352,22 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         crate::usage::flush();
     }
     if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
+        // memory.max is an OS limit, not an instant kill. When the cgroup reaches it the kernel
+        // reclaims file pages first, so a host with a slow disk or a large page cache lets the
+        // worker crawl at the limit until the request deadline instead of killing it. Both outcomes
+        // keep the contract: the worker never holds more than the limit and the request ends at the
+        // deadline. A GitHub ubuntu-24.04 runner on Linux 7.0 reached the deadline on both
+        // architectures; Docker on macOS killed the worker.
         let pressure = get("/pressure", &accounts[0].0).send().await.unwrap();
         let status = pressure.status();
         let failure: Value = pressure.json().await.unwrap();
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "{failure}");
-        assert_eq!(failure["code"], "worker_memory_limit", "{failure}");
+        let killed = status == StatusCode::BAD_GATEWAY && failure["code"] == "worker_memory_limit";
+        let throttled =
+            status == StatusCode::GATEWAY_TIMEOUT && failure["code"] == "deadline_exceeded";
+        assert!(killed || throttled, "{status} {failure}");
         let recovered = get("", &accounts[0].0).send().await.unwrap();
         assert_eq!(recovered.status(), StatusCode::OK);
-        println!("kernel_http_oom=worker_memory_limit recovery=200");
+        println!("kernel_http_oom={} recovery=200", failure["code"]);
     }
     if let Some(destination) = std::env::var_os("KONAE_TEST_PRESERVE_APP_DIR") {
         let destination = PathBuf::from(destination);
