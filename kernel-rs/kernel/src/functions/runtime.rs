@@ -15,7 +15,7 @@ use konae_functions_executor::{
 use serde_json::Value;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
-const INSTANCES: usize = 4;
+const INSTANCES: usize = 8;
 const ADMISSION: usize = 64;
 const SHUTDOWN: Duration = Duration::from_millis(10);
 
@@ -47,6 +47,7 @@ pub struct Runtime {
     admission: Arc<Semaphore>,
     active: Arc<Semaphore>,
     allocations: Arc<Semaphore>,
+    app_slots: usize,
     protocol_failure: Arc<AtomicBool>,
 }
 
@@ -77,7 +78,8 @@ pub struct Lease {
     // El guard se suelta antes de que pins permita retirar la instancia.
     worker: OwnedMutexGuard<Option<Worker>>,
     _reservation: Reservation,
-    _active: OwnedSemaphorePermit,
+    active: Option<OwnedSemaphorePermit>,
+    active_limit: Arc<Semaphore>,
     _admission: OwnedSemaphorePermit,
     config: Config,
     progress: Arc<Mutex<RunProgress>>,
@@ -104,14 +106,18 @@ impl Runtime {
             deadline,
             idle,
             state: Mutex::new(State::default()),
-            admission: Arc::new(Semaphore::new(ADMISSION)),
-            active: Arc::new(Semaphore::new(INSTANCES)),
-            allocations: Arc::new(Semaphore::new(INSTANCES)),
+            admission: Arc::new(Semaphore::new(env_capacity("KONAE_FUNCTIONS_ADMISSION", ADMISSION))),
+            active: Arc::new(Semaphore::new(env_capacity("KONAE_FUNCTIONS_INSTANCES", INSTANCES))),
+            allocations: Arc::new(Semaphore::new(env_capacity("KONAE_FUNCTIONS_INSTANCES", INSTANCES))),
+            app_slots: env_capacity("KONAE_FUNCTIONS_APP_SLOTS", 2),
             protocol_failure: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
+        env_capacity_result("KONAE_FUNCTIONS_INSTANCES", INSTANCES)?;
+        env_capacity_result("KONAE_FUNCTIONS_APP_SLOTS", 2)?;
+        env_capacity_result("KONAE_FUNCTIONS_ADMISSION", ADMISSION)?;
         kernel_environment::create()
     }
 
@@ -148,14 +154,12 @@ impl Runtime {
         let reservation = self.reserve(key, budget).await?;
         self.start_reaper();
         let worker = wait(budget, reservation.0.worker.clone().lock_owned()).await?;
-        let active = wait(budget, self.active.clone().acquire_owned())
-            .await?
-            .map_err(|_| "cache_busy")?;
         check(budget)?;
         Ok(Lease {
             worker,
             _reservation: reservation,
-            _active: active,
+            active: None,
+            active_limit: self.active.clone(),
             _admission: admission,
             config,
             progress: Arc::new(Mutex::new(RunProgress::default())),
@@ -192,29 +196,39 @@ impl Runtime {
     }
 
     async fn reserve(&self, key: String, budget: &Budget) -> Result<Reservation, String> {
+        let deployment = key.split(':').next().unwrap_or(&key).to_owned();
         loop {
             let retired = {
                 let mut state = self.state.lock().unwrap();
                 check(budget)?;
-                if let Some(slot) = state.slots.get(&key) {
+                let mut candidates = state.slots.iter()
+                    .filter(|(candidate, _)| candidate.as_str() == key || candidate.starts_with(&format!("{key}#")))
+                    .map(|(candidate, slot)| (candidate.clone(), slot.clone()))
+                    .collect::<Vec<_>>();
+                candidates.sort_by_key(|(_, slot)| slot.pins.load(Ordering::SeqCst));
+                if let Some((_, slot)) = candidates.iter().find(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0) {
                     slot.pins.fetch_add(1, Ordering::SeqCst);
                     return Ok(Reservation(slot.clone()));
                 }
-                if let Ok(allocation) = self.allocations.clone().try_acquire_owned() {
+                let app_keys = state.slots.keys().filter(|candidate| candidate.starts_with(&format!("{deployment}:"))).cloned().collect::<Vec<_>>();
+                if app_keys.len() < self.app_slots && let Ok(allocation) = self.allocations.clone().try_acquire_owned() {
+                    let index = (0..self.app_slots).find(|index| !state.slots.contains_key(&format!("{key}#{index}"))).unwrap_or(app_keys.len());
+                    let slot_key = if index == 0 && !state.slots.contains_key(&key) { key.clone() } else { format!("{key}#{index}") };
                     let slot = Arc::new(Slot {
                         worker: Arc::new(AsyncMutex::new(None)),
                         pins: AtomicUsize::new(1),
                         last_used: Mutex::new(Instant::now()),
                         _allocation: allocation,
                     });
-                    state.slots.insert(key.clone(), slot.clone());
+                    state.slots.insert(slot_key, slot.clone());
                     return Ok(Reservation(slot));
                 }
                 let oldest = state
                     .slots
                     .iter()
-                    .filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0)
+                    .filter(|(candidate, slot)| candidate.starts_with(&format!("{deployment}:")) && slot.pins.load(Ordering::SeqCst) == 0)
                     .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
+                    .or_else(|| state.slots.iter().filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0).min_by_key(|(_, slot)| *slot.last_used.lock().unwrap()))
                     .map(|(key, _)| key.clone())
                     .ok_or("cache_busy")?;
                 state.slots.remove(&oldest).unwrap()
@@ -289,6 +303,10 @@ impl Drop for Lease {
 }
 
 impl Lease {
+    pub fn is_cold(&self) -> bool {
+        self.worker.is_none()
+    }
+
     pub fn progress(&self) -> Arc<Mutex<RunProgress>> {
         self.progress.clone()
     }
@@ -329,6 +347,13 @@ impl Lease {
         let mut initialization = Duration::ZERO;
         let mut execution = Duration::ZERO;
         let output = (|| {
+            while self.active.is_none() {
+                check(budget).map_err(WorkerError::new)?;
+                match self.active_limit.clone().try_acquire_owned() {
+                    Ok(permit) => self.active = Some(permit),
+                    Err(_) => std::thread::sleep(Duration::from_millis(5)),
+                }
+            }
             check(budget).map_err(WorkerError::new)?;
             if self.worker.is_none() && self.protocol_failure.load(Ordering::SeqCst) {
                 return Err(WorkerError::new("worker_protocol_mismatch").into());
@@ -375,13 +400,19 @@ impl Lease {
             Ok(output)
         })();
         self.progress.lock().unwrap().finished = Some(Instant::now());
-        let can_reuse_cancelled_worker = output.as_ref().is_err_and(|error| {
-            matches!(
-                konae_functions_executor::error_code(error),
-                "deadline_exceeded" | "cancelled" | "mutation_outcome_unknown"
-            ) && self.worker.as_ref().is_some_and(Worker::is_synchronized)
+        let reusable_failure = output.as_ref().is_err_and(|error| {
+            let code = konae_functions_executor::error_code(error);
+            let worker_is_synchronized = self.worker.as_ref().is_some_and(Worker::is_synchronized);
+            let terminal = matches!(code,
+                "worker_failed" | "worker_initialization_failed" | "worker_protocol_error"
+                | "worker_protocol_mismatch" | "worker_memory_limit" | "worker_pipe_failed"
+                | "sandbox_unavailable" | "containment_unavailable" | "containment_cleanup_failed"
+                | "invalid_response" | "pending_work"
+            );
+            // TODO(executor-v3): read the handler failure code and detail from the typed error.
+            worker_is_synchronized && !terminal
         });
-        if output.is_err() && !can_reuse_cancelled_worker {
+        if output.is_err() && !reusable_failure {
             if let Some(mut worker) = self.worker.take() {
                 let _ = worker.shutdown(SHUTDOWN);
             }
@@ -393,6 +424,21 @@ impl Lease {
             cold,
         }
     }
+
+}
+
+fn env_capacity(name: &str, default: usize) -> usize {
+    env_capacity_result(name, default).unwrap_or(default)
+}
+
+fn env_capacity_result(name: &str, default: usize) -> anyhow::Result<usize> {
+    let value = match std::env::var(name) {
+        Ok(value) => value.parse::<usize>().map_err(|_| anyhow::anyhow!("{name} must be an integer from 1 to 4096"))?,
+        Err(std::env::VarError::NotPresent) => default,
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!((1..=4096).contains(&value), "{name} must be an integer from 1 to 4096");
+    Ok(value)
 }
 
 fn retire(slot: Arc<Slot>) {
@@ -607,20 +653,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn four_distinct_leases_coexist_and_a_fifth_busy_key_is_refused() {
+    async fn leases_obey_per_deployment_pool_cap() {
         let runtime = runtime(Duration::from_secs(60));
-        let mut leases = Vec::new();
-        for key in ["a", "b", "c", "d"] {
-            leases.push(runtime.lease(key.into(), &budget()).await.unwrap());
-        }
-        assert_eq!(
-            runtime.lease("e".into(), &budget()).await.err().unwrap(),
-            "cache_busy"
-        );
-        drop(leases.remove(0));
-        let fifth = runtime.lease("e".into(), &budget()).await.unwrap();
-        assert_eq!(runtime.state.lock().unwrap().slots.len(), 4);
-        assert!(fifth.worker.is_none());
+        let first = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        let second = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        assert_eq!(runtime.lease("app:orders".into(), &budget()).await.err().unwrap(), "cache_busy");
+        assert_eq!(runtime.state.lock().unwrap().slots.len(), 2);
+        assert!(first.worker.is_none() && second.worker.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unread_body_lease_does_not_hold_an_active_permit() {
+        let runtime = runtime(Duration::from_secs(60));
+        let available = runtime.active.available_permits();
+        let lease = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        assert_eq!(runtime.active.available_permits(), available);
+        drop(lease);
+        assert_eq!(runtime.active.available_permits(), available);
     }
 
     #[tokio::test]
@@ -819,7 +868,7 @@ export function handle(request, context) {
 
     #[tokio::test]
     #[ignore = "requires KONAE_TEST_FUNCTION_WORKER and starts real child processes"]
-    async fn real_worker_reuses_actor_input_and_destroys_failed_and_idle_processes() {
+    async fn real_worker_reuses_after_handler_error_and_idle_processes() {
         let fixture = Fixture::new();
         let runtime = real_runtime(Duration::from_millis(200));
         let (first, pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
@@ -851,12 +900,12 @@ export function handle(request, context) {
         let (failed, failed_pid) =
             run(&runtime, "app:example:v1", &fixture.0, "alice", "fail").await;
         assert!(failed.output.is_err());
-        assert!(failed_pid.is_none());
-        assert!(!alive(pid));
-        let (recovered, pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
-        assert!(recovered.cold);
-        assert_eq!(recovered.output.unwrap().body, "1:alice");
-        let pid = pid.unwrap();
+        assert_eq!(failed_pid, Some(pid));
+        assert!(alive(pid));
+        let (recovered, recovered_pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
+        assert!(!recovered.cold);
+        assert_eq!(recovered.output.unwrap().body, "2:alice");
+        assert_eq!(recovered_pid, Some(pid));
         eventually(|| !alive(pid)).await;
         eventually(|| runtime.allocations.available_permits() == INSTANCES).await;
         assert!(!runtime.state.lock().unwrap().reaper_running);

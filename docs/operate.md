@@ -113,6 +113,11 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_FUNCTIONS_CGROUP` | unset | Writable cgroup v2 subtree delegated to this Kernel installation, with `memory` and `pids` enabled. Required when the packaged runner is enabled outside development mode. |
 | `KONAE_FUNCTIONS_UID` / `KONAE_FUNCTIONS_GID` | `10002` in both images | Separate worker identity. The Kernel refuses to start the configured runner if either value matches its own identity or the required capabilities are missing. |
 | `KONAE_FUNCTIONS_DEVELOPMENT` | unset | Set to `1` for local development only. Disables the Linux cgroup and OS sandbox policy and uses RSS polling. |
+| `KONAE_FUNCTIONS_INSTANCES` | `8` | Maximum number of worker processes for the installation. |
+| `KONAE_FUNCTIONS_APP_SLOTS` | `2` | Maximum number of worker processes for one Deployment. A slow request body holds one slot until its deadline. |
+| `KONAE_FUNCTIONS_ADMISSION` | `64` | Maximum number of authenticated, rate-limited function requests admitted at once, including requests waiting for publication, a body or a worker. |
+| `KONAE_FUNCTIONS_TIMEOUT_MS` | `1000` | Deadline for each function request, including queueing, body upload, worker initialization and handler execution. |
+| `KONAE_FUNCTIONS_IDLE_MS` | `60000` | Idle time before the Kernel retires a worker. |
 | `KONAE_SETUP_KEY` | `local-development-key` | `konae` only. The setup key that creates the first owner. `konae login` reads the same variable on the machine that runs it. Later owners need an invitation code; see [Owner admission](#owner-admission). An empty value counts as unset. |
 | `KONAE_EDITOR_DIR` | unset (`/usr/local/share/konae/editor` in the `konae` image) | `konae` only. Folder that `bun run build` writes. Konae answers every GET and HEAD on the host of `KONAE_PUBLIC_ORIGIN` with it, except `/mcp`, `/_konae`, `/oauth` and `/.well-known`. A folder without `index.html` stops Konae at startup. An empty value serves no editor. |
 | `KONAE_ALLOW_DEFAULT_KEY` | unset | `konae` only. Set to `1` to let Konae start on a non-loopback address with the development setup key. Compose sets it for the local stack. |
