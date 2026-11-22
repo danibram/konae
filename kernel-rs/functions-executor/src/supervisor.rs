@@ -414,12 +414,11 @@ impl Worker {
         while offset < frame.len() {
             remaining(budget)?;
             self.memory_check()?;
-            match self
-                .input
-                .as_mut()
-                .ok_or_else(|| self.crash_error("worker_failed"))?
-                .write(&frame[offset..])
-            {
+            let write_result = match self.input.as_mut() {
+                Some(input) => input.write(&frame[offset..]),
+                None => return Err(self.crash_error("worker_failed")),
+            };
+            match write_result {
                 Ok(0) => return Err(self.crash_error("worker_failed")),
                 Ok(n) => offset += n,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
