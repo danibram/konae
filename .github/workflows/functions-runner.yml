@@ -47,7 +47,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       RUSTUP_TOOLCHAIN: 1.91.0
     steps:
@@ -59,42 +59,43 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build the runner for this Linux architecture
         run: cargo build --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml
-      - name: Run ignored real-worker tests with cgroup v2
+      - name: Build the Kernel test binary
+        run: cargo test --locked --manifest-path kernel-rs/Cargo.toml -p kernel --lib --no-run
+      - name: Run ignored real-worker tests under a delegated cgroup v2 scope
+        # systemd-run with Delegate=yes gives this step its own cgroup v2 subtree, the same route
+        # docs/operate.md names for a systemd-managed service. The Kernel identity is the runner user
+        # with CAP_SETUID and CAP_SETGID; workers drop to the nobody identity.
         run: |
           mkdir -p "$RUNNER_TEMP/functions-runner"
           install -m 755 kernel-rs/functions-runner/target/release/konae-functions-runner "$RUNNER_TEMP/functions-runner/konae-functions-runner"
-          docker run --rm --privileged --cgroupns private \
-            -v "$PWD:/repo" -v "$RUNNER_TEMP/functions-runner:/bundle:ro" -w /repo \
-            -e CARGO_BUILD_JOBS=2 rust:1.91-bookworm sh -ec '
-              # A privileged container with a private cgroup namespace sees its own cgroup v2 root at /sys/fs/cgroup, writable.
-              test -f /sys/fs/cgroup/cgroup.controllers
-              rm -rf /tmp/cgroup && ln -s /sys/fs/cgroup /tmp/cgroup
-              mkdir /tmp/cgroup/setup
-              printf "%s\\n" "$$" > /tmp/cgroup/setup/cgroup.procs
-              printf "%s\\n" "+memory +pids" > /tmp/cgroup/cgroup.subtree_control
-              mkdir /tmp/cgroup/delegated
-              printf "%s\\n" "+memory +pids" > /tmp/cgroup/delegated/cgroup.subtree_control
-              mkdir /tmp/cgroup/delegated/kernel-manager
-              printf "%s\\n" "$$" > /tmp/cgroup/delegated/kernel-manager/cgroup.procs
-              test -e /tmp/cgroup/delegated/cgroup.kill
-              chown 10001:10001 /tmp/cgroup/delegated /tmp/cgroup/delegated/cgroup.procs
-              chown 10001:10001 /tmp/cgroup/delegated/kernel-manager /tmp/cgroup/delegated/kernel-manager/cgroup.procs
-              cargo test --locked --manifest-path kernel-rs/Cargo.toml -p kernel --lib --no-run
-              test_binary=$(find kernel-rs/target/debug/deps -maxdepth 1 -type f -name "kernel-*" -perm -111 | head -n 1)
-              test -n "$test_binary"
-              uname -srmo
-              setpriv --reuid=10001 --regid=10001 --clear-groups --bounding-set=-all,+setuid,+setgid \
-                --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid --no-new-privs \
-                env KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
-                KONAE_TEST_FUNCTION_WORKER=/bundle/konae-functions-runner \
-                KONAE_TEST_FUNCTION_CGROUP=/tmp/cgroup/delegated \
-                "$test_binary" real_ --ignored --test-threads=1
-              setpriv --reuid=10001 --regid=10001 --clear-groups --bounding-set=-all,+setuid,+setgid \
-                --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid --no-new-privs \
-                env KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
-                KONAE_TEST_FUNCTION_WORKER=/bundle/konae-functions-runner \
-                KONAE_TEST_FUNCTION_CGROUP=/tmp/cgroup/delegated \
-                "$test_binary" functions_export_import_executes_the_published_bundle_with_imported_identity --ignored --test-threads=1
+          test_binary=$(find kernel-rs/target/debug/deps -maxdepth 1 -type f -name "kernel-*" -perm -111 | head -n 1)
+          test -n "$test_binary"
+          uname -srmo
+          sudo env KERNEL_UID="$(id -u)" KERNEL_GID="$(id -g)" TEST_BINARY="$PWD/$test_binary" \
+            RUNNER_BIN="$RUNNER_TEMP/functions-runner/konae-functions-runner" \
+            systemd-run --scope --quiet --collect --property=Delegate=yes --unit="konae-functions-strict-$$" sh -ec '
+              cg=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
+              test -f "$cg/cgroup.controllers"
+              grep -qw memory "$cg/cgroup.controllers"
+              grep -qw pids "$cg/cgroup.controllers"
+              mkdir "$cg/setup"
+              echo "$$" > "$cg/setup/cgroup.procs"
+              echo "+memory +pids" > "$cg/cgroup.subtree_control"
+              mkdir "$cg/delegated"
+              echo "+memory +pids" > "$cg/delegated/cgroup.subtree_control"
+              mkdir "$cg/delegated/kernel-manager"
+              echo "$$" > "$cg/delegated/kernel-manager/cgroup.procs"
+              test -e "$cg/delegated/cgroup.kill"
+              chown "$KERNEL_UID:$KERNEL_GID" "$cg/delegated" "$cg/delegated/cgroup.procs" "$cg/delegated/kernel-manager" "$cg/delegated/kernel-manager/cgroup.procs"
+              run_tests() {
+                setpriv --reuid="$KERNEL_UID" --regid="$KERNEL_GID" --clear-groups --bounding-set=-all,+setuid,+setgid \
+                  --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid --no-new-privs \
+                  env HOME=/tmp KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
+                  KONAE_TEST_FUNCTION_WORKER="$RUNNER_BIN" KONAE_TEST_FUNCTION_CGROUP="$cg/delegated" \
+                  "$TEST_BINARY" "$@" --ignored --test-threads=1
+              }
+              run_tests real_
+              run_tests functions_export_import_executes_the_published_bundle_with_imported_identity
             '
       - name: Build and run an exported function folder, then deny Landlock
         run: scripts/test-exported-functions-compose.sh
