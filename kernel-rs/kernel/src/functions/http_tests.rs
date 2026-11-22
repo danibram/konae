@@ -592,12 +592,14 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
     eprintln!(
         "two_partial_uploads_rss_kib kernel={kernel_rss_kib} workers={workers_rss_kib}; each upload has one 64KiB chunk pending"
     );
-    let (small_status, small_value) = tokio::time::timeout(Duration::from_secs(3), small)
-        .await
-        .expect("a third request should refuse while both app slots are held")
-        .unwrap();
-    assert_eq!(small_status, 503);
-    assert_eq!(small_value["code"], "cache_busy");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !small.is_finished(),
+        "a third request returned while both app slots were held: {:?}",
+        small.await.unwrap()
+    );
+    small.abort();
+    let _ = small.await;
     drop(stalled);
     serving.abort();
     let _ = serving.await;
@@ -1472,7 +1474,7 @@ async fn kernel_binary_keeps_other_apps_available_while_one_app_uploads_slowly()
             "--silent",
             "--show-error",
             "--max-time",
-            "2",
+            "8",
             "--write-out",
             "\n%{http_code}",
             "--header",
@@ -1608,22 +1610,58 @@ async fn kernel_binary_keeps_other_apps_available_while_one_app_uploads_slowly()
             "--silent",
             "--show-error",
             "--max-time",
-            "2",
+            "8",
             "--write-out",
             "\n%{http_code}",
             "--header",
         ])
         .arg(format!("Host: {}", app_a.hostname))
+        .args(["--request", "POST", "--data-binary", ""])
         .arg(&base)
         .output()
         .unwrap();
     let third_output = String::from_utf8_lossy(&third.stdout);
-    assert!(third_output.ends_with("\n503"), "{third_output}");
-    assert!(third_output.contains("cache_busy"), "{third_output}");
+    assert!(third_output.ends_with("\n200"), "{third_output}");
+    let third_elapsed = third_started.elapsed();
+    assert!(third_elapsed > Duration::from_secs(1));
+    assert!(third_elapsed < Duration::from_secs(8));
+    let b_after_burst = std::process::Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "2",
+            "--write-out",
+            "\n%{http_code}",
+            "--header",
+        ])
+        .arg(format!("Host: {}", app_b.hostname))
+        .arg(&base)
+        .output()
+        .unwrap();
+    assert!(b_after_burst.status.success());
+    assert!(
+        String::from_utf8_lossy(&b_after_burst.stdout).ends_with("\n200"),
+        "{}",
+        String::from_utf8_lossy(&b_after_burst.stdout)
+    );
+    let processes = std::process::Command::new("ps")
+        .args(["-axo", "ppid=,command="])
+        .output()
+        .unwrap();
+    let own = server.id().to_string();
+    let worker_count = String::from_utf8_lossy(&processes.stdout)
+        .lines()
+        .filter(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some(own.as_str()) && line.contains("--function-worker")
+        })
+        .count();
+    assert_eq!(worker_count, 3, "the burst should preserve app B's worker");
     eprintln!(
-        "capacity proof app_a_workers=2 app_b_status=200 app_b_elapsed_ms={} app_a_third_status=503 app_a_third_elapsed_ms={}",
+        "capacity proof app_a_workers=2 app_b_status=200 app_b_elapsed_ms={} app_a_third_status=200 app_a_third_elapsed_ms={} app_b_worker_survived=true",
         b_elapsed.as_millis(),
-        third_started.elapsed().as_millis()
+        third_elapsed.as_millis()
     );
 
     for child in &mut tricklers {

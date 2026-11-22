@@ -238,9 +238,20 @@ impl Runtime {
                     })
                     .cloned()
                     .collect::<Vec<_>>();
-                if app_keys.len() < self.app_slots
-                    && let Ok(allocation) = self.allocations.clone().try_acquire_owned()
-                {
+                if app_keys.len() >= self.app_slots {
+                    state
+                        .slots
+                        .iter()
+                        .filter(|(candidate, slot)| {
+                            (candidate.as_str() == deployment
+                                || candidate.starts_with(&format!("{deployment}:"))
+                                || candidate.starts_with(&format!("{deployment}#")))
+                                && slot.pins.load(Ordering::SeqCst) == 0
+                        })
+                        .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
+                        .map(|(key, _)| key.clone())
+                        .and_then(|oldest| state.slots.remove(&oldest))
+                } else if let Ok(allocation) = self.allocations.clone().try_acquire_owned() {
                     let index = (0..self.app_slots)
                         .find(|index| !state.slots.contains_key(&format!("{key}#{index}")))
                         .unwrap_or(app_keys.len());
@@ -257,27 +268,21 @@ impl Runtime {
                     });
                     state.slots.insert(slot_key, slot.clone());
                     return Ok(Reservation(slot));
-                }
-                let oldest = state
+                } else if let Some(oldest) = state
                     .slots
                     .iter()
-                    .filter(|(candidate, slot)| {
-                        (candidate.as_str() == deployment
-                            || candidate.starts_with(&format!("{deployment}:"))
-                            || candidate.starts_with(&format!("{deployment}#")))
-                            && slot.pins.load(Ordering::SeqCst) == 0
-                    })
+                    .filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0)
                     .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
-                    .or_else(|| {
-                        state
-                            .slots
-                            .iter()
-                            .filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0)
-                            .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
-                    })
                     .map(|(key, _)| key.clone())
-                    .ok_or("cache_busy")?;
-                state.slots.remove(&oldest).unwrap()
+                {
+                    state.slots.remove(&oldest)
+                } else {
+                    None
+                }
+            };
+            let Some(retired) = retired else {
+                wait(budget, tokio::time::sleep(Duration::from_millis(5))).await?;
+                continue;
             };
             // La destrucción continúa aunque el solicitante abandone esta espera.
             wait(budget, tokio::task::spawn_blocking(move || retire(retired)))
@@ -724,17 +729,43 @@ mod tests {
     #[tokio::test]
     async fn leases_obey_per_deployment_pool_cap() {
         let runtime = runtime(Duration::from_secs(60));
+        let other_app = runtime
+            .lease("other:orders".into(), &budget())
+            .await
+            .unwrap();
+        drop(other_app);
         let first = runtime.lease("app:orders".into(), &budget()).await.unwrap();
         let second = runtime.lease("app:orders".into(), &budget()).await.unwrap();
-        assert_eq!(
-            runtime
-                .lease("app:orders".into(), &budget())
-                .await
-                .err()
-                .unwrap(),
-            "cache_busy"
+        let waiting_runtime = runtime.clone();
+        let deadline = Budget::new(Duration::from_millis(80));
+        let waiting =
+            tokio::spawn(
+                async move { waiting_runtime.lease("app:orders".into(), &deadline).await },
+            );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !waiting.is_finished(),
+            "third request should queue at the app cap"
         );
-        assert_eq!(runtime.state.lock().unwrap().slots.len(), 2);
+        {
+            let state = runtime.state.lock().unwrap();
+            let app_slots = state
+                .slots
+                .keys()
+                .filter(|key| key.as_str() == "app:orders" || key.starts_with("app:orders#"))
+                .count();
+            assert_eq!(app_slots, 2);
+            assert!(state.slots.contains_key("other:orders"));
+        }
+        assert_eq!(waiting.await.unwrap().err().unwrap(), "deadline_exceeded");
+        assert!(
+            runtime
+                .state
+                .lock()
+                .unwrap()
+                .slots
+                .contains_key("other:orders")
+        );
         assert!(first.worker.is_none() && second.worker.is_none());
     }
 
@@ -766,17 +797,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_deployment_uses_two_workers_and_refuses_a_third() {
+    async fn same_deployment_queues_a_third_until_a_worker_is_free() {
         let runtime = runtime(Duration::from_secs(60));
         let held = runtime.lease("a".into(), &budget()).await.unwrap();
         let second = runtime.lease("a".into(), &budget()).await.unwrap();
-        assert_eq!(
-            runtime.lease("a".into(), &budget()).await.err().unwrap(),
-            "cache_busy"
+        let waiting_runtime = runtime.clone();
+        let waiting_budget = budget();
+        let waiting =
+            tokio::spawn(async move { waiting_runtime.lease("a".into(), &waiting_budget).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !waiting.is_finished(),
+            "third request should queue at the app cap"
         );
-        assert_eq!(runtime.admission.available_permits(), ADMISSION - 2);
+        assert_eq!(runtime.admission.available_permits(), ADMISSION - 3);
         drop(held);
+        let third = tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("queued request should wake when a pin is released")
+            .unwrap()
+            .unwrap();
+        assert_eq!(runtime.state.lock().unwrap().slots.len(), 2);
         assert!(second.worker.is_none());
+        assert!(third.worker.is_none());
     }
 
     #[tokio::test]
