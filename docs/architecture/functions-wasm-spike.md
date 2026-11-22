@@ -386,68 +386,115 @@ done
   -O pooling-allocator=y -o "${portable%.wasm}.aarch64-unknown-linux-gnu.cwasm" "$portable"
 
 unset KONAE_STARLING_BUILDER
-# Run each pair back to back with starling and deno pointing to the two binaries.
-for runner in "$starling" "$deno"; do
-  python3 "$m/protocol.py" "$runner" --runs 30 --skip-engine-size
-done
-for runner in "$starling" "$deno"; do
-  python3 "$m/protocol.py" "$runner" --post "$bundles/count.mjs" --runs 30
-done
-for runner in "$starling" "$deno"; do
-  python3 "$m/suite.py" "$runner" --runs 1 --repeat-slowest 30
-done
 python3 "$m/hono.py" "$starling" "$bundles/middleware.mjs"
 ```
 
-The middleware bundle uses the original Hono probe build command above. The Linux runner uses the same locked release build with Rust 1.91.0 in `rust:1.91-bookworm`. To rerun the Linux comparisons, mount the repository, cache, release directory and directory containing the deno_core binary and count bundle as read-only directories. Set `KONAE_STARLING_CACHE` to the cache mount. Use the same three command pairs inside each image with the mounted paths.
+The middleware bundle uses the original Hono probe build command above. The Linux StarlingMonkey binary uses the same locked release build with Rust 1.91.0 in `rust:1.91-bookworm`. The deno_core baselines come from `main` at `502ead0e` and the startup snapshot commit `91add6dd`. Both Linux builds use the repository's `Dockerfile.functions-runner` through its build script. The macOS main baseline uses the locked release binary from the previous run. I verified that the worktree and main have identical runner and executor sources. These commands build the new binaries.
+
+```sh
+scratch=$(mktemp -d /tmp/konae-deno-comparison.XXXXXX)
+mkdir -p "$scratch/main" "$scratch/snapshot"
+for tree in main snapshot; do
+  git archive 502ead0e Dockerfile.functions-runner scripts/build-functions-runner.sh \
+    .dockerignore kernel-rs/Cargo.toml kernel-rs/backup/Cargo.toml \
+    kernel-rs/kernel/Cargo.toml kernel-rs/konae/Cargo.toml | tar -x -C "$scratch/$tree"
+done
+git archive 502ead0e kernel-rs/functions-runner kernel-rs/functions-executor \
+  | tar -x -C "$scratch/main"
+git archive 91add6dd kernel-rs/functions-runner kernel-rs/functions-executor \
+  | tar -x -C "$scratch/snapshot"
+"$scratch/main/scripts/build-functions-runner.sh" arm64 "$scratch/linux-main"
+"$scratch/snapshot/scripts/build-functions-runner.sh" arm64 "$scratch/linux-snapshot"
+CARGO_TARGET_DIR="$scratch/macos-target" cargo build --release --locked -j 6 \
+  --manifest-path "$scratch/snapshot/kernel-rs/functions-runner/Cargo.toml" \
+  --bin konae-functions-runner
+```
+
+For each platform and round, run GET for all three engines, then POST for all three, then Hono for all three. Run each command with `runner` pointing at the corresponding binary. The six rounds use each possible engine order once.
+
+```sh
+python3 "$m/protocol.py" "$runner" --runs 30 --skip-engine-size
+python3 "$m/protocol.py" "$runner" --post "$bundles/count.mjs" --runs 30
+python3 "$m/suite.py" "$runner" --runs 1 --repeat-slowest 30
+```
+
+In Docker, the temporary `/bench/run-container.sh` script runs those commands with `m=/src/kernel-rs/functions-runner-wasm/measure` and the counter bundle at `/bench/count.mjs`. The runners are `/starling/konae-functions-runner-wasm`, `/main/konae-functions-runner` and `/snapshot/konae-functions-runner`. Use the `konae-wasm-debian12` and `konae-wasm-ubuntu2404` images.
 
 ```sh
 docker run --rm --network none --user 65534:65534 --cap-drop=ALL \
   --security-opt seccomp=unconfined --security-opt no-new-privileges \
   --mount "type=bind,src=$PWD,dst=/src,readonly" \
   --mount "type=bind,src=$cache,dst=/cache,readonly" \
-  --mount "type=bind,src=$linux_release_dir,dst=/bench-bin,readonly" \
-  --mount "type=bind,src=$linux_assets,dst=/assets,readonly" \
-  -e KONAE_STARLING_CACHE=/cache -e PYTHONDONTWRITEBYTECODE=1 "$image" sh /assets/bench.sh
+  --mount "type=bind,src=$linux_release_dir,dst=/starling,readonly" \
+  --mount "type=bind,src=$scratch/linux-main,dst=/main,readonly" \
+  --mount "type=bind,src=$scratch/linux-snapshot,dst=/snapshot,readonly" \
+  --mount "type=bind,src=$scratch/bench-assets,dst=/bench,readonly" \
+  -e KONAE_STARLING_CACHE=/cache -e PYTHONDONTWRITEBYTECODE=1 "$image" sh /bench/run-container.sh
 ```
 
-In these runs `bench.sh` ran the three command pairs with `/src/kernel-rs/functions-runner-wasm/measure`, `/bench-bin/konae-functions-runner-wasm`, `/assets/deno` and `/assets/count.mjs`. For Kernel tests the supervisor clears the child environment. A launcher exports the absolute cache path and runs `exec /absolute/path/to/runner "$@"`. The launcher uses the cache alone. The ignored tests' finite bundles can be extracted with `python3 "$m/starling-kernel-bundles.py" "$bundles"` and prepared as above. No executor, Kernel or ADR change is needed for this development configuration.
+For Kernel tests the supervisor clears the child environment. A launcher exports the absolute cache path and runs `exec /absolute/path/to/runner "$@"`. The launcher uses the cache alone. The ignored tests' finite bundles can be extracted with `python3 "$m/starling-kernel-bundles.py" "$bundles"` and prepared as above.
 
 ### Paired latency and RSS
 
-The final comparisons ran on November 22, 2026 on an Apple M3 Pro with 18 GiB RAM and 11 logical CPUs. macOS 26.6.1 build 25G76 reported `uname -r` as `25.6.0`. Its pairs ran from 21:31:03 to 21:31:26 CET with a one-minute host load average of 16.41 to 18.64. Docker Desktop 29.9.3 ran both arm64 images on `7.0.14-linuxkit` with nine vCPUs. Debian ran at 21:31:26 to 21:31:33 CET at VM load 4.47 to 4.74. Ubuntu ran at 21:31:33 to 21:31:40 at VM load 4.27 to 4.47. Another Rust build was active on the shared host. macOS used Node 26.0.0 and Python 3.14.5. Debian and Ubuntu used Node 22.23.5, with Python 3.11.2 and 3.12.3 respectively.
+The comparison ran on November 22, 2026 on an Apple M3 Pro with 18 GiB RAM and 11 logical CPUs. macOS 26.6.1 build 25G76 reported `uname -r` as `25.6.0`. Docker Desktop 29.9.3 ran both arm64 images on `7.0.14-linuxkit` with nine vCPUs. macOS used Node 26.0.0 and Python 3.14.5. Debian and Ubuntu used Node 22.23.5, with Python 3.11.2 and 3.12.3 respectively. macOS ran 21:48:15 to 21:50:58 CET at a one-minute host load of 14.08 to 47.90. Debian 12 Docker ran 21:50:59 to 21:53:21 CET at a one-minute VM load of 0.08 to 2.56. Ubuntu 24.04 Docker ran 21:53:21 to 21:55:35 CET at a one-minute VM load of 1.21 to 2.59.
 
-Both container runs reported UID and GID 65534, all five capability masks zero, `NoNewPrivs=1`, `Seccomp=0` and zero seccomp filters. They used read-only cache mounts, no network beyond loopback, no delegated cgroup and no Landlock setup. The runner needs an ordinary process, threads, pipes, clocks, memory and file mappings, including executable mappings for the native cache. It used the same guest boundary in both images. The images ran the Docker VM kernel. The native 6.1 and 6.8 kernels remain untested.
+Both containers reported UID and GID 65534, all five capability masks zero, `NoNewPrivs=1`, `Seccomp=0` and zero seccomp filters. They used read-only cache mounts, no network beyond loopback, no delegated cgroup and no Landlock setup. The runner needs an ordinary process, threads, pipes, clocks, memory and file mappings, including executable mappings for the native cache. These Linux runs used the Docker VM kernel. Stock Linux 6.1 and 6.8 remain untested.
 
-The macOS deno_core comparison used the round-two locked release binary. Linux used the IPC v2 release runner at `/usr/local/lib/konae/functions-runner` from `konae-functions-lab-kernel:ipc2-thr-kts9t7ufjf-20261121`, SHA-256 `9c74ed3d77259646477d3b6b1cd16daf40c17f257e00c6902da119d133a409b1`. Each pair shares its Python driver, IPC protocol, source and platform. The different deno_core builds and host conditions limit cross-platform comparisons.
+Each comparison used the same Python driver, IPC v2, bundles and machine for all engines. Main and snapshot deno_core create a fresh isolate per invocation. The snapshot preloads the Web bootstrap at build time. StarlingMonkey creates a fresh Store and pooled instance for each invocation. All three reuse the process in the warm series. The earlier Linux measurements belong to the lab runner.[^lab-runner]
 
-Each IPC series took 30 samples after one warm-up. Cold GET starts a new process for every sample and includes launching it, loading the precompiled component, linking, making the first instance and returning the first reply. The OS page cache stayed warm. Warm requests reuse the worker process and use a fresh JavaScript instance. The GET measures IPC, guest work, copying and scheduling. The POST also includes Python's SQLite transaction, action round trips and commit. RSS is the worker's resident memory after Ready and after the series. It includes shared pages and excludes transient peaks.
+Each of six rounds had 30 cold and 30 warm GETs and 30 warm POSTs, each after one warm-up. Cold GET includes process launch through Init and first reply. For StarlingMonkey that covers loading and linking the precompiled component and making the first instance. The OS can retain mapped file pages between runs. Warm GET includes IPC, guest work and scheduling. POST also includes Python's SQLite transaction, action round trips and commit. The table uses medians of the six per-round p50s and p95s, and the largest measured cold reply. RSS is the median of six worker snapshots after Ready and after the series. It includes shared pages and excludes transient peaks.
 
 | Platform and engine | Cold GET p50 / p95 / max, ms | Warm GET p50 / p95, ms | Warm POST p50 / p95, ms | GET RSS before / after, KiB | POST RSS before / after, KiB |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| macOS StarlingMonkey | 20.941 / 23.329 / 28.865 | 2.439 / 3.443 | 4.353 / 6.134 | 6,624 / 12,976 | 6,560 / 13,392 |
-| macOS deno_core | 48.743 / 59.774 / 67.645 | 26.725 / 38.275 | 34.448 / 51.181 | 4,208 / 30,560 | 4,192 / 30,688 |
-| Debian 12 StarlingMonkey | 22.831 / 30.576 / 32.641 | 1.654 / 3.096 | 4.414 / 6.228 | 4,048 / 13,460 | 4,048 / 13,776 |
-| Debian 12 deno_core | 53.266 / 67.647 / 73.225 | 0.425 / 2.132 | 2.048 / 2.964 | 37,476 / 38,196 | 37,456 / 38,508 |
-| Ubuntu 24.04 StarlingMonkey | 23.813 / 30.112 / 33.842 | 1.509 / 3.263 | 4.207 / 7.036 | 5,564 / 14,976 | 5,564 / 15,292 |
-| Ubuntu 24.04 deno_core | 51.836 / 62.970 / 64.594 | 0.401 / 1.112 | 1.801 / 3.188 | 37,632 / 38,336 | 37,592 / 38,656 |
+| macOS StarlingMonkey | 15.261 / 25.735 / 75.594 | 1.024 / 1.522 | 2.615 / 4.345 | 6,624 / 12,928 | 6,600 / 13,312 |
+| macOS deno_core main | 29.430 / 43.933 / 79.302 | 14.843 / 18.483 | 15.566 / 20.297 | 4,192 / 30,152 | 4,192 / 29,936 |
+| macOS deno_core with snapshot | 18.553 / 34.668 / 177.148 | 4.702 / 7.072 | 5.325 / 7.837 | 4,240 / 21,872 | 4,240 / 21,944 |
+| Debian 12 Docker StarlingMonkey | 18.242 / 23.462 / 32.285 | 1.429 / 2.446 | 4.571 / 5.995 | 4,046 / 13,460 | 4,048 / 13,776 |
+| Debian 12 Docker deno_core main | 34.885 / 48.115 / 204.262 | 18.103 / 22.004 | 20.157 / 25.956 | 7,512 / 38,366 | 7,516 / 38,570 |
+| Debian 12 Docker deno_core with snapshot | 22.933 / 30.084 / 59.675 | 4.989 / 6.775 | 7.895 / 10.995 | 7,640 / 30,502 | 7,644 / 30,888 |
+| Ubuntu 24.04 Docker StarlingMonkey | 17.907 / 22.838 / 29.760 | 1.117 / 1.447 | 3.837 / 5.230 | 5,564 / 14,984 | 5,564 / 15,250 |
+| Ubuntu 24.04 Docker deno_core main | 34.668 / 47.085 / 185.129 | 14.747 / 18.900 | 19.438 / 28.507 | 7,572 / 38,540 | 7,576 / 38,594 |
+| Ubuntu 24.04 Docker deno_core with snapshot | 20.426 / 24.572 / 60.920 | 4.335 / 5.429 | 6.566 / 10.594 | 7,700 / 30,664 | 7,698 / 31,070 |
 
-Each Hono sweep ran the same 200 checks and skipped the seven cases marked out of scope by the verifier. The harness restores SQLite state and repeats the slowest case in each of the main and rollback sweeps 30 times after one warm-up. The higher repeat maximum counts for the revised guard. This time includes local HTTP, two SQLite snapshots, routing, transaction work where applicable, and IPC. Case selection can differ by engine. In all six runs the highest repeated maximum came from the same rollback case. Every repeat passed.
+Each Hono sweep ran 200 checks and skipped the seven cases marked out of scope. For each round, the verifier restored SQLite state and repeated the slowest case in the main sweep and the slowest in the rollback sweep. Each case had one warm-up and 30 measured repeats. The largest repeat maximum across all rounds counts for the guard. The interval includes local HTTP, routing, IPC, two SQLite snapshots and transactions where applicable. Case selection can differ by engine and round.
 
-| Platform and engine | Passed / failed / skipped | Slowest in full sweep, ms | `a.internal-error.rollback-after-update` max of 30, ms |
-| --- | ---: | ---: | ---: |
-| macOS StarlingMonkey | 200 / 0 / 7 | 27.79, `a.authorization.alice.POST` | 22.44 |
-| macOS deno_core | 200 / 0 / 7 | 83.86, `a.absent.GET` | 41.41 |
-| Debian 12 StarlingMonkey | 200 / 0 / 7 | 53.46, `a.authorization.alice.GET` | 23.74 |
-| Debian 12 deno_core | 200 / 0 / 7 | 16.14, rollback | 7.12 |
-| Ubuntu 24.04 StarlingMonkey | 200 / 0 / 7 | 45.66, `alternation.preferences.0` | 10.87 |
-| Ubuntu 24.04 deno_core | 200 / 0 / 7 | 13.05, rollback | 5.68 |
+| Platform and engine | Passed / failed / skipped | Full sweep max, ms | Per-round repeat maxima, ms | Case of highest repeat |
+| --- | ---: | ---: | ---: | --- |
+| macOS StarlingMonkey | 1,200 / 0 / 42 | 20.44, `a.internal-error.rollback-after-update` | 9.40 to 36.28 | `a.internal-error.rollback-after-update` |
+| macOS deno_core main | 1,200 / 0 / 42 | 219.49, `b.readback.alice.1` | 29.50 to 120.17 | `b.readback.alice.1` |
+| macOS deno_core with snapshot | 1,200 / 0 / 42 | 122.40, `b.body.invalid.4` | 23.31 to 167.86 | `a.internal-error.rollback-after-update` |
+| Debian 12 Docker StarlingMonkey | 1,200 / 0 / 42 | 157.30, `a.body.invalid.1` | 9.36 to 48.00 | `a.internal-error.rollback-after-update` |
+| Debian 12 Docker deno_core main | 1,200 / 0 / 42 | 1080.47, `b.update.alice.1` | 43.11 to 114.80 | `b.update.bob.3` |
+| Debian 12 Docker deno_core with snapshot | 1,200 / 0 / 42 | 398.79, `a.internal-error.rollback-after-update` | 34.12 to 119.74 | `a.authorization.alice.GET` |
+| Ubuntu 24.04 Docker StarlingMonkey | 1,200 / 0 / 42 | 64.66, `a.authorization.alice.GET` | 9.17 to 26.42 | `a.internal-error.rollback-after-update` |
+| Ubuntu 24.04 Docker deno_core main | 1,200 / 0 / 42 | 349.30, `b.id.POST.%20` | 51.17 to 133.85 | `b.body.invalid.0` |
+| Ubuntu 24.04 Docker deno_core with snapshot | 1,200 / 0 / 42 | 148.40, `b.body.invalid.5` | 26.05 to 64.19 | `a.authorization.alice.GET` |
+
+Every repeat passed. In the second macOS round, the StarlingMonkey Hono repeat maximum was 36.28 ms and the snapshot maximum was 23.31 ms, a ratio of 1.56×. The guard uses the highest repeat maximum for each engine across all six rounds. Both warm p50 ratios passed against the snapshot in every round on all three platforms. The per-round p50 ranges show the variation.
+
+| Platform and engine | Per-round GET p50 range, ms | Per-round POST p50 range, ms |
+| --- | ---: | ---: |
+| macOS StarlingMonkey | 0.826 to 2.084 | 2.074 to 7.129 |
+| macOS deno_core main | 12.718 to 25.398 | 13.344 to 30.085 |
+| macOS deno_core with snapshot | 3.516 to 7.862 | 4.832 to 13.638 |
+| Debian 12 Docker StarlingMonkey | 1.176 to 2.333 | 2.890 to 5.546 |
+| Debian 12 Docker deno_core main | 14.271 to 23.140 | 16.315 to 30.794 |
+| Debian 12 Docker deno_core with snapshot | 4.041 to 6.744 | 5.697 to 9.469 |
+| Ubuntu 24.04 Docker StarlingMonkey | 1.071 to 1.254 | 2.956 to 7.305 |
+| Ubuntu 24.04 Docker deno_core main | 14.088 to 21.157 | 15.560 to 32.799 |
+| Ubuntu 24.04 Docker deno_core with snapshot | 3.820 to 5.163 | 5.410 to 12.222 |
+
+[^lab-runner]: The earlier Docker comparison used the lab image's `/usr/local/lib/konae/functions-runner`, SHA-256 `9c74ed3d77259646477d3b6b1cd16daf40c17f257e00c6902da119d133a409b1`. The lab build record matches that hash to `konae-functions-spike` from base `43decb081494dbfe854327dd1279f9b9c69f17df` plus the frozen patch with SHA-256 `9be74c0a839436e5814df3ce67c25d0c8cf1523234bbabfea814b3dd430f39fd`. Its `spikes/functions-runtime/rust-host/src/worker.rs` creates one runtime before Ready and invokes it for every request. This isolate reuse makes those rows unsuitable for a fresh-isolate comparison.
+
+    Debian 12 recorded cold GET p50/p95/max of 53.266/67.647/73.225 ms, warm GET p50/p95 of 0.425/2.132 ms and warm POST p50/p95 of 2.048/2.964 ms. GET RSS before/after was 37,476/38,196 KiB and POST RSS was 37,456/38,508 KiB. Hono passed 200 with zero failures and seven skips. The rollback case took 16.14 ms in the sweep and reached 7.12 ms over 30 repeats.
+
+    Ubuntu 24.04 recorded cold GET p50/p95/max of 51.836/62.970/64.594 ms, warm GET p50/p95 of 0.401/1.112 ms and warm POST p50/p95 of 1.801/3.188 ms. GET RSS before/after was 37,632/38,336 KiB and POST RSS was 37,592/38,656 KiB. Hono passed 200 with zero failures and seven skips. The rollback case took 13.05 ms in the sweep and reached 5.68 ms over 30 repeats.
 
 ### Cache creation and component size
 
 A single actual IPC Init for the trivial bundle in a new empty cache took 5,984.43 ms to Ready and 5,986.81 ms to the first reply. The command used `protocol.Worker(starling, TRIVIAL, init_timeout=70)` followed by an asserted `worker.get()`. It ran at 21:32:33 to 21:32:39 CET with macOS host load 10.13 to 11.08. This includes starting the Node build process, bundling, Wizer, native compilation, then loading and calling the component. The 250 ms criterion uses an existing precompiled artifact. Production must do the slow part before the first request.
 
-The macOS StarlingMonkey release binary was 2,510,608 bytes. The Linux one was 2,946,040 bytes. The corresponding deno_core binaries were 80,028,256 and 94,500,152 bytes. The runners' sizes came from `protocol.py`. The component sizes came from `--prepare` on macOS and `wc -c` after cross-compiling the portable artifacts for Linux.
+The macOS StarlingMonkey release binary was 2,510,608 bytes. The Linux one was 2,946,040 bytes. Main deno_core weighed 80,028,256 bytes on macOS and 90,935,616 bytes on Linux. With the snapshot it weighed 84,677,088 and 95,597,552 bytes respectively. The runners' sizes came from `protocol.py`. The component sizes came from `--prepare` on macOS and `wc -c` after cross-compiling the portable artifacts for Linux.
 
 | Bundle | Portable component bytes | macOS native bytes | Linux native bytes | macOS `--prepare` build, ms |
 | --- | ---: | ---: | ---: | ---: |
@@ -466,7 +513,7 @@ To estimate the memory cost across app versions, I started one macOS IPC worker 
 
 At 21:32:30 CET on macOS, `PORT=18811 "$m/run-export.sh" "$PWD/kernel-rs/target/debug/kernel" "$launcher" "$exported"` ran the exported app folder under the development Kernel and cache-only StarlingMonkey launcher. Host load was 9.71 at start and 10.13 at finish. The authenticated `GET /api/hello` returned HTTP 200 and `wasm-ok`. The first `POST /api/count` with `{"amount":1}` returned HTTP 200 and `{"n":1}`. The 30 subsequent transactions verified every increment through `{"n":31}`. Both worker PIDs stayed the same. The HTTP harness recorded warm GET p50/p95 of 6.109/10.103 ms and warm POST p50/p95 of 11.995/19.725 ms. This includes routing, authentication, IPC and scheduling. POST also includes the two named actions and the Kernel's idempotency and transaction work. An earlier attempt returned 502 because StarlingMonkey added `Content-Length`. The second run used the response adapter described above.
 
-The two containers ran the same export with the packaged IPC v2 lab Kernel and `"$m/run-export.sh" /assets/kernel /assets/worker /export`. The Docker command above also mounted the exported folder at `/export` and added `--init`. Both completed the same GET and all 31 POSTs as UID 65534 with zero capabilities and seccomp disabled. Debian ran 21:37:27 to 21:37:30 CET, and Ubuntu 21:37:30 to 21:37:32. VM load was 6.14 to 6.41. Debian's repeated GET and POST p50/p95 were 26.553/67.619 ms and 29.330/84.200 ms. Ubuntu's were 21.621/35.912 ms and 28.383/47.665 ms. The Linux Kernel showed no idle worker children at the snapshot points. These HTTP figures may include worker startup and are outside the warm IPC guard.
+The two containers ran the same export with the packaged IPC v2 lab Kernel and `"$m/run-export.sh" /assets/kernel /assets/worker /export`. The export run used the same container security flags, mounted the Kernel and StarlingMonkey launcher under `/assets` and the app folder at `/export`, and added `--init`. Both completed the same GET and all 31 POSTs as UID 65534 with zero capabilities and seccomp disabled. Debian ran 21:37:27 to 21:37:30 CET, and Ubuntu 21:37:30 to 21:37:32. VM load was 6.14 to 6.41. Debian's repeated GET and POST p50/p95 were 26.553/67.619 ms and 29.330/84.200 ms. Ubuntu's were 21.621/35.912 ms and 28.383/47.665 ms. The Linux Kernel showed no idle worker children at the snapshot points. These HTTP figures may include worker startup and are outside the warm IPC guard.
 
 | Command | macOS result |
 | --- | --- |
@@ -480,16 +527,21 @@ The two containers ran the same export with the packaged IPC v2 lab Kernel and `
 
 A separate IPC boundary test used `protocol.Worker` to return `new Response('x'.repeat(size))` with default worker limits. The runner refused 2,097,153 bytes as `response_too_large`. The two 2,097,152-byte requests both hit `worker_memory_limit` before replying. This was the cache-hit retry at 21:36:26 CET on the Mac at host load 20.31. The wire-size guard works, and this response path can exhaust the 64 MiB guest memory ceiling before the configured reply limit.
 
+### Production gaps
+
+`konae build` would componentize the bundle and ship the portable component and digest in `server/`. The destination would precompile verified Wasm into its own trusted cache. The Gate and Kernel need shared refusals for missing or mismatched artifacts, unsupported versions, unexpected imports or exports, and builds that exceed their limits or require disallowed host effects during initialization. Production still needs a Wasm launch policy, native-kernel tests, a plan for per-version cache cost, and parity for large bodies, response memory, multipart files and `Response.clone`. It also needs a rule for top-level state that Wizer freezes before any request. IPC v3 changes how the worker receives and selects bundles and reports handler errors.
+
 ## Final verdict
 
-The ratio divides StarlingMonkey's time by the same-platform deno_core time above. Warm ratios must be at most 1.5. Every measured cold maximum must be under 250 ms.
+Warm ratios divide StarlingMonkey's time by the matching baseline. The guard is 1.5× or less. Cold passes if StarlingMonkey's maximum is under 250 ms. The snapshot rows decide the production verdict.
 
-| Platform | Cold max, StarlingMonkey / deno_core | Warm GET ratio | Warm POST ratio | Slowest repeated Hono ratio |
-| --- | --- | --- | --- | --- |
-| macOS | 28.865 / 67.645 ms, pass | 0.09×, pass | 0.13×, pass | 0.54×, pass |
-| Debian 12 on Docker | 32.641 / 73.225 ms, pass | 3.89×, fail | 2.16×, fail | 3.33×, fail |
-| Ubuntu 24.04 on Docker | 33.842 / 64.594 ms, pass | 3.76×, fail | 2.34×, fail | 1.91×, fail |
+| Platform | deno_core baseline | Cold max, StarlingMonkey / baseline, ms | Warm GET ratio | Warm POST ratio | Slowest repeated Hono ratio |
+| --- | --- | --- | --- | --- | --- |
+| macOS | deno_core main | 75.594 / 79.302, pass | 0.07×, pass | 0.17×, pass | 0.30×, pass |
+| macOS | deno_core with snapshot | 75.594 / 177.148, pass | 0.22×, pass | 0.49×, pass | 0.22×, pass |
+| Debian 12 Docker | deno_core main | 32.285 / 204.262, pass | 0.08×, pass | 0.23×, pass | 0.42×, pass |
+| Debian 12 Docker | deno_core with snapshot | 32.285 / 59.675, pass | 0.29×, pass | 0.58×, pass | 0.40×, pass |
+| Ubuntu 24.04 Docker | deno_core main | 29.760 / 185.129, pass | 0.08×, pass | 0.20×, pass | 0.20×, pass |
+| Ubuntu 24.04 Docker | deno_core with snapshot | 29.760 / 60.920, pass | 0.26×, pass | 0.58×, pass | 0.41×, pass |
 
-Keep deno_core in production. StarlingMonkey is the Wasm engine to take forward. It passed the Hono suite without Linux capabilities or containment setup and met every macOS timing guard. It missed all three warm guards in both containers. Stock Debian and Ubuntu kernels remain unverified. QuickJS remains rejected under its measured guards.
-
-Production would componentize during `konae build` and ship the portable component and digest in `server/`. The destination would precompile verified Wasm into its own trusted cache. The Gate and Kernel need shared refusals for missing or mismatched artifacts, unsupported versions, unexpected imports or exports, and builds that exceed their limits or require disallowed host effects during initialization. Production still needs a Wasm launch policy, native-kernel tests, a plan for per-version cache cost, and parity for large bodies, response memory, multipart files and `Response.clone`. It also needs a rule for top-level state that Wizer freezes before any request. IPC v3 changes how the worker receives and selects bundles and reports handler errors.
+StarlingMonkey passes the revised timing criterion against deno_core with snapshot on all three measured platforms. Keep deno_core with snapshot for production. StarlingMonkey is the Wasm engine to take forward once the stock-kernel checks, Web API and large-body gaps, and artifact and launch work are resolved. QuickJS remains rejected under its measured guards.
