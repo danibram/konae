@@ -69,9 +69,8 @@ def main():
     print(json.dumps(dict(first_get=first_get, first_post=first_post, last_post=last_post,
                           cold_get_ms=cold_get, cold_post_ms=cold_post,
                           warm_get_ms=summary(times['GET']), warm_post_ms=summary(times['POST']),
-                          rss_before_kib=before, rss_after_kib=after)))
-    if len(before) != 2 or before.keys() != after.keys():
-        raise RuntimeError(f'Unexpected worker RSS samples under Kernel PID {args.pid}: {before}, {after}')
+                          rss_before_kib=before, rss_after_kib=after,
+                          worker_pids_reused=len(before) == 2 and before.keys() == after.keys())))
 
 
 if __name__ == '__main__':

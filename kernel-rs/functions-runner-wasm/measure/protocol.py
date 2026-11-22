@@ -4,10 +4,12 @@ import argparse
 import json
 import os
 import select
+import sqlite3
 from pathlib import Path
 import statistics
 import struct
 import subprocess
+import tempfile
 import time
 
 LIMITS = dict(heap_bytes=64 << 20, response_bytes=2 << 20, rss_bytes=256 << 20, operation_limit=64)
@@ -83,14 +85,29 @@ class Worker:
         return json.loads(exact(struct.unpack('!I', header)[0]))
 
     def get(self, path='/', headers=None):
+        return self.invoke(path=path, headers=headers)
+
+    def invoke(self, path='/', headers=None, method='GET', body=b'', operation=None):
         self.request += 1
         capability = dict(generation='bench', request=self.request, token=f'request-{self.request}')
         self.send(dict(kind='Invoke', capability=capability,
-                       input=dict(url='http://example.test' + path, method='GET',
-                                  headers=headers or [], body_len=0, actor='')))
-        reply = self.read()
-        assert reply['capability'] == capability, reply
-        return reply
+                       input=dict(url='http://example.test' + path, method=method,
+                                  headers=headers or [], body_len=len(body), actor='')))
+        offset = 0
+        while True:
+            reply = self.read()
+            assert reply['capability'] == capability, reply
+            if reply['kind'] == 'BodyRead':
+                chunk = body[offset:offset + reply['maximum']]
+                offset += len(chunk)
+                self.send(dict(kind='BodyChunk', capability=capability, sequence=reply['sequence'],
+                               body_len=len(chunk), bytes=list(chunk), done=not chunk))
+            elif reply['kind'] == 'Operation':
+                assert reply['operation'] == 'action' and operation is not None, reply
+                self.send(dict(kind='OperationResult', capability=capability, sequence=reply['sequence'],
+                               result={'Ok': operation(**reply['args'])}))
+            else:
+                return reply
 
 
 def summary(samples):
@@ -99,12 +116,50 @@ def summary(samples):
                 max=round(max(samples), 3))
 
 
+def measure_post(binary, source, runs):
+    with tempfile.TemporaryDirectory(prefix='konae-wasm-post-') as directory:
+        db = sqlite3.connect(Path(directory) / 'rows.sqlite')
+        try:
+            db.execute('CREATE TABLE counter(id INTEGER PRIMARY KEY, n INTEGER NOT NULL)')
+            with Worker(binary, source) as worker:
+                before = rss(worker.process.pid)
+
+                def action(name, input):
+                    if name == 'counter.add':
+                        db.execute('INSERT INTO counter VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET n=n+excluded.n',
+                                   (input['amount'],))
+                        return []
+                    assert name == 'counter.read' and input == {}, (name, input)
+                    n, = db.execute('SELECT n FROM counter WHERE id=1 LIMIT 1').fetchone()
+                    return [{'n': n}]
+
+                durations = []
+                for n in range(1, runs + 2):
+                    started = time.perf_counter_ns()
+                    with db:
+                        db.execute('BEGIN IMMEDIATE')
+                        result = worker.invoke(method='POST', body=b'{"amount":1}', operation=action)
+                        assert result['output']['status'] == 200, result
+                        assert json.loads(result['output']['body']) == {'n': n}, result
+                    if n > 1:
+                        durations.append(worker.elapsed(started))
+                after = rss(worker.process.pid)
+                return dict(warm_ipc_sqlite_post_ms=summary(durations),
+                            rss_before_kib=before, rss_after_kib=after)
+        finally:
+            db.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runner', type=Path)
     parser.add_argument('--runs', type=int, default=30)
+    parser.add_argument('--post', type=Path)
     args = parser.parse_args()
     binary = str(args.runner.resolve())
+    if args.post:
+        print(json.dumps(measure_post(binary, args.post.read_text(), args.runs)))
+        return
     cold = []
     ready = []
     first = []

@@ -15,6 +15,7 @@ class Worker {
     this.buffer = Buffer.alloc(0);
     this.generation = randomUUID();
     this.number = 0;
+    this.tail = Promise.resolve();
     const source = readFileSync(new URL(`../../../spikes/functions-runtime/app/dist/${name}.js`, import.meta.url), 'utf8');
     // The old suite used context.data. Wrap its unchanged bundle at the IPC boundary.
     const adapter = `
@@ -59,7 +60,13 @@ class Worker {
     if (message.kind !== 'Ready' || message.generation !== this.generation) throw Error('Expected Ready');
   }
 
-  async invoke(request, context) {
+  invoke(request, context) {
+    const result = this.tail.then(() => this.invokeSequential(request, context));
+    this.tail = result.catch(() => {});
+    return result;
+  }
+
+  async invokeSequential(request, context) {
     const body = Buffer.from(await request.arrayBuffer());
     let offset = 0;
     const capability = { generation: this.generation, request: ++this.number, token: randomUUID() };
