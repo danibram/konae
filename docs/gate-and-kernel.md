@@ -29,11 +29,11 @@ The app has to leave with its rules unchanged. If the editor accepted a statemen
 | Door | Where | When |
 | --- | --- | --- |
 | Validation Gate | `src/agent/gate.ts`, with the parser in `src/kernel/actions.ts` | Before a change is applied to the project |
-| Kernel | `kernel-rs/kernel/src/action_shape.rs`, `sql_rules.rs` and the modules beside them | At `release_plan`, and when the `kernel` binary starts an app folder |
+| Kernel | `kernel-rs/kernel/src/actions/` | At `release_plan`, and when the `kernel` binary starts an app folder |
 
 The Gate runs three stages. `schema` runs `schema.sql` twice on a fresh database. `actions` parses `actions.json` and prepares every statement against that schema. `preview-rows` runs `schema.sql` on a copy of the preview's own rows and prepares every action against the result. When all three hold, the editor shows "Validated. Schema, preview rows and actions hold." When preview rows could not be checked because the preview schema lacks a declared table or column, it reports `PREVIEW_BEHIND`, names the difference and says to try on `konae dev` or a Deployment. Its summary says the row checks were skipped.
 
-`schema.sql` states what the database should be. At `release_plan` the Kernel loads it into a scratch database, compares tables, columns and indexes with the live database and returns the change (`kernel-rs/kernel/src/schema_change.rs`). A new table, column or index applies. A dropped table, a dropped column or a retyped column comes back as a plan with its statements and what they lose, and `release_apply` runs it only with that plan's `confirmSchema`. A table SQLite cannot change in place is rebuilt in one transaction, following the SQLite page on ALTER TABLE, and every column that still exists keeps its values. The preview keeps its own test rows and only re-runs `schema.sql`; if a declared table or column is missing from preview, the Gate marks preview rows unchecked and gives the truthful `PREVIEW_BEHIND` warning.
+`schema.sql` states what the database should be. At `release_plan` the Kernel loads it into a scratch database, compares tables, columns and indexes with the live database and returns the change (`kernel-rs/kernel/src/app_data/schema_change.rs`). A new table, column or index applies. A dropped table, a dropped column or a retyped column comes back as a plan with its statements and what they lose, and `release_apply` runs it only with that plan's `confirmSchema`. A table SQLite cannot change in place is rebuilt in one transaction, following the SQLite page on ALTER TABLE, and every column that still exists keeps its values. The preview keeps its own test rows and only re-runs `schema.sql`; if a declared table or column is missing from preview, the Gate marks preview rows unchecked and gives the truthful `PREVIEW_BEHIND` warning.
 
 ## Case files
 
@@ -48,7 +48,7 @@ These shared files live in `kernel-rs/kernel/src`, and both sides parse the same
 - `schedule-cases.json`, for schedules
 - `call-cases.json`, for call actions and `connects`
 
-The query bound is `src/lib/query-bound.ts` on one side and its port in `kernel-rs/kernel/src/lib.rs` on the other (ADR-0004).
+The query bound is `src/lib/query-bound.ts` on one side and its port in `kernel-rs/kernel/src/actions/sql.rs` on the other (ADR-0004).
 
 ## The LIMIT rule
 

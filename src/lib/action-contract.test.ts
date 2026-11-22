@@ -321,15 +321,16 @@ describe("schema check", () => {
   });
 
   test("the limits it states are the Kernel's", () => {
-    const limits = readFileSync(path.join(repo, "kernel-rs/kernel/src/limits.rs"), "utf8");
-    const main = readFileSync(path.join(repo, "kernel-rs/kernel/src/lib.rs"), "utf8");
-    const http = readFileSync(path.join(repo, "kernel-rs/kernel/src/http.rs"), "utf8");
+    const limits = readFileSync(path.join(repo, "kernel-rs/kernel/src/server/throttle.rs"), "utf8");
+    const results = readFileSync(path.join(repo, "kernel-rs/kernel/src/actions/results.rs"), "utf8");
+    const database = readFileSync(path.join(repo, "kernel-rs/kernel/src/app_data/database.rs"), "utf8");
+    const http = readFileSync(path.join(repo, "kernel-rs/kernel/src/integrations/http.rs"), "utf8");
     expect(limits).toContain("ANONYMOUS_ACTIONS: u32 = 30;");
     expect(limits).toContain("ANONYMOUS_ACTIONS_PERIOD: Duration = Duration::from_secs(10);");
     expect(limits).toContain("SIGNED_IN_ACTIONS: u32 = 120;");
     expect(limits).toContain("SIGNED_IN_ACTIONS_PERIOD: Duration = Duration::from_secs(10);");
-    expect(main).toContain("bytes <= 2 * 1024 * 1024 && values.len() < 1000");
-    expect(main).toContain("std::time::Duration::from_secs(2)");
+    expect(results).toContain("bytes <= 2 * 1024 * 1024 && values.len() < 1000");
+    expect(database).toContain("std::time::Duration::from_secs(2)");
     expect(http).toContain("MAX_BODY_BYTES: usize = 64 * 1024;");
     expect(http).toContain("SIGNATURE_WINDOW_SECONDS: u64 = 300;");
     const action = valid().actions[0];

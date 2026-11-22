@@ -37,7 +37,7 @@ This tree shows the portable folder after a build and a Kernel start have create
 
 Secrets live in `data/secrets.sqlite`, because each secret has a use (`route`, `call` or `google`) and that needs a table, and because a Kernel without Konae must find the app's secrets in the app's own data. An export leaves the file out, and the `secret` command or `secret_set` sets them again on the destination.
 
-A third reason keeps the secrets out of `identity.sqlite`. An export carries only the database, identity, files and usage, the components `COMPONENT_NAMES` lists in `kernel-rs/kernel/src/package.rs`, and an import refuses a package that names any other component. A file off that list never leaves with an export. A table inside `identity.sqlite` would leave too, unless the export emptied it, as it does for sessions, email links and invitation tokens today. Secret values are stored as plain text, so one forgotten table would export them in the open.
+A third reason keeps the secrets out of `identity.sqlite`. An export carries only the database, identity, files and usage, the components `COMPONENT_NAMES` lists in `kernel-rs/kernel/src/app_folders/package.rs`, and an import refuses a package that names any other component. A file off that list never leaves with an export. A table inside `identity.sqlite` would leave too, unless the export emptied it, as it does for sessions, email links and invitation tokens today. Secret values are stored as plain text, so one forgotten table would export them in the open.
 
 ### The Kernel is a library, Konae is built on it
 

@@ -18,7 +18,7 @@ flowchart TB
     FX["functions-executor crate<br/>Rust supervisor and IPC"]
   end
   subgraph child["On-demand child process"]
-    RUNNER["deno_core Functions runner<br/>source: spikes/functions-runtime/rust-host"]
+    RUNNER["deno_core Functions runner<br/>source: kernel-rs/functions-runner"]
   end
   OWN -->|"the editor host"| KO
   RUN -->|"each app's own host"| KE
@@ -41,16 +41,18 @@ An installation has a main server process and one data directory. Functions may 
 
 ## Kernel, Konae and the functions executor
 
-`kernel-rs` is a Cargo workspace with the `kernel`, `konae` and `functions-executor` crates. The executor is a Rust supervisor and IPC layer; it does not embed a JavaScript engine. The Kernel keeps identity, authorization, SQLite and admission. It starts workers on demand and sends bounded IPC/2 messages to the paired `deno_core` runner, whose source is in `spikes/functions-runtime/rust-host` ([ADR-0018](./adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md), [ADR-0019](./adr/0019-functions-stream-request-bodies-with-bounded-ipc.md)).
+The Cargo workspace under `kernel-rs` contains the Kernel, Konae, the backup library, and the Functions executor. The JavaScript runner has its own Cargo workspace and lockfile. The Kernel owns identity, authorization, SQLite, and request admission. The executor supervises workers and sends bounded IPC/2 messages to the runner ([ADR-0018](./adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md), [ADR-0019](./adr/0019-functions-stream-request-bodies-with-bounded-ipc.md)).
 
 ```text
 kernel-rs/
-├── kernel/             the Kernel: a library and the `kernel` binary
-├── konae/              Konae: the `konae` binary, which links the Kernel
-└── functions-executor/ Rust supervisor and IPC protocol
+├── kernel/              the Kernel library and binary
+├── konae/               the Konae binary, which links the Kernel
+├── backup/              snapshot and copy formats and storage
+├── functions-executor/  worker supervision and the IPC protocol
+└── functions-runner/    the deno_core worker binary
 ```
 
-`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, and applies the schema change `app/schema.sql` asks of `data/database.sqlite` when actions is on. It serves Server Actions, app accounts, files, schedules, notices, HTTP routes, functions, calls and Usage according to each app's modules. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
+`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, and applies the schema change `app/schema.sql` asks of `data/database.sqlite` when actions is on. It serves Server Actions, app accounts, files, schedules, notices, HTTP routes, functions, calls and Usage according to each app's modules. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `server/operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
 
 The Functions interface, actor binding, action allowlist, replay behavior and export boundary are documented in [Server functions](./functions.md). Current evidence and isolated candidates are separated in [Functions research](./architecture/functions-research.md).
 
@@ -60,72 +62,49 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 
 ### Modules of `kernel`
 
-`lib.rs` holds the server, the Server Action parser and runner, publishing and the static file path. Each other module owns one part.
+The Kernel groups code under `kernel-rs/kernel/src/` by the decisions it makes. The server assembles the routes and workers. Capability modules own their rules and expose the operations that HTTP, MCP, and the commands call.
 
 | Module | Owns |
 | --- | --- |
-| `layout.rs` | Every path of an app folder |
-| `folder.rs` | Starting each app folder as the binary finds it |
-| `main.rs` | The `kernel` binary and its commands |
-| `operator.rs` | The commands on one app |
-| `action_shape.rs` | The shape of `actions.json`, checked at every publish |
-| `sql_rules.rs` | The statement rules both doors share |
-| `schema_change.rs` | The schema change from the live database to `schema.sql` |
-| `refusal.rs` | The `{ code, message, hint }` of a refusal, with `refusal-codes.json` |
-| `app_db.rs` | Open connections to app databases |
-| `runtime.rs` | The runtime endpoint, its tools and the host checks |
-| `auth.rs` | The account core: states, passwords, sessions and challenges |
-| `accounts.rs` | App account signup, verification, recovery and the pages a challenge link opens |
-| `invitations.rs` | App invitations and the user tools |
-| `google.rs` | Google sign-in for app accounts, with the app's own Google client |
-| `enter.rs` | Entering an app as one of its users through a one-time link |
-| `mail.rs` | The email queue, its worker, the Resend, SMTP and development transports, the sender preflight and the limits |
-| `notify.rs` | A mutation's notice |
-| `guard.rs` | A mutation's guard |
-| `schedule.rs` | A mutation's schedule, the timer and the record of each run |
-| `http.rs` | HTTP routes, their callers and signatures, signing secrets, API keys and `GET /_konae/files/<id>` |
-| `functions.rs`, `functions_http.rs`, `functions_runtime.rs`, `function_data.rs` | Function artifact checks, HTTP admission, runner lifecycle, action authorization, SQLite transactions and idempotency receipts |
-| `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries |
-| `calls.rs` | Call actions, their queue and worker, the address rules and `then` mutations |
-| `usage.rs` | Usage and Signals |
-| `file_store.rs` | Where file bytes live (`LocalFolder`, `S3Store`), the S3 settings, the quotas, `files-migrate` and `files-reconcile` |
-| `files.rs` | Changing a file's visibility and deleting it |
-| `transfers.rs` | Chunked transfers, in 4 MiB blocks for an owner, an app user's upload body in one request, and file upload receipts |
-| `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
-| `package.rs` | The export of one app and the import of its data |
-| `import.rs` | Import into an existing app, after a backup |
-| `sources.rs` | Saved text and binary source files in `app/`, with revision checks |
-| `maintenance.rs` | The maintenance state and its guard |
-| `hosts.rs` | The hosts an installation answers on |
-| `hostname.rs` | The generated hostname: the name a first publish takes and holds until it serves, `hostname_set`, and the redirect from the names it held |
-| `domain.rs` | Custom domains and their TXT proof |
-| `path.rs`, `path_name.rs` | Path addresses and their names |
-| `security.rs` | The response headers of every host |
-| `limits.rs` | Per-client limits on unauthenticated requests |
-| `installation.rs` | The stores at the data root that a copy carries |
-| `copies.rs` | Scheduled copies and `restore` |
-| `recovery.rs` | The revocation record and `reconcile` |
-| `heap.rs` | The ceiling on the memory SQLite may hold across every app |
-| `sqlite_bench.rs` | What a Server Action costs on its database |
+| `server/` | Startup, route composition, runtime MCP, transfer protocol, middleware, and operator commands |
+| `deployments/` | The live Deployment, publishing, artifact activation, and applied settings |
+| `app_folders/` | Folder layout, startup from an app folder, saved sources, import, and export |
+| `app_accounts/` | Signup Policy, account verification, sessions, invitations, and Google sign-in |
+| `app_data/` | App database connections, schema changes, Owner SQL, and app database backups |
+| `actions/` | Action declarations, bindings, SQL rules, and execution |
+| `files/` | File access policy, the app's index, upload, listing, reads, and deletion |
+| `functions/` | Manifest and artifact checks, HTTP admission, worker reuse, and transactions for Server Actions called by Functions |
+| `integrations/` | HTTP Actions, callers and signatures, and the call action outbox |
+| `routing/` | Hostnames, domains, path addresses, pages, static responses, and SEO |
+| `modules/` | The registry, module state, options, and dependencies |
+| `installation/`, `copies/` | Installation stores, mail delivery, maintenance, copies, restore, and revocation records |
+| `file_store.rs` | Local and S3 blob adapters, quotas, migration, and reconciliation |
+| `usage.rs`, `usage/` | Usage, Signals, and Functions timing data |
+| `refusal.rs` | Refusal codes, messages, and hints |
+
+Keep decisions in the module that owns the state. For example, the file URL and the runtime MCP both ask `files` which files the actor may read. The blob adapter handles the bytes. Shared case files stay in `kernel-rs/kernel/src/` so the editor and Kernel can run the same examples.
+
+### Functions execution
+
+`functions/manifest_artifact.rs` checks declarations and reads bundled handlers. `functions/http.rs` selects the Deployment and authenticates the request. `functions/invocation.rs` binds the actor and owns the SQLite transaction and idempotency receipt. `functions/runtime.rs` keeps workers warm and can take explicit runtime configuration. The executor and runner use the same IPC protocol.
+
+A standalone HTTP host could use the worker runtime once it has a second caller. That host would mount validated bundles and supply the capabilities it allows. Konae's app identity, Server Action permissions, and data rules belong to the Kernel host.
 
 ### Modules of `konae`
 
 | Module | Owns |
 | --- | --- |
-| `main.rs` | The `konae` binary: the Kernel with the owner's side |
-| `mcp.rs` | The owner's MCP on `/mcp`: the tool catalogue, permissions, the project list, release plans and the audit log |
-| `oauth.rs` | OAuth discovery, registration, consent and tokens for MCP clients |
-| `owners.rs` | Owner signup, verification, recovery and suspension |
-| `admission.rs` | Invitation codes and the setup key's one use |
-| `clerk.rs` | Optional hosted owner sign-in |
-| `owner_page.rs` | The look of owner sign-in on `/_konae/owner/login` and of OAuth consent |
-| `editor.rs` | The built editor on the editor host, when `KONAE_EDITOR_DIR` names it |
-| `guide.rs` | What `platform_guide` answers |
-| `state.rs` | Konae's state beside the Kernel's: the setup key, the MCP origin and the owner verification mode |
+| `main.rs`, `state.rs` | Start the Kernel with Konae's routes, stores, and account settings |
+| `mcp/` | The Owner's MCP on `/mcp`, its tool catalogue, credentials, and audit |
+| `projects/` | Source revisions, release planning and apply, import, and export |
+| `owners/` | Owner accounts, admission, optional Clerk sign-in, OAuth, and sign-in pages |
+| `conversations/` | Account-scoped editor conversations and their history |
+| `editor/` | Serving the built editor from `KONAE_EDITOR_DIR` |
+| `guide.rs` | The topics that `platform_guide` returns |
 
 ## The app folder
 
-An app is one folder, laid out the same way on a laptop, inside a Kernel and in an export. `kernel-rs/kernel/src/layout.rs` names every path.
+An app is one folder, laid out the same way on a laptop, inside a Kernel and in an export. `kernel-rs/kernel/src/app_folders/layout.rs` names every path.
 
 ```text
 apps/<id>/
@@ -189,9 +168,9 @@ With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation
 
 ## Two doors, one set of refusals
 
-A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before Apply. When actions is on, the Kernel parses the same `actions.json` and `schema.sql` at `release_plan` and when the `kernel` binary starts a folder. When actions is off, it accepts both files missing and creates no app database. Both refuse a used module that is off with the same code and sentence. Shared rules have case files that both test suites run, such as `module-use-cases.json`, `sql-rule-cases.json`, `action-cases.json`, `http-binding-cases.json`, `guard-cases.json`, `schedule-cases.json` and `call-cases.json`. Other case files cover one side only ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other.
+A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before Apply. When actions is on, the Kernel parses the same `actions.json` and `schema.sql` at `release_plan` and when the `kernel` binary starts a folder. When actions is off, it accepts both files missing and creates no app database. Both refuse a used module that is off with the same code and sentence. Shared rules have case files that both test suites run, such as `module-use-cases.json`, `sql-rule-cases.json`, `action-cases.json`, `http-binding-cases.json`, `guard-cases.json`, `schedule-cases.json` and `call-cases.json`. Other case files cover one side only ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The query bound is `src/lib/query-bound.ts` on one side and its port in `actions/sql.rs` on the other.
 
-An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. When a module with a browser call is on, it refuses a Capsule with an entry (`src/main.tsx`, `src/main.ts` or `app.js`) whose pages are all whole documents that load no script, because that entry would never run, and the Validation Gate refuses it with the same sentence. With all such modules off, the builder accepts those documents and injects no SDK. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
+An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. When a module with a browser call is on, it refuses a Capsule with an entry (`src/main.tsx`, `src/main.ts` or `app.js`) whose pages are all whole documents that load no script, because that entry would never run, and the Validation Gate refuses it with the same sentence. With all such modules off, the builder accepts those documents and injects no SDK. `kernel-rs/kernel/src/routing/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
 
 ## The editor preview
 
@@ -232,7 +211,7 @@ Visibility and data authorization are independent.
 | Public | Anyone | Only actors each Server Action allows |
 | Private | App users signed in to this app | Only actors each Server Action allows |
 
-On a public Deployment a visitor may call actions declared `anonymous`, and may list and read files marked public. On a private Deployment nothing loads or runs without an app session, except the HTTP routes of actions declared `anonymous`. A route answers the callers it declares, and `kernel-rs/kernel/src/http.rs` resolves the caller before any SQL runs ([ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md)).
+On a public Deployment a visitor may call actions declared `anonymous`, and may list and read files marked public. On a private Deployment nothing loads or runs without an app session, except the HTTP routes of actions declared `anonymous`. A route answers the callers it declares, and `kernel-rs/kernel/src/integrations/http.rs` resolves the caller before any SQL runs ([ADR-0013](./adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md)).
 
 | Caller | Proof | Acts as |
 | --- | --- | --- |
@@ -252,7 +231,7 @@ A scheduled copy takes each app's locks, snapshots its SQLite files with `VACUUM
 
 ## Isolation of hosted code
 
-Every app runs on its own host, `<slug>.<KONAE_HOST_SUFFIX>` when that name is free, or `<slug>-<code>.<KONAE_HOST_SUFFIX>` when another Deployment already holds the slug or the name is one of the installation's own hosts, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)). The Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. `kernel-rs/kernel/src/security.rs` adds the headers below to every response, so a bare `kernel` sends them too.
+Every app runs on its own host, `<slug>.<KONAE_HOST_SUFFIX>` when that name is free, or `<slug>-<code>.<KONAE_HOST_SUFFIX>` when another Deployment already holds the slug or the name is one of the installation's own hosts, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)). The Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. `kernel-rs/kernel/src/server/security.rs` adds the headers below to every response, so a bare `kernel` sends them too.
 
 `<domain>` is one origin that the installation home and every path address share. An app on a path address answers its pages, routes and runtime under `<domain>/p/<id>` or `<domain>/p/<name>`, so a script of one app can open another app's page in the same origin, read its DOM through `window.open`, and send another app's session cookie with a request to its runtime. The Kernel refuses a runtime call whose Referer names another app's path, but only when the browser sends a Referer, so that check is not a boundary. The owner accepts this sharing when turning a path address on for an app with accounts or a private app. The isolation this section describes holds for generated hostnames and custom domains only.
 

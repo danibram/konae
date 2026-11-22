@@ -313,6 +313,7 @@ describe("the MCP walkthrough", () => {
     r.step("http-module");
     r.add("json", JSON.stringify({ modules: { http: settings.modules.http } }, null, 2));
     r.step("publish-refused");
+    expect((await run(["build", "--dir", app()])).code).toBe(0);
     const refused = await cli(["publish", "--dir", app()]);
     expect(refused.code).toBe(1);
     const refusal = "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.";

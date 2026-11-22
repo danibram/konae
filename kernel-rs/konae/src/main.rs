@@ -24,15 +24,12 @@ use kernel::auth::{AuthError, AuthService};
 #[cfg(test)]
 use kernel::limits::Guards;
 
-mod admission;
-mod clerk;
 mod conversations;
 mod editor;
 mod guide;
 mod mcp;
-mod oauth;
-mod owner_page;
 mod owners;
+mod projects;
 mod state;
 use state::Konae;
 
@@ -42,12 +39,12 @@ async fn main() -> Result<()> {
         eprintln!("{message}");
         std::process::exit(1);
     }
-    if clerk::operator_command()? { return Ok(()); }
+    if owners::clerk::operator_command()? { return Ok(()); }
     let installation = mcp::installation();
     if kernel::inventory::command("konae", &installation)? { return Ok(()); }
     if kernel::operator_command(&installation).await? { return Ok(()); }
     if owners::operator_command()? { return Ok(()); }
-    if admission::operator_command()? { return Ok(()); }
+    if owners::admission::operator_command()? { return Ok(()); }
     refuse_old_setup_key(
         std::env::var("KONAE_ADMIN_KEY").ok().as_deref(),
         std::env::var("KONAE_SETUP_KEY").ok().as_deref(),
@@ -88,9 +85,9 @@ fn owner_routes(konae: Konae) -> Router<AppState> {
     Router::<Konae>::new()
         .merge(conversations::routes())
         .merge(mcp::routes())
-        .merge(oauth::routes())
+        .merge(owners::oauth::routes())
         .merge(owners::routes())
-        .merge(owner_page::routes())
+        .merge(owners::owner_page::routes())
         .with_state(konae)
 }
 

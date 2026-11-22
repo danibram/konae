@@ -597,9 +597,17 @@ The first `dev` run wrote `http` as off because the folder had no route yet. The
 ```
 <!-- /walkthrough:http-module -->
 
-`orders.receive` signs with `orders_webhook`, which the project does not have yet, so the first publish is refused with what to do:
+Build the edited app before publishing. The first publish refuses `orders.receive` because the project lacks its signing secret, `orders_webhook`.
 
 <!-- walkthrough:publish-refused -->
+```sh
+bun run konae -- build --dir /tmp/orders
+```
+
+```text
+Built /tmp/orders/dist
+```
+
 ```sh
 bun run konae -- publish --dir /tmp/orders
 ```
@@ -1521,6 +1529,9 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
           "fileAccess": null,
           "on": true
         },
+        "functions": {
+          "on": false
+        },
         "http": {
           "on": true
         },
@@ -1533,6 +1544,27 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       "packageId": "<package id>",
       "projectId": "<project id>",
       "publishedRevision": 1,
+      "released": {
+        "actions": "{\n  \"version\": 1,\n  \"actions\": {\n    \"orders.receive\": {\n      \"kind\": \"mutation\",\n      \"access\": \"anonymous\",\n      \"http\": {\n        \"method\": \"POST\",\n        \"path\": \"/hooks/orders\",\n        \"signature\": {\n          \"header\": \"X-Signature\",\n          \"secret\": \"orders_webhook\"\n        }\n      },\n      \"statement\": \"INSERT INTO orders (external_id, total) VALUES (?1, ?2) ON CONFLICT (external_id) DO NOTHING\",\n      \"bindings\": [\n        {\n          \"source\": \"input\",\n          \"key\": \"id\",\n          \"type\": \"string\",\n          \"maxLength\": 64\n        },\n        {\n          \"source\": \"input\",\n          \"key\": \"total\",\n          \"type\": \"number\"\n        }\n      ],\n      \"signal\": {\n        \"name\": \"order.received\",\n        \"properties\": [\n          \"id\"\n        ]\n      }\n    },\n    \"orders.feed\": {\n      \"kind\": \"query\",\n      \"access\": \"anonymous\",\n      \"http\": {\n        \"method\": \"GET\",\n        \"path\": \"/api/orders\",\n        \"callers\": [\n          \"key\"\n        ]\n      },\n      \"statement\": \"SELECT id, external_id, total, status FROM orders WHERE (?1 IS NULL OR id > ?1) ORDER BY id LIMIT 100\",\n      \"bindings\": [\n        {\n          \"source\": \"input\",\n          \"key\": \"after\",\n          \"type\": \"number\",\n          \"nullable\": true\n        }\n      ]\n    },\n    \"orders.list\": {\n      \"kind\": \"query\",\n      \"access\": \"authenticated\",\n      \"statement\": \"SELECT id, external_id, total, status FROM orders ORDER BY id LIMIT 50\",\n      \"bindings\": []\n    },\n    \"orders.claim\": {\n      \"kind\": \"mutation\",\n      \"access\": \"authenticated\",\n      \"guard\": \"This order is already claimed.\",\n      \"statement\": \"UPDATE orders SET status = 'claimed', claimed_by = ?2 WHERE id = ?1 AND status = 'open'\",\n      \"bindings\": [\n        {\n          \"source\": \"input\",\n          \"key\": \"order\",\n          \"type\": \"number\"\n        },\n        {\n          \"source\": \"actor\",\n          \"field\": \"id\"\n        }\n      ],\n      \"signal\": {\n        \"name\": \"order.claimed\",\n        \"properties\": [\n          \"order\",\n          \"actor\"\n        ]\n      }\n    }\n  }\n}\n",
+        "artifactDigest": "<sha256>",
+        "contactEmail": "agent@walkthrough.test",
+        "manifest": {
+          "version": 1
+        },
+        "name": "Orders",
+        "releasedAt": <time ms>,
+        "schemaSql": "CREATE TABLE IF NOT EXISTS orders(\n  id INTEGER PRIMARY KEY,\n  external_id TEXT NOT NULL UNIQUE,\n  total REAL NOT NULL,\n  status TEXT NOT NULL DEFAULT 'open',\n  claimed_by TEXT\n);\n",
+        "signInMethods": [
+          "password"
+        ],
+        "signupPolicy": {
+          "allowlist": [],
+          "mode": "invitation"
+        },
+        "slug": "orders",
+        "sourceDigest": "<sha256>",
+        "visibility": "private"
+      },
       "signInMethods": [
         "password"
       ],

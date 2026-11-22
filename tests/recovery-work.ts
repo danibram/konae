@@ -95,7 +95,7 @@ export async function seedWork(root: string, id: string) {
   }));
   await Bun.write(path.join(metadata, "hostname.json"), JSON.stringify({ previous: ["old.lab.test"] }));
   const later = Date.now() + 86_400_000;
-  const schema = await Bun.file(path.resolve(import.meta.dir, "../kernel-rs/kernel/src/calls.sql")).text();
+  const schema = await Bun.file(path.resolve(import.meta.dir, "../kernel-rs/kernel/src/integrations/calls.sql")).text();
   use(path.join(root, "calls.sqlite"), "seed", db => {
     db.exec(schema);
     for (const [call, state, attempts, lease, thenState] of [

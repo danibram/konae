@@ -103,7 +103,7 @@ The replay runs these flows and exits 0 when all of them pass:
 | `/styles.css` | 200 | text/css | |
 | `/feed` | 404 | text/html | Not found · Lena Varga |
 
-An exact file answers first, and a path with no extension answers with its `.html` page. Every other path answers 404 with the artifact's `404.html` (`kernel-rs/kernel/src/artifact.rs`). `/about/` asks for `about/index.html`, which the gallery does not have.
+An exact file answers first, and a path with no extension answers with its `.html` page. Every other path answers 404 with the artifact's `404.html` (`kernel-rs/kernel/src/routing/artifact.rs`). `/about/` asks for `about/index.html`, which the gallery does not have.
 
 ## What the Kernel refused or could not do
 

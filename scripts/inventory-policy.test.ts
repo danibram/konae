@@ -20,7 +20,7 @@ test("declared store filenames and app layout paths have inventory policies", as
     const cwd = path.join(workspace, binary, "src");
     for await (const file of new Bun.Glob("**/*.rs").scan({ cwd })) {
       const source = readFileSync(path.join(cwd, file), "utf8");
-      for (const name of missingPolicies(source, file === "layout.rs")) missing.push(`${binary}/${file}: ${name}`);
+      for (const name of missingPolicies(source, file === path.join("app_folders", "layout.rs"))) missing.push(`${binary}/${file}: ${name}`);
     }
   }
   expect(missing.sort()).toEqual([]);

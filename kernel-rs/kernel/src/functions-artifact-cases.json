@@ -8165,5 +8165,115 @@
     "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"export const handle = ;"}},
     "code": "function.bundle-contract",
     "message": "Function orders bundle must be a self-contained ESM module exporting handle."
+  },
+  {
+    "name": "aggregate bundle bytes exceed the artifact limit",
+    "source": null,
+    "sourceFromArtifact": true,
+    "gate": false,
+    "filledBundleBytes": 1000000,
+    "artifact": {
+      "version": 1,
+      "abi": "konae-functions/1",
+      "manifest": {
+        "version": 1,
+        "functions": {
+          "f1": {
+            "entry": "functions/f1.ts",
+            "mount": "/api/f1",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f2": {
+            "entry": "functions/f2.ts",
+            "mount": "/api/f2",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f3": {
+            "entry": "functions/f3.ts",
+            "mount": "/api/f3",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f4": {
+            "entry": "functions/f4.ts",
+            "mount": "/api/f4",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f5": {
+            "entry": "functions/f5.ts",
+            "mount": "/api/f5",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f6": {
+            "entry": "functions/f6.ts",
+            "mount": "/api/f6",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f7": {
+            "entry": "functions/f7.ts",
+            "mount": "/api/f7",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f8": {
+            "entry": "functions/f8.ts",
+            "mount": "/api/f8",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          },
+          "f9": {
+            "entry": "functions/f9.ts",
+            "mount": "/api/f9",
+            "methods": [
+              "GET"
+            ],
+            "access": "anonymous",
+            "actions": []
+          }
+        }
+      },
+      "bundles": {
+        "f1": "export const handle = () => null;",
+        "f2": "export const handle = () => null;",
+        "f3": "export const handle = () => null;",
+        "f4": "export const handle = () => null;",
+        "f5": "export const handle = () => null;",
+        "f6": "export const handle = () => null;",
+        "f7": "export const handle = () => null;",
+        "f8": "export const handle = () => null;",
+        "f9": "export const handle = () => null;"
+      }
+    },
+    "code": "function.artifact-size",
+    "message": "Server Artifact exceeds 8388608 UTF-8 bytes."
   }
 ]

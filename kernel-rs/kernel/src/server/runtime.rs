@@ -1,0 +1,905 @@
+
+use crate::*;
+use crate::transfers::{ADMIN_CHUNK, CHUNK, MAX_TRANSFER, download_body, transfer, transfer_call, transfer_path};
+use rusqlite::params;
+
+pub const VERSION: &str = "2025-11-25";
+/// What `initialize` tells a client of an app's runtime endpoint. The tools
+/// are the app's, never an owner's: Konae's owner MCP answers on `/mcp` of
+/// the installation with its own instructions.
+pub const INSTRUCTIONS: &str = "This is one app's runtime endpoint. It acts as the visitor or the app account whose session the request carries. actions_invoke runs the app's Server Actions by name; tools/list names the actions and file tools this session may call. auth_session says who is signed in.";
+
+/// Records an app user's file upload or delete: the principal, the tool,
+/// the Deployment and whether it worked. Whoever starts the Kernel decides
+/// where it goes; without one nothing is recorded.
+pub type AuditSink = Arc<dyn Fn(&str, &str, &str, bool) + Send + Sync>;
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/_konae/mcp", post(runtime))
+        .route("/_konae/transfers/{id}", axum::routing::put(put_transfer))
+}
+
+/// The largest JSON-RPC call an MCP door reads, except an owner's
+/// `transfer_write`, which may carry a block of `ADMIN_CHUNK` bytes.
+pub const MCP_BODY_BYTES: usize = 200_000;
+pub const MCP_BODY_REFUSED: &str = "MCP request exceeds 200 KB.";
+
+/// Reads one JSON-RPC call of at most 200 KB.
+pub async fn read_call(request: Request) -> Result<Value, Response> {
+    read_call_up_to(request, MCP_BODY_BYTES, MCP_BODY_REFUSED).await.map(|(call, _)| call)
+}
+
+/// Reads one JSON-RPC call of at most `limit` bytes and answers it with its
+/// size; a larger body is refused with `refused`.
+pub async fn read_call_up_to(request: Request, limit: usize, refused: &str) -> Result<(Value, usize), Response> {
+    let bytes = read_body_up_to(request, limit, refused).await?;
+    Ok((parse_call(&bytes)?, bytes.len()))
+}
+
+/// Reads a request body of at most `limit` bytes, refusing a longer one with `refused`.
+pub async fn read_body_up_to(request: Request, limit: usize, refused: &str) -> Result<axum::body::Bytes, Response> {
+    axum::body::to_bytes(request.into_body(), limit).await.map_err(|_| error(StatusCode::PAYLOAD_TOO_LARGE, refused))
+}
+
+/// Parses one JSON-RPC call, answering a JSON-RPC error when it is not one.
+pub fn parse_call(bytes: &[u8]) -> Result<Value, Response> {
+    let call: Value = match serde_json::from_slice(bytes) {
+        Ok(value) => value,
+        Err(_) => return Err(rpc_error(Value::Null, -32700, "Invalid JSON.")),
+    };
+    if !call.is_object()
+        || call["jsonrpc"] != "2.0"
+        || !call["method"].is_string()
+        || call
+            .get("id")
+            .is_some_and(|id| !id.is_null() && !id.is_string() && !id.is_number())
+    {
+        return Err(rpc_error(Value::Null, -32600, "Invalid JSON-RPC request."));
+    }
+    Ok(call)
+}
+
+/// The answer to a call without an ID: a notification is accepted, anything
+/// else is refused.
+pub fn without_id(method: &str) -> Response {
+    if method.starts_with("notifications/") {
+        StatusCode::ACCEPTED.into_response()
+    } else {
+        rpc_error(Value::Null, -32600, "A request ID is required.")
+    }
+}
+
+/// A tool's answer as MCP carries it: the text, the structured result and
+/// whether it failed.
+pub fn tool_result(result: Result<Value>) -> Value {
+    match result {
+        Ok(value) => json!({"content":[{"type":"text","text":serde_json::to_string(&value).unwrap()}],"structuredContent":{"result":value},"isError":false}),
+        Err(e) => tool_error(&e),
+    }
+}
+
+/// The JSON-RPC answer, never cached.
+pub fn answer(id: Value, result: Result<Value>) -> Response {
+    let mut response = match result {
+        Ok(result) => Json(json!({"jsonrpc":"2.0","id":id,"result":result})).into_response(),
+        Err(e) => rpc_error(id, -32603, &e.to_string()),
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+pub fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
+    let mut response = error(StatusCode::UNAUTHORIZED, "Sign in to use Konae MCP.");
+    let metadata = format!(
+        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
+        origin(state, headers)
+    );
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_str(&metadata).unwrap(),
+    );
+    response
+}
+
+struct RuntimeCaller {
+    deployment: Deployment,
+    principal: String,
+    tools: Vec<Value>,
+    anonymous: bool,
+    account_only: bool,
+}
+
+async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std::net::SocketAddr>) -> Result<RuntimeCaller, Response> {
+    let host_known = valid_host(state, headers)
+        || crate::domain::is_alias_request(state, headers)
+        || crate::path::on_path_host(state, headers);
+    if !same_origin(headers) || !host_known {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin or unrecognized-host MCP request rejected.",
+        ));
+    }
+    let Some(deployment) = deployment_for(state, headers).await else {
+        return Err(error(StatusCode::NOT_FOUND, "Deployment not found."));
+    };
+    if crate::path::foreign_referer(state, headers, &deployment.id) {
+        return Err(error(StatusCode::FORBIDDEN, "A page of another app's path address cannot call this app."));
+    }
+    if bearer(headers).is_some_and(|token| token.starts_with("lbk_")) {
+        return Err(error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME));
+    }
+    let visitor = || format!("runtime:{}:anon:{}", deployment.id, limits::client_key(state.guards.client_ip(peer, headers)));
+    let (principal, tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers).await {
+        Ok(Some(user)) => (format!("runtime:{}:{}", deployment.id, user.user_id), runtime_tools(), false, false),
+        Ok(None) if !is_private(&deployment) => (visitor(), anonymous_runtime_tools(), true, false),
+        Ok(None) => (visitor(), account_tools(), true, true),
+        Err(_) => return Err(unauthorized(state, headers)),
+    };
+    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only })
+}
+
+fn peer_of(request: &Request) -> Option<std::net::SocketAddr> {
+    request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0)
+}
+
+async fn put_transfer(State(state): State<AppState>, AxumPath(id): AxumPath<String>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let caller = match runtime_caller(&state, &headers, peer_of(&request)).await {
+        Ok(caller) => caller,
+        Err(response) => return response,
+    };
+    if caller.anonymous {
+        return error(StatusCode::UNAUTHORIZED, "authentication-required");
+    }
+    let mut response = match crate::transfers::receive_body(&state, &caller.principal, &id, request.into_body()).await {
+        Ok(result) => Json(json!({"result": result})).into_response(),
+        Err(e) => error(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+pub async fn runtime(State(state): State<AppState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let peer = peer_of(&request);
+    let RuntimeCaller { deployment, principal, tools, anonymous, account_only } = match runtime_caller(&state, &headers, peer).await {
+        Ok(caller) => caller,
+        Err(response) => return response,
+    };
+    let fixed_file_access = files::app_user_files(&deployment);
+    let app = deployment.id;
+    let call = match read_call(request).await {
+        Ok(call) => call,
+        Err(response) => return response,
+    };
+    let id = call.get("id").cloned().unwrap_or(Value::Null);
+    let method = call["method"].as_str().unwrap();
+    if account_only
+        && !(["initialize", "ping"].contains(&method)
+            || method.starts_with("notifications/")
+            || (method == "tools/call"
+                && call["params"]["name"].as_str().is_some_and(|name| tools.iter().any(|t| t["name"] == name))))
+    {
+        return unauthorized(&state, &headers);
+    }
+    if call.get("id").is_none() {
+        return without_id(method);
+    }
+    let mut clear_cookie = false;
+    let mut session_cookie: Option<HeaderValue> = None;
+    let result = match method {
+        "initialize" => Ok(
+            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS}),
+        ),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({"tools":tools})),
+        "tools/call" => {
+            let Some(name) = call["params"]["name"].as_str() else {
+                return rpc_error(id, -32602, "Tool name is required.");
+            };
+            if !tools.iter().any(|t| t["name"] == name) {
+                if runtime_tools().iter().any(|t| t["name"] == name) {
+                    return Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"authentication-required"}],"isError":true}})).into_response();
+                }
+                return rpc_error(id, -32602, "Unknown tool or insufficient permission.");
+            }
+            let definition = tools.iter().find(|t| t["name"] == name).unwrap();
+            let arguments = call["params"]
+                .get("arguments")
+                .cloned()
+                .unwrap_or(json!({}));
+            if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
+                return rpc_error(id, -32602, &e.to_string());
+            }
+            if name == "actions_invoke" {
+                let limited = if anonymous {
+                    let client = limits::client_key(state.guards.client_ip(peer, &headers));
+                    let key = format!("{app}|{client}");
+                    state.guards.anonymous_actions.check(&key)
+                } else {
+                    state.guards.signed_in_actions.check(&principal)
+                };
+                if let Err(wait) = limited {
+                    return rate_limited_tool(&id, wait);
+                }
+            }
+            let result = if name == "transfer_read" && anonymous && fixed_file_access {
+                Err(anyhow::anyhow!("File not found."))
+            } else if name.starts_with("transfer_") {
+                transfer_call(&state, &principal, name, &arguments, true).await
+            } else if account_tools().iter().any(|t| t["name"] == name) {
+                let client = state.guards.client_ip(peer, &headers);
+                match crate::accounts::runtime_tool(&state, &headers, client, name, &arguments).await {
+                    Ok((value, cookie)) => {
+                        session_cookie = cookie;
+                        Ok(value)
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
+            };
+            if let Some(limits::Busy(wait)) = result.as_ref().err().and_then(|e| e.downcast_ref::<limits::Busy>()) {
+                return rate_limited_tool(&id, *wait);
+            }
+            if name == "auth_logout" && result.is_ok() {
+                clear_cookie = true;
+            }
+            Ok(tool_result(result))
+        }
+        _ => return rpc_error(id, -32601, "Method not found."),
+    };
+    let mut response = answer(id, result);
+    if clear_cookie {
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, crate::cleared_app_cookie(&state, &app, &headers));
+    }
+    if let Some(cookie) = session_cookie {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
+    response
+}
+
+fn rate_limited_tool(id: &Value, wait: std::time::Duration) -> Response {
+    let mut response = Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"rate-limited"}],"isError":true}})).into_response();
+    response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
+    response
+}
+
+fn audit(state: &AppState, principal: &str, name: &str, app: Option<&str>, result: &Result<Value>) {
+    if let (Some(sink), Some(app)) = (state.audit.as_ref(), app) {
+        sink(principal, name, app, result.is_ok());
+    }
+}
+
+/// The answer to an API key on the runtime endpoint.
+pub const API_KEY_ON_RUNTIME: &str =
+    "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.";
+
+pub fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+
+const RESERVED_IDS: [&str; 3] = ["domains", "paths", "transfer-quota"];
+
+/// A project ID names the app's folder and its lock, so it holds only
+/// lowercase letters, digits, "_" and "-": two IDs that differ in case would
+/// share a folder on a volume that ignores case.
+pub fn valid_app_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 100
+        && id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
+        && !RESERVED_IDS.contains(&id)
+}
+
+
+pub fn tool(
+    name: &str,
+    description: &str,
+    properties: Value,
+    required: &[&str],
+    read_only: bool,
+) -> Value {
+    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},
+        "annotations":{"readOnlyHint":read_only,"destructiveHint":!read_only,"openWorldHint":false}})
+}
+
+
+pub fn runtime_tools() -> Vec<Value> {
+    let mut tools = vec![
+        tool(
+            "auth_session",
+            "Read the current app user, or the anonymous state when no one is signed in.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
+            "auth_logout",
+            "Revoke the current app session.",
+            json!({}),
+            &[],
+            false,
+        ),
+        tool(
+            "actions_invoke",
+            "Invoke one declared Server Action as the current app user. Without a session only actions declared anonymous run.",
+            json!({"name":{"type":"string"},"input":{"type":"object"}}),
+            &["name"],
+            false,
+        ),
+        tool(
+            "files_list",
+            "List files visible to the current actor. The app-users policy shares all files with users signed in to this app.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
+            "files_read",
+            "Open an immutable download transfer for a file this actor may read.",
+            json!({"fileId":{"type":"string"}}),
+            &["fileId"],
+            true,
+        ),
+        tool(
+            "files_upload",
+            "Save a completed file transfer. Omit visibility to use the app policy, which defaults to private to the uploader.",
+            json!({"transferId":{"type":"string"},"name":{"type":"string"},"type":{"type":"string"},"visibility":{"type":"string","enum":["private","public","app-users"]}}),
+            &["transferId", "name"],
+            false,
+        ),
+        tool(
+            "files_update",
+            "Set the visibility of a file you uploaded. An app with the app-users policy requires that visibility.",
+            json!({"fileId":{"type":"string"},"visibility":{"type":"string","enum":["private","public","app-users"]}}),
+            &["fileId", "visibility"],
+            false,
+        ),
+        tool(
+            "files_delete",
+            "Delete a file you uploaded. Its size stops counting against the Deployment's quota and a later read answers File not found. Only its uploader may delete it.",
+            json!({"fileId":{"type":"string"}}),
+            &["fileId"],
+            false,
+        ),
+    ];
+    tools.extend(transfer_tools(true));
+    tools.extend(account_tools());
+    tools
+}
+
+
+/// Account tools any visitor may call, also on a private deployment before
+/// signing in. Tokens arrive by email; no tool returns one.
+pub fn account_tools() -> Vec<Value> {
+    vec![
+        tool(
+            "auth_signup",
+            "Start an app account for an email. When the installation requires verification, this sends a link to that email and signs no one in; the person chooses the password when they open it. Otherwise it creates the account with this password and signs in. The answer does not reveal whether the email already has an account.",
+            json!({"email":{"type":"string","maxLength":254},"password":{"type":"string","maxLength":1024}}),
+            &["email"],
+            false,
+        ),
+        tool(
+            "auth_verify",
+            "Confirm an email with the token from its verification link and set the account's password. Signs in on success. A token works once.",
+            json!({"token":{"type":"string","maxLength":128},"password":{"type":"string","maxLength":1024}}),
+            &["token", "password"],
+            false,
+        ),
+        tool(
+            "auth_recover",
+            "Send a link to choose a new password. The answer is the same whether or not the email has an account.",
+            json!({"email":{"type":"string","maxLength":254}}),
+            &["email"],
+            false,
+        ),
+        tool(
+            "auth_reset",
+            "Set a new password with the token from a recovery link. Ends every earlier session of the account and signs in. A token works once.",
+            json!({"token":{"type":"string","maxLength":128},"password":{"type":"string","maxLength":1024}}),
+            &["token", "password"],
+            false,
+        ),
+    ]
+}
+
+
+/// Tools a visitor without a session may call on a public deployment.
+/// `actions_invoke` still refuses every action not declared anonymous.
+/// Uploads and the transfers that would create one stay signed-in only.
+pub fn anonymous_runtime_tools() -> Vec<Value> {
+    let allowed = [
+        "auth_session",
+        "actions_invoke",
+        "files_list",
+        "files_read",
+        "transfer_read",
+        "transfer_status",
+        "transfer_cancel",
+        "auth_signup",
+        "auth_verify",
+        "auth_recover",
+        "auth_reset",
+    ];
+    runtime_tools()
+        .into_iter()
+        .filter(|tool| allowed.contains(&tool["name"].as_str().unwrap_or("")))
+        .collect()
+}
+
+
+pub fn transfer_tools(runtime: bool) -> Vec<Value> {
+    let mut tools = vec![
+        tool(
+            "transfer_read",
+            "Read one bounded base64 block from a completed download.",
+            json!({"transferId":{"type":"string"},"offset":{"type":"integer","minimum":0}}),
+            &["transferId", "offset"],
+            true,
+        ),
+        tool(
+            "transfer_status",
+            "Inspect transfer progress for resuming an upload.",
+            json!({"transferId":{"type":"string"}}),
+            &["transferId"],
+            true,
+        ),
+        tool(
+            "transfer_cancel",
+            "Delete a transfer and its temporary bytes. Afterwards transfer_status answers \"Transfer not found or expired.\", which confirms the cancel.",
+            json!({"transferId":{"type":"string"}}),
+            &["transferId"],
+            false,
+        ),
+        tool(
+            "transfer_begin",
+            if runtime {
+                "Start a size-bounded upload with an expected SHA-256 checksum. A file is at most the installation's per-file limit, which a refusal names."
+            } else {
+                "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a component of an export, which may be as large as that component's quota."
+            },
+            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":crate::package::COMPONENT_NAMES}}),
+            &["size", "sha256"],
+            false,
+        ),
+        tool(
+            "transfer_write",
+            "Append a base64 block of at most chunkBytes, which transfer_begin answers, at an exact byte offset. The answer's nextOffset is the offset of the next block, so no transfer_status is needed between writes. Identical retries are accepted.",
+            json!({"transferId":{"type":"string"},"offset":{"type":"integer","minimum":0},"data":{"type":"string","maxLength":(if runtime { CHUNK } else { ADMIN_CHUNK }).div_ceil(3)*4}}),
+            &["transferId", "offset", "data"],
+            false,
+        ),
+        tool(
+            "transfer_complete",
+            "Verify upload size and SHA-256 and make the bytes immutable.",
+            json!({"transferId":{"type":"string"}}),
+            &["transferId"],
+            false,
+        ),
+    ];
+    if runtime {
+        for t in &mut tools {
+            if t["name"] == "transfer_begin" {
+                let properties = t["inputSchema"]["properties"].as_object_mut().unwrap();
+                properties.remove("projectId");
+                properties.remove("component");
+            }
+        }
+    }
+    tools
+}
+
+
+pub fn rpc_error(id: Value, code: i64, message: &str) -> Response {
+    Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})).into_response()
+}
+
+
+pub fn validate_arguments(value: &Value, schema: &Value) -> Result<()> {
+    match schema["type"].as_str() {
+        Some("object") => {
+            let object = value
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("Arguments must be an object."))?;
+            if let Some(required) = schema["required"].as_array() {
+                for key in required {
+                    anyhow::ensure!(
+                        object.contains_key(key.as_str().unwrap()),
+                        "Missing argument {}.",
+                        key
+                    );
+                }
+            }
+            if let Some(properties) = schema["properties"].as_object() {
+                for (key, value) in object {
+                    if let Some(property) = properties.get(key) {
+                        validate_arguments(value, property)?;
+                    } else {
+                        anyhow::ensure!(
+                            schema["additionalProperties"] != false,
+                            "Unknown argument {key}."
+                        );
+                    }
+                }
+            }
+        }
+        Some("string") => {
+            let s = value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Expected a string."))?;
+            anyhow::ensure!(
+                s.len() >= schema["minLength"].as_u64().unwrap_or(0) as usize
+                    && s.len() <= schema["maxLength"].as_u64().unwrap_or(120_000) as usize,
+                "String length is outside the allowed range."
+            );
+        }
+        Some("integer") => {
+            let n = value
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("Expected a nonnegative integer."))?;
+            anyhow::ensure!(
+                n >= schema["minimum"].as_u64().unwrap_or(0)
+                    && n <= schema["maximum"].as_u64().unwrap_or(u64::MAX),
+                "Integer is outside the allowed range."
+            );
+        }
+        Some("array") => {
+            let a = value
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("Expected an array."))?;
+            anyhow::ensure!(
+                a.len() >= schema["minItems"].as_u64().unwrap_or(0) as usize && a.len() <= 100,
+                "Invalid array length."
+            );
+            for v in a {
+                validate_arguments(v, &schema["items"])?;
+            }
+        }
+        _ => {}
+    }
+    if let Some(allowed) = schema["enum"].as_array() {
+        anyhow::ensure!(
+            allowed.contains(value),
+            "Value is outside the allowed choices."
+        );
+    }
+    Ok(())
+}
+
+
+pub async fn response_value(response: Response) -> Result<Value> {
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), MAX_TRANSFER).await?;
+    let value: Value = serde_json::from_slice(&bytes)?;
+    if !status.is_success() {
+        if let Some(refused) = crate::refusal::from_body(&value) {
+            return Err(refused.into());
+        }
+    }
+    anyhow::ensure!(
+        status.is_success(),
+        "{}",
+        value["error"]
+            .as_str()
+            .unwrap_or("Kernel operation failed.")
+    );
+    Ok(value["result"].clone())
+}
+
+
+/// A tool's failed result. The text stays the sentence clients read today; a
+/// refused Capsule also answers `{ error: { code, message, hint } }` (ADR-0004).
+pub fn tool_error(error: &anyhow::Error) -> Value {
+    let text = json!([{"type": "text", "text": error.to_string()}]);
+    match crate::refusal::of(error) {
+        Some(refused) => json!({"content": text, "structuredContent": {"error": refused.to_json()}, "isError": true}),
+        None => json!({"content": text, "isError": true}),
+    }
+}
+
+
+pub use crate::deployments::{validate_import_release, validate_release};
+
+async fn counted(state: &AppState, app: &str, headers: &HeaderMap) -> bool {
+    let deployment = state.deployments.read().await.values().find(|d| d.id == app).cloned();
+    match deployment {
+        Some(deployment) => !crate::enter::entered_request(state, &deployment, headers).await,
+        None => true,
+    }
+}
+
+pub async fn runtime_call(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &str,
+    app: Option<&str>,
+    name: &str,
+    a: Value,
+) -> Result<Value> {
+    if name.starts_with("auth_") {
+        if let Some(id) = app {
+            if let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == id) {
+                crate::modules::require_on(&deployment.modules, "auth")?;
+            }
+        }
+    }
+    if name == "actions_invoke" {
+        if let Some(id) = app {
+            if let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == id) {
+                crate::modules::require_on(&deployment.modules, "actions")?;
+            }
+        }
+    }
+    match name {
+        "auth_session" => {
+            let result = response_value(session(State(state.clone()), headers.clone()).await).await;
+            if let (Ok(session), Some(id)) = (&result, app) {
+                if counted(state, id, headers).await {
+                    crate::usage::count(&state.data_root, id, crate::usage::Operation::Session);
+                    if let Some(account) = session["userId"].as_str() {
+                        crate::usage::count_account(&state.data_root, id, account, crate::usage::AccountKind::Open);
+                    }
+                }
+            }
+            result
+        }
+        "auth_logout" => response_value(logout(State(state.clone()), headers.clone()).await).await,
+        "actions_invoke" => {
+            let response = invoke_action(
+                State(state.clone()),
+                AxumPath(a["name"].as_str().unwrap().to_owned()),
+                headers.clone(),
+                Json(a.get("input").cloned().unwrap_or(json!({}))),
+            )
+            .await;
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                let wait = response.headers().get(header::RETRY_AFTER).and_then(|value| value.to_str().ok()).and_then(|value| value.parse().ok()).unwrap_or(1);
+                return Err(limits::Busy(std::time::Duration::from_secs(wait)).into());
+            }
+            response_value(response).await
+        }
+        "files_list" => {
+            let mut files =
+                response_value(files::list_files(State(state.clone()), headers.clone()).await).await?;
+            if let Some(files) = files.as_array_mut() {
+                for file in files {
+                    file.as_object_mut().unwrap().remove("url");
+                }
+            }
+            Ok(files)
+        }
+        "files_read" => {
+            let mut whole = headers.clone();
+            whole.remove(header::RANGE);
+            whole.remove(header::IF_NONE_MATCH);
+            let response = files::serve_file(
+                State(state.clone()),
+                AxumPath(a["fileId"].as_str().unwrap().to_owned()),
+                whole,
+            )
+            .await;
+            anyhow::ensure!(response.status().is_success(), "File not found.");
+            let result = download_body(state, principal, response.into_body()).await;
+            if let (Ok(_), Some(id)) = (&result, app) {
+                if counted(state, id, headers).await {
+                    crate::usage::count(&state.data_root, id, crate::usage::Operation::FileRead);
+                }
+            }
+            result
+        }
+        "files_upload" => {
+            let id = a["transferId"].as_str().unwrap();
+            transfer_path(state, id)?;
+            let _guard = database_lock(state, &format!("transfer:{id}")).await;
+            let request_hash = digest(a.to_string().as_bytes());
+            let previous: Option<(String,String)>=crate::transfers::store(state)?.query_row("SELECT request_hash,body FROM file_receipts WHERE transfer_id=?1 AND principal=?2",params![id,principal],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            if let Some((hash, body)) = previous {
+                anyhow::ensure!(hash == request_hash, "Upload retry changed its metadata.");
+                return Ok(serde_json::from_str(&body)?);
+            }
+            let t = transfer(state, principal, &a)?;
+            anyhow::ensure!(
+                t["complete"] == true && t["direction"] == "upload",
+                "File upload is incomplete."
+            );
+            let upload = files::Upload {
+                name: a["name"].as_str(),
+                content_type: a.get("type").and_then(Value::as_str),
+                visibility: a.get("visibility").and_then(Value::as_str),
+            };
+            let source = transfer_path(state, id)?;
+            let mut result =
+                response_value(files::upload_from_path(state, headers, upload, &source).await)
+                    .await?;
+            result.as_object_mut().unwrap().remove("url");
+            crate::transfers::store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;
+            if let Some(deployment) = app {
+                if counted(state, deployment, headers).await {
+                    crate::usage::count(&state.data_root, deployment, crate::usage::Operation::Upload);
+                }
+            }
+            let result = Ok(result);
+            audit(state, principal, name, app, &result);
+            result
+        }
+        "files_update" => {
+            let response = crate::files::update_file(state, headers, a["fileId"].as_str().unwrap(), a["visibility"].as_str()).await;
+            response_value(response).await
+        }
+        "files_delete" => {
+            let result = response_value(crate::files::delete_file(state, headers, a["fileId"].as_str().unwrap()).await).await;
+            if result.is_ok() {
+                audit(state, principal, name, app, &result);
+            }
+            result
+        }
+        _ => anyhow::bail!("Unknown runtime tool."),
+    }
+}
+
+
+/// True when the request Host is one this installation answers on: the public
+/// origin, an own origin, a generated app hostname under `host_suffix`, or a
+/// local development name. Custom domains and the path host are checked beside
+/// this at the runtime door.
+pub fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let Ok(url) = url::Url::parse(&format!("http://{host}")) else {
+        return false;
+    };
+    let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    let public = url::Url::parse(&state.public_origin).ok();
+    let configured: Vec<url::Url> = state.own_origins.iter().filter_map(|s| url::Url::parse(s).ok()).collect();
+    let suffix = state.host_suffix.trim_start_matches('.').to_ascii_lowercase();
+    ["localhost", "127.0.0.1", "[::1]", "app.localhost"].contains(&host.as_str())
+        || host.ends_with(".localhost")
+        || public.as_ref().is_some_and(|u| u.host_str().is_some_and(|h| h.eq_ignore_ascii_case(&host)))
+        || configured
+            .iter()
+            .any(|u| u.host_str().is_some_and(|h| h.eq_ignore_ascii_case(&host)))
+        || public
+            .as_ref()
+            .and_then(|u| u.host_str())
+            .is_some_and(|pub_host| host.ends_with(&format!(".{}", pub_host.to_ascii_lowercase())))
+        || (!suffix.is_empty() && host.ends_with(&format!(".{suffix}")))
+}
+
+
+pub fn origin(state: &AppState, headers: &HeaderMap) -> String {
+    if let Some(origin) = state.own_origins.first() {
+        return origin.trim_end_matches('/').to_owned();
+    }
+    let scheme = if state.public_origin.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    format!("{scheme}://{host}")
+}
+
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{header, HeaderMap};
+
+    #[test]
+    fn the_instructions_name_only_runtime_tools() {
+        let served: Vec<String> = super::runtime_tools().iter().filter_map(|tool| tool["name"].as_str().map(str::to_owned)).collect();
+        let named: Vec<&str> = super::INSTRUCTIONS
+            .split(|c: char| !(c.is_ascii_lowercase() || c == '_'))
+            .filter(|word| word.contains('_'))
+            .collect();
+        assert!(!named.is_empty());
+        for word in named {
+            assert!(served.iter().any(|name| name == word), "{word} is not a runtime tool");
+        }
+    }
+
+    fn headers(host: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn valid_host_accepts_a_generated_app_hostname() {
+        let root = std::env::temp_dir().join(format!("konae-valid-host-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut state = crate::AppState::for_test(&root);
+        state.public_origin = "https://app.konae.es".into();
+        state.host_suffix = "konae.es".into();
+        assert!(super::valid_host(&state, &headers("kamynando2.konae.es")));
+        assert!(super::valid_host(&state, &headers("app.konae.es")));
+        assert!(!super::valid_host(&state, &headers("evil.example")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn package_module_state_uses_the_same_validation_as_initial_modules() {
+        let root = std::env::temp_dir().join(format!("konae-package-module-state-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+            "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{}},
+            "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>"}},
+            "initialPackage":{"manifest":{"modules":{"http":{"on":"yes"}}},"components":{}}
+        })).unwrap();
+        let error = super::validate_release(&state, &input, None).await.unwrap_err();
+        assert_eq!(error.to_string(), "Module http option on must be a boolean.");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn first_release_refuses_http_and_calls_that_are_explicitly_off() {
+        let root = std::env::temp_dir().join(format!("konae-release-modules-off-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        let cases = [
+            ("http", r#"{"version":1,"actions":{"hooks.receive":{"kind":"mutation","access":"anonymous","statement":"SELECT 1","bindings":[],"http":{"method":"POST","path":"/hooks"}}}}"#),
+            ("calls", r#"{"version":1,"actions":{"notify.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://example.test","bindings":[]}}}"#),
+        ];
+        for (module, actions) in cases {
+            let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+                "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{"actions.json":actions,"schema.sql":""}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>"}},
+                "initialModules":{"actions":{"on":true},"http":{"on":false},"calls":{"on":false}}
+            })).unwrap();
+            let error = super::validate_release(&state, &input, None).await.unwrap_err();
+            assert_eq!(error.to_string(), format!("Module {module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run."));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn first_release_uses_the_shared_module_check_order() {
+        let root = std::env::temp_dir().join(format!("konae-release-module-order-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+            "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{
+                "actions.json":"{\"version\":1,\"actions\":{\"hooks.receive\":{\"kind\":\"mutation\",\"access\":\"anonymous\",\"statement\":\"SELECT 1\",\"bindings\":[],\"http\":{\"method\":\"POST\",\"path\":\"/hooks\"}}}}",
+                "schema.sql":""
+            }},
+            "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>","app.js":"await miniapp.files.list();"}},
+            "initialModules":{"actions":{"on":false},"files":{"on":false},"http":{"on":false},"calls":{"on":false}}
+        })).unwrap();
+        let error = super::validate_release(&state, &input, None).await.unwrap_err();
+        assert_eq!(error.to_string(), "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn first_release_refuses_http_and_calls_when_actions_is_off() {
+        let root = std::env::temp_dir().join(format!("konae-release-module-requires-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        for module in ["http", "calls"] {
+            let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+                "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>"}},
+                "initialModules":{"actions":{"on":false},"http":{"on":false},"calls":{"on":false},(module):{"on":true}}
+            })).unwrap();
+            let error = super::validate_release(&state, &input, None).await.unwrap_err();
+            assert_eq!(error.to_string(), format!("Module {module} requires actions, which is off. Turn actions on first."));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

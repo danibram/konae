@@ -1,0 +1,523 @@
+
+use crate::refusal::{refuse, Refusal};
+use crate::*;
+use axum::middleware::Next;
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+pub const RECORD_FILE: &str = "hostname.json";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Record {
+    pub previous: Vec<String>,
+}
+
+/// The hostname `raw` names under `suffix`, in its stored form, or the
+/// refusal. `raw` is one label, such as `notes`, or the whole name.
+pub fn check_name(raw: &str, suffix: &str) -> std::result::Result<String, Refusal> {
+    let suffix = suffix.trim_start_matches('.').to_ascii_lowercase();
+    let trimmed = raw.trim();
+    let name = trimmed.strip_suffix('.').unwrap_or(trimmed).to_lowercase();
+    let label = name.strip_suffix(&format!(".{suffix}")).unwrap_or(&name);
+    if label.is_empty() {
+        return Err(refuse("hostname.missing", format!("Name the new hostname, such as notes or notes.{suffix}.")));
+    }
+    if label.contains('.') {
+        return Err(refuse("hostname.outside-suffix", format!(
+            "{name} is not one name under this installation's app suffix {suffix}. Name one label, such as notes, or add a hostname outside the suffix with domain_set."
+        )));
+    }
+    let valid = (1..=63).contains(&label.len())
+        && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !label.starts_with('-')
+        && !label.ends_with('-');
+    if !valid {
+        return Err(refuse("hostname.name-invalid", format!(
+            "{label} is not a valid name. Use letters, digits and hyphens, 1 to 63 characters, that do not start or end with a hyphen."
+        )));
+    }
+    Ok(format!("{label}.{suffix}"))
+}
+
+/// Whether `hostname` is free for this Deployment: not the installation's
+/// own host, and not a name another app holds now or held before.
+pub fn check_free(hostname: &str, installation_hosts: &[String], taken: bool) -> std::result::Result<(), Refusal> {
+    if installation_hosts.iter().any(|host| host == hostname) {
+        return Err(refuse("hostname.installation-host", format!("{hostname} is this installation's own host. Choose another name.")));
+    }
+    if taken {
+        return Err(refuse("hostname.taken", format!("{hostname} is another app's address on this installation. Choose another name.")));
+    }
+    Ok(())
+}
+
+
+type Index = HashMap<String, String>;
+static INDEXES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Index>>> = OnceLock::new();
+
+fn with_index<T>(state: &AppState, f: impl FnOnce(&mut Index) -> T) -> T {
+    let mut indexes = INDEXES.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let index = indexes.entry(state.data_root.clone()).or_insert_with(|| load_index(&state.data_root));
+    f(index)
+}
+
+fn load_index(root: &Path) -> Index {
+    let mut index = Index::new();
+    let Ok(entries) = std::fs::read_dir(crate::layout::apps(root)) else { return index };
+    for entry in entries.flatten() {
+        let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        for name in read_at(root, &id).previous {
+            index.entry(name).or_insert_with(|| id.clone());
+        }
+    }
+    index
+}
+
+fn read_at(root: &Path, id: &str) -> Record {
+    std::fs::read(crate::layout::private(root, id).join(RECORD_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn read_record(state: &AppState, id: &str) -> Record {
+    read_at(&state.data_root, id)
+}
+
+async fn write_record(state: &AppState, id: &str, record: &Record) -> Result<()> {
+    let path = crate::layout::private(&state.data_root, id).join(RECORD_FILE);
+    let before = read_record(state, id);
+    let record = Record {
+        previous: record.previous.iter().filter(|name| !is_installation_host(state, name)).cloned().collect(),
+    };
+    if record.previous.is_empty() {
+        match tokio::fs::remove_file(&path).await {
+            Err(error_value) if error_value.kind() != std::io::ErrorKind::NotFound => return Err(error_value.into()),
+            _ => {}
+        }
+    } else {
+        tokio::fs::create_dir_all(crate::layout::private(&state.data_root, id)).await?;
+        write_atomic(&path, &serde_json::to_vec_pretty(&record)?).await?;
+    }
+    with_index(state, |index| {
+        for name in &before.previous {
+            if index.get(name).is_some_and(|holder| holder == id) {
+                index.remove(name);
+            }
+        }
+        for name in &record.previous {
+            index.insert(name.clone(), id.to_owned());
+        }
+    });
+    Ok(())
+}
+
+/// The Deployment that held `host` before its current name.
+pub fn held_by(state: &AppState, host: &str) -> Option<String> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if is_installation_host(state, &host) {
+        return None;
+    }
+    with_index(state, |index| index.get(&host).cloned())
+}
+
+fn is_installation_host(state: &AppState, hostname: &str) -> bool {
+    domain::Rules::of(state).installation_hosts.iter().any(|host| host.eq_ignore_ascii_case(hostname.trim_end_matches('.')))
+}
+
+
+static TAKING: OnceLock<std::sync::Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
+
+fn taking_set() -> std::sync::MutexGuard<'static, HashSet<(PathBuf, String)>> {
+    TAKING.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A name a first publish or a move holds until it serves on it. Dropping it
+/// lets the name go.
+pub struct Taking {
+    key: (PathBuf, String),
+}
+
+impl Drop for Taking {
+    fn drop(&mut self) {
+        taking_set().remove(&self.key);
+    }
+}
+
+fn take(state: &AppState, hostname: &str) -> Option<Taking> {
+    let key = (state.data_root.clone(), hostname.to_owned());
+    // Build the Taking only when this call inserted the name. Dropping one
+    // frees the name, which would release another caller's hold.
+    let inserted = taking_set().insert(key.clone());
+    if inserted { Some(Taking { key }) } else { None }
+}
+
+async fn held_by_other(state: &AppState, hostname: &str, id: &str) -> bool {
+    state.deployments.read().await.get(hostname).is_some_and(|holder| holder.id != id)
+        || held_by(state, hostname).is_some_and(|holder| holder != id)
+        || domain::claimed(state, hostname)
+}
+
+async fn free_for(state: &AppState, hostname: &str, id: &str) -> bool {
+    let path_host = crate::path::path_host(state);
+    !is_installation_host(state, hostname)
+        && !path_host.is_some_and(|host| host.eq_ignore_ascii_case(hostname))
+        && !held_by_other(state, hostname, id).await
+}
+
+fn stem(slug: &str) -> String {
+    Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into())
+}
+
+fn candidates(state: &AppState, slug: &str, id: &str) -> [String; 2] {
+    let stem = stem(slug);
+    let code = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(id.as_bytes()));
+    [format!("{stem}.{}", state.host_suffix), format!("{stem}-{}.{}", &code[..6], state.host_suffix)]
+}
+
+/// The generated hostname a first publish of the app `id` would take now, as
+/// `release_plan` shows it. None when both names are taken; the release then
+/// takes one with a random code.
+pub async fn planned(state: &AppState, slug: &str, id: &str) -> Option<String> {
+    for name in candidates(state, slug, id) {
+        let busy = taking_set().contains(&(state.data_root.clone(), name.clone()));
+        if !busy && free_for(state, &name, id).await {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// The generated hostname for a first publish of the app `id`, held until
+/// the caller serves on it. It is the first of `candidates` that is free and not
+/// the installation's own host, else one with a random code.
+pub async fn choose(state: &AppState, slug: &str, id: &str) -> (String, Taking) {
+    let mut names: Vec<String> = candidates(state, slug, id).into_iter().rev().collect();
+    loop {
+        let name = names.pop().unwrap_or_else(|| {
+            let code = Uuid::new_v4().simple().to_string();
+            format!("{}-{}.{}", stem(slug), &code[..6], state.host_suffix)
+        });
+        let Some(taking) = take(state, &name) else { continue };
+        if free_for(state, &name, id).await {
+            return (name, taking);
+        }
+    }
+}
+
+/// Frees a deleted Deployment's previous names.
+pub async fn forget(state: &AppState, id: &str) -> Result<()> {
+    let _names = database_lock(state, "hostnames").await;
+    write_record(state, id, &Record::default()).await
+}
+
+
+pub async fn admin_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
+    match name {
+        "hostname_set" => set_expected(state, &deployment.id, a["name"].as_str().unwrap_or_default(), a.get("expected")).await,
+        _ => anyhow::bail!("Unknown tool."),
+    }
+}
+
+fn view(state: &AppState, deployment: &Deployment, changed: bool) -> Value {
+    json!({
+        "deploymentId": deployment.id,
+        "hostname": deployment.hostname,
+        "url": deployment.url,
+        "changed": changed,
+        "previousHostnames": read_record(state, &deployment.id).previous,
+        "googleCallback": format!("{}{}", deployment.url, google::CALLBACK_PATH),
+    })
+}
+
+/// Moves the Deployment `id` to the generated hostname `raw` names.
+pub async fn set(state: &AppState, id: &str, raw: &str) -> Result<Value> {
+    set_expected(state, id, raw, None).await
+}
+
+async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&Value>) -> Result<Value> {
+    let hostname = check_name(raw, &state.host_suffix)?;
+    let found = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
+    let _project = database_lock(state, &format!("project:{}", found.project_id)).await;
+    let _names = database_lock(state, "hostnames").await;
+    let current = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
+    crate::refusal::check_setting_expected(expected, json!(current.hostname))?;
+    if current.hostname == hostname {
+        return Ok(view(state, &current, false));
+    }
+    let taking = take(state, &hostname);
+    check_free(&hostname, &domain::Rules::of(state).installation_hosts, taking.is_none() || held_by_other(state, &hostname, &current.id).await)?;
+
+    let before = read_record(state, &current.id);
+    let mut record = before.clone();
+    record.previous.retain(|name| name != &hostname && name != &current.hostname);
+    record.previous.push(current.hostname.clone());
+    write_record(state, &current.id, &record).await?;
+
+    let mut updated = current.clone();
+    updated.url = deployment_url(&state.public_origin, &hostname);
+    updated.hostname = hostname;
+    if let Err(error_value) = persist_deployment(state, &updated).await {
+        write_record(state, &current.id, &before).await?;
+        return Err(error_value);
+    }
+    {
+        let mut deployments = state.deployments.write().await;
+        deployments.remove(&current.hostname);
+        deployments.insert(updated.hostname.clone(), updated.clone());
+    }
+    Ok(view(state, &updated, true))
+}
+
+
+fn request_host(headers: &HeaderMap) -> Option<String> {
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    let host = host.split(':').next()?.trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// Answers a request on a name a Deployment held before with a permanent
+/// redirect to the same path and query on its current name. A 308 keeps the
+/// method and body, and the browser keeps the fragment, so an invitation
+/// link sent before the move still opens.
+pub async fn redirect(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let Some(host) = request_host(request.headers()) else { return next.run(request).await };
+    if state.deployments.read().await.contains_key(&host) {
+        return next.run(request).await;
+    }
+    let Some(id) = held_by(&state, &host) else { return next.run(request).await };
+    let Some(deployment) = deployment_by_id(&state, &id).await else { return next.run(request).await };
+    let target = request.uri().path_and_query().map(|value| value.as_str()).unwrap_or("/");
+    let location = format!("{}{target}", deployment.url);
+    let mut response = StatusCode::PERMANENT_REDIRECT.into_response();
+    if let Ok(value) = HeaderValue::from_str(&location) {
+        response.headers_mut().insert(header::LOCATION, value);
+    }
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state(root: &Path) -> AppState {
+        AppState {
+            public_origin: "https://konae.example.com".into(),
+            host_suffix: "apps.example.com".into(),
+            ..AppState::for_test(root)
+        }
+    }
+
+    async fn publish(state: &AppState, project: &str) -> Deployment {
+        let body = json!({
+            "project": {"id": project, "name": project, "slug": project, "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
+        });
+        assert_eq!(deploy(state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        state.deployments.read().await.values().find(|d| d.project_id == project).cloned().unwrap()
+    }
+
+    fn host(name: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_str(name).unwrap());
+        headers
+    }
+
+    #[test]
+    fn names_are_checked_by_the_cases() {
+        let file: Value = serde_json::from_str(include_str!("../hostname-cases.json")).unwrap();
+        let suffix = file["context"]["suffix"].as_str().unwrap();
+        let hosts: Vec<String> = serde_json::from_value(file["context"]["installationHosts"].clone()).unwrap();
+        let cases = file["cases"].as_array().unwrap();
+        assert!(cases.len() >= 10);
+        for case in cases {
+            let outcome = check_name(case["name"].as_str().unwrap(), suffix)
+                .and_then(|hostname| check_free(&hostname, &hosts, case["taken"].as_bool().unwrap_or(false)).map(|()| hostname));
+            if case["error"].is_null() {
+                assert_eq!(outcome, Ok(case["hostnameOut"].as_str().unwrap().to_owned()), "{}", case["case"]);
+            } else {
+                crate::refusal::assert_case(case, outcome);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_first_publish_takes_the_planned_name_and_holds_it_against_a_move() {
+        let root = std::env::temp_dir().join(format!("konae-hostname-plan-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState { own_origins: vec!["https://app.apps.example.com".into()], ..test_state(&root) };
+
+        assert_eq!(planned(&state, "Notes", "notes").await.as_deref(), Some("notes.apps.example.com"));
+        let notes = publish(&state, "notes").await;
+        assert_eq!(notes.hostname, "notes.apps.example.com");
+
+        let planned_again = planned(&state, "notes", "again").await.unwrap();
+        assert!(planned_again.starts_with("notes-"), "{planned_again}");
+        let body = json!({
+            "project": {"id": "again", "name": "again", "slug": "notes", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
+        });
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        assert_eq!(deployment_by_id(&state, "again").await.unwrap().hostname, planned_again);
+
+        let (name, taking) = choose(&state, "app", "editor-like").await;
+        assert!(name.starts_with("app-") && name != "app.apps.example.com", "{name}");
+        drop(taking);
+
+        let (held, taking) = choose(&state, "journal", "pending").await;
+        assert_eq!(held, "journal.apps.example.com");
+        let refused = set(&state, &notes.id, "journal").await.unwrap_err();
+        assert_eq!(crate::refusal::of(&refused).unwrap().code, "hostname.taken");
+        assert_eq!(planned(&state, "journal", "other").await.map(|name| name.starts_with("journal-")), Some(true));
+        drop(taking);
+        assert_eq!(set(&state, &notes.id, "journal").await.unwrap()["hostname"], "journal.apps.example.com");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_moved_app_answers_on_its_new_name_and_its_old_name_redirects() {
+        let root = std::env::temp_dir().join(format!("konae-hostname-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let notes = publish(&state, "notes").await;
+        let other = publish(&state, "other").await;
+        assert_eq!(notes.hostname, "notes.apps.example.com");
+
+        let taken = set(&state, &notes.id, "other").await.unwrap_err();
+        assert_eq!(crate::refusal::of(&taken).unwrap().code, "hostname.taken");
+        assert_eq!(taken.to_string(), "other.apps.example.com is another app's address on this installation. Choose another name.");
+
+        let moved = set(&state, &notes.id, "journal").await.unwrap();
+        assert_eq!(moved["hostname"], "journal.apps.example.com");
+        assert_eq!(moved["url"], "https://journal.apps.example.com");
+        assert_eq!(moved["changed"], true);
+        assert_eq!(moved["previousHostnames"], json!(["notes.apps.example.com"]));
+        assert_eq!(moved["googleCallback"], "https://journal.apps.example.com/_konae/auth/google/callback");
+        assert_eq!(deployment_for(&state, &host("journal.apps.example.com")).await.map(|d| d.id), Some(notes.id.clone()));
+        assert!(deployment_for(&state, &host("notes.apps.example.com")).await.is_none());
+        assert_eq!(domain::app_url(&state, &deployment_by_id(&state, &notes.id).await.unwrap()), "https://journal.apps.example.com");
+
+        assert_eq!(set(&state, &notes.id, "journal.apps.example.com").await.unwrap()["changed"], false);
+
+        let held = set(&state, &other.id, "notes").await.unwrap_err();
+        assert_eq!(crate::refusal::of(&held).unwrap().code, "hostname.taken");
+        let body = json!({
+            "project": {"id": "again", "name": "again", "slug": "notes", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
+        });
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        let again = deployment_by_id(&state, "again").await.unwrap();
+        assert!(again.hostname.starts_with("notes-"), "{}", again.hostname);
+
+        let app = stack(state.clone(), Router::new());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/_konae/invitation?x=1")
+            .header(header::HOST, "notes.apps.example.com")
+            .body(Body::empty())
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app.clone(), request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(response.headers()[header::LOCATION], "https://journal.apps.example.com/_konae/invitation?x=1");
+
+        let body = json!({
+            "project": {"id": "notes", "name": "notes", "slug": "notes", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>two</p>"}}
+        });
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        assert_eq!(deployment_by_id(&state, &notes.id).await.unwrap().hostname, "journal.apps.example.com");
+
+        let reloaded = load_deployments(&root, &state.public_origin).await.unwrap();
+        assert_eq!(reloaded.get("journal.apps.example.com").map(|d| d.id.clone()), Some(notes.id.clone()));
+        assert_eq!(load_index(&root).get("notes.apps.example.com"), Some(&notes.id));
+
+        let back = set(&state, &notes.id, "notes").await.unwrap();
+        assert_eq!(back["previousHostnames"], json!(["journal.apps.example.com"]));
+        assert_eq!(deployment_for(&state, &host("notes.apps.example.com")).await.map(|d| d.id), Some(notes.id.clone()));
+
+        forget(&state, &notes.id).await.unwrap();
+        assert_eq!(held_by(&state, "journal.apps.example.com"), None);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn installation_hosts_in_previous_records_do_not_redirect() {
+        let root =
+            std::env::temp_dir().join(format!("konae-hostname-installation-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root))
+            .await
+            .unwrap();
+        let state = AppState {
+            public_origin: "https://editor.apps.example.com".into(),
+            own_origins: vec!["https://mcp.apps.example.com".into()],
+            ..test_state(&root)
+        };
+        let deployment = publish(&state, "notes").await;
+
+        let mut legacy = deployment.clone();
+        legacy.hostname = "editor.apps.example.com".into();
+        legacy.url = "https://editor.apps.example.com".into();
+        {
+            let mut deployments = state.deployments.write().await;
+            deployments.remove(&deployment.hostname);
+            deployments.insert(legacy.hostname.clone(), legacy.clone());
+        }
+        let moved = set(&state, &legacy.id, "journal").await.unwrap();
+        assert_eq!(moved["previousHostnames"], json!([]));
+
+        let restored_root =
+            std::env::temp_dir().join(format!("konae-hostname-restored-{}", Uuid::new_v4()));
+        let moved_deployment = deployment_by_id(&state, &legacy.id).await.unwrap();
+        let restored = AppState {
+            data_root: restored_root.clone(),
+            deployments: Arc::new(RwLock::new(HashMap::from([(
+                moved_deployment.hostname.clone(),
+                moved_deployment,
+            )]))),
+            ..state.clone()
+        };
+        tokio::fs::create_dir_all(crate::layout::private(&restored_root, &legacy.id))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            crate::layout::private(&restored_root, &legacy.id).join(RECORD_FILE),
+            serde_json::to_vec(&Record {
+                previous: vec![
+                    "editor.apps.example.com".into(),
+                    "mcp.apps.example.com".into(),
+                ],
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let app = stack(restored, Router::new());
+        for hostname in ["editor.apps.example.com", "mcp.apps.example.com"] {
+            let request = Request::builder()
+                .uri("/owner?tab=apps")
+                .header(header::HOST, hostname)
+                .body(Body::empty())
+                .unwrap();
+            let response = tower::ServiceExt::oneshot(app.clone(), request)
+                .await
+                .unwrap();
+            assert_ne!(
+                response.status(),
+                StatusCode::PERMANENT_REDIRECT,
+                "{hostname} redirected to the moved app"
+            );
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+        let _ = tokio::fs::remove_dir_all(restored_root).await;
+    }
+}

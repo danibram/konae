@@ -4,7 +4,14 @@ import { parseFunctions, validateServerArtifact, serverFolderEntries, serverArti
 
 for (const fixture of cases) test(`server artifact parity: ${fixture.name}`, async () => {
   const source = fixture.sourceFromArtifact ? JSON.stringify(fixture.artifact.manifest) : fixture.source;
-  const run = () => validateServerArtifact(source === null ? undefined : parseFunctions(source), fixture.artifact);
+  const bytes = fixture.filledBundleBytes;
+  const input = bytes && fixture.artifact?.bundles ? {
+    ...fixture.artifact,
+    bundles: Object.fromEntries(Object.entries(fixture.artifact.bundles).map(([name, bundle]) =>
+      [name, `${bundle}/*${"x".repeat(bytes - bundle.length - 4)}*/`]
+    )),
+  } : fixture.artifact;
+  const run = () => validateServerArtifact(source === null ? undefined : parseFunctions(source), input);
   if (fixture.ok) {
     const artifact = run();
     expect(artifact ?? null).toEqual(fixture.artifact);

@@ -22,7 +22,7 @@ A publish stages and uploads first. When actions is on, it copies the database, 
 
 - An app database is in WAL mode, and a file that arrives in another mode moves into it the first time a Server Action opens it.
 - A connection runs with `synchronous=NORMAL`. A crash of the Kernel loses no commit. A host that loses power can lose the last commits before a checkpoint, and the file stays consistent.
-- A Server Action borrows a configured connection from a pool in `kernel-rs/kernel/src/app_db.rs`: 8 per database and 64 across the Kernel. Each borrow starts a fresh 2-second deadline and resets the last inserted rowid.
+- A Server Action borrows a configured connection from a pool in `kernel-rs/kernel/src/app_data/connection.rs`: 8 per database and 64 across the Kernel. Each borrow starts a fresh 2-second deadline and resets the last inserted rowid.
 - Queries share the Deployment's lock and run side by side and beside a write. Mutations also take the write lock, so they reach SQLite one at a time. Work that copies, restores or replaces the whole file holds the lock alone and drops every kept connection.
 - A kept connection is lent only while its path still names the file it opened. Replacing the file removes the old `-wal` and `-shm` before the rename.
 

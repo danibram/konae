@@ -8,8 +8,9 @@ const crates = ["kernel", "konae"].map((crate) => path.join(root, "kernel-rs", c
 
 test("docs/operate.md names every KONAE_ variable the Kernel reads", () => {
   const read = new Set(
-    crates.flatMap((dir) => readdirSync(dir)
-      .filter((name) => name.endsWith(".rs"))
+    crates.flatMap((dir) => readdirSync(dir, { recursive: true })
+      .filter((name) => name.endsWith(".rs") && !name.split(path.sep).includes("tests")
+        && path.basename(name) !== "tests.rs" && !name.endsWith("_tests.rs"))
       .flatMap((name) => {
         const source = readFileSync(path.join(dir, name), "utf8").split("#[cfg(test)]")[0];
         return [...source.matchAll(/"(KONAE_[A-Z0-9_]+)"/g)].map((match) => match[1]);
