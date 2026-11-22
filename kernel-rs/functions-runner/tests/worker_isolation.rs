@@ -3,11 +3,7 @@ use konae_functions_executor::{
     protocol::{Input, WorkerLimits},
 };
 use serde_json::{Value, json};
-use std::{
-    collections::BTreeMap,
-    path::Path,
-    time::Duration,
-};
+use std::{collections::BTreeMap, path::Path, thread, time::Duration};
 
 type Bundle = BTreeMap<String, String>;
 
@@ -58,13 +54,27 @@ fn invoke_function(
 
 #[test]
 fn handler_throw_reports_text_and_reuses_worker() {
-    let bundles = bundle("export function handle(request) { if (new URL(request.url).pathname === '/throw') throw new Error('handler exploded'); return new Response('warm'); }");
+    let bundles = bundle(
+        "export function handle(request) { if (new URL(request.url).pathname === '/throw') throw new Error('handler exploded'); return new Response('warm'); }",
+    );
     let mut worker = worker(&bundles, Duration::from_secs(2));
     let pid = worker.pid().unwrap();
 
-    let error = invoke(&mut worker, input("/throw", "alice"), Duration::from_secs(2)).unwrap_err();
-    assert_eq!(konae_functions_executor::error_code(&error), "handler_error");
-    assert!(konae_functions_executor::error_detail(&error).unwrap().contains("handler exploded"));
+    let error = invoke(
+        &mut worker,
+        input("/throw", "alice"),
+        Duration::from_secs(2),
+    )
+    .unwrap_err();
+    assert_eq!(
+        konae_functions_executor::error_code(&error),
+        "handler_error"
+    );
+    assert!(
+        konae_functions_executor::error_detail(&error)
+            .unwrap()
+            .contains("handler exploded")
+    );
     assert_eq!(worker.pid(), Some(pid));
     assert!(worker.is_synchronized());
 
@@ -76,16 +86,60 @@ fn handler_throw_reports_text_and_reuses_worker() {
 #[test]
 fn invoke_selects_the_named_bundle() {
     let bundles = BTreeMap::from([
-        ("orders".into(), "export function handle() { return new Response('orders'); }".into()),
-        ("users".into(), "export function handle() { return new Response('users'); }".into()),
+        (
+            "orders".into(),
+            "export function handle() { return new Response('orders'); }".into(),
+        ),
+        (
+            "users".into(),
+            "export function handle() { return new Response('users'); }".into(),
+        ),
     ]);
     let mut worker = worker(&bundles, Duration::from_secs(2));
     let pid = worker.pid().unwrap();
     for (function, expected) in [("orders", "orders"), ("users", "users")] {
-        let output = invoke_function(&mut worker, function, input("/", "alice"), Duration::from_secs(2)).unwrap();
+        let output = invoke_function(
+            &mut worker,
+            function,
+            input("/", "alice"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
         assert_eq!(output.body, expected);
         assert_eq!(worker.pid(), Some(pid));
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a strict Linux cgroup delegation"]
+fn strict_worker_survives_the_short_lived_spawn_thread() {
+    let executable = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner")).to_owned();
+    let bundles = bundle("export function handle() { return new Response('alive'); }");
+    let root = std::env::var("KONAE_FUNCTIONS_CGROUP").expect("strict cgroup root required");
+    let worker = thread::spawn(move || {
+        Worker::spawn_with_policy(
+            &executable,
+            &bundles,
+            &Budget::new(Duration::from_secs(10)),
+            WorkerLimits::default(),
+            MemoryPolicy::LinuxCgroup {
+                delegated_root: root.into(),
+            },
+        )
+        .unwrap()
+    })
+    .join()
+    .unwrap();
+    let pid = worker.pid().unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let output =
+        invoke(&mut worker, input("/", "alice"), Duration::from_secs(2)).unwrap_or_else(|error| {
+            panic!("strict worker {pid} died after its spawn thread exited: {error}")
+        });
+    assert_eq!(output.body, "alive");
+    assert_eq!(worker.pid(), Some(pid));
+    drop(worker);
 }
 
 #[test]

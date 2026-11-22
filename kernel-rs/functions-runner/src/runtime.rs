@@ -305,10 +305,9 @@ impl Runtime {
         let text = match result {
             Ok(text) => text,
             Err(error) if self.bridge.error().is_none() => {
-                return Err(WorkerError::with_detail(
-                    "handler_error",
-                    Some(format!("{error:#}")),
-                ).into());
+                return Err(
+                    WorkerError::with_detail("handler_error", Some(format!("{error:#}"))).into(),
+                );
             }
             Err(error) => return Err(error),
         };
