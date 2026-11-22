@@ -1,0 +1,10 @@
+Linux 7.0.14-linuxkit aarch64 GNU/Linux
+delegated_cgroup_kill=present
+curl: (7) Failed to connect to 127.0.0.1 port 8787 after 6 ms: Couldn't connect to server
+{"copies":{"alert":null,"intervalSeconds":null,"maxCutAgeMs":null,"targets":[]},"files":{"maxFileBytes":2097152,"quotaBytes":20971520,"store":"local"},"kernel":"konae-rust","mail":null,"ok":true,"version":1}kernel_cap_eff=CapEff:	00000000000000c0
+CapEff:	00000000000000c0
+authenticated_login_http=200
+sandbox_denied_http=503 body={"code":"sandbox_unavailable","error":"The host cannot apply the required OS isolation to function workers."}{"code":"sandbox_unavailable","error":"The host cannot apply the required OS isolation to function workers."}
+Serving Functions at http://http-functions.localhost:8080
+Kernel listening on 8787
+worker_cgroups_after_denied_request=none

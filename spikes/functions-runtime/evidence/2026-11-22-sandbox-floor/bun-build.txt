@@ -1,0 +1,69 @@
+$ tsc -b && vite build --config vite.config.ts
+vite v6.4.3 building for production...
+transforming...
+✓ 3355 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                                             0.69 kB │ gzip:     0.41 kB
+dist/assets/jetbrains-mono-vietnamese-wght-normal-Bt-aOZkq.woff2            7.50 kB
+dist/assets/bricolage-grotesque-vietnamese-wght-normal-BUzh504Q.woff2       8.61 kB
+dist/assets/jetbrains-mono-greek-wght-normal-Bw9x6K1M.woff2                 9.00 kB
+dist/assets/jetbrains-mono-cyrillic-wght-normal-D73BlboJ.woff2             12.11 kB
+dist/assets/jetbrains-mono-latin-ext-wght-normal-DBQx-q_a.woff2            15.20 kB
+dist/assets/bricolage-grotesque-latin-ext-wght-normal-CcLUaPy7.woff2       18.67 kB
+dist/assets/jetbrains-mono-latin-wght-normal-B9CIFXIH.woff2                40.40 kB
+dist/assets/bricolage-grotesque-latin-wght-normal-DLoelf7F.woff2           41.34 kB
+dist/assets/sql-wasm-UFUCzYNW.wasm                                        659.73 kB │ gzip:   322.69 kB
+dist/assets/esbuild-BHljloGq.wasm                                      12,332.68 kB │ gzip: 3,299.44 kB
+dist/assets/LocalFirstRun-BRx7UHRC.css                                      1.66 kB │ gzip:     0.64 kB
+dist/assets/DurableHistoryDialog-BfCTM76r.css                               3.12 kB │ gzip:     0.96 kB
+dist/assets/WhatHappenedView-BBlP71vv.css                                   3.33 kB │ gzip:     0.85 kB
+dist/assets/AppSettingsDialog-p-va5Tzf.css                                  4.07 kB │ gzip:     1.17 kB
+dist/assets/index-CFb8UOV5.css                                            201.57 kB │ gzip:    38.69 kB
+dist/assets/openai-prompt-cache-h_V5PL7P.js                                 0.12 kB │ gzip:     0.13 kB
+dist/assets/sanitize-unicode-B62XMGgN.js                                    0.15 kB │ gzip:     0.13 kB
+dist/assets/deferred-tools-BH-n8mgx.js                                      0.51 kB │ gzip:     0.31 kB
+dist/assets/earth-BcdSbRg5.js                                               0.56 kB │ gzip:     0.36 kB
+dist/assets/node.browser-D6yXrXQo.js                                        0.60 kB │ gzip:     0.41 kB
+dist/assets/openrouter-cost-Dn0t07DV.js                                     0.61 kB │ gzip:     0.30 kB
+dist/assets/useConfirm-CpSO9KLQ.js                                          0.79 kB │ gzip:     0.47 kB
+dist/assets/classifier-shared-BTRHlFOj.js                                   1.94 kB │ gzip:     0.97 kB
+dist/assets/node.browser-IsGchLsK.js                                        2.15 kB │ gzip:     0.86 kB
+dist/assets/openrouter-images-DuNn88il.js                                   2.77 kB │ gzip:     1.35 kB
+dist/assets/openai-decisions-ZC5SaKfZ.js                                    3.40 kB │ gzip:     1.46 kB
+dist/assets/LocalHistoryAttachmentDialog-DZw7Uuqq.js                        3.55 kB │ gzip:     1.70 kB
+dist/assets/typesafe-system-one-Df41n7nk.js                                 3.74 kB │ gzip:     1.59 kB
+dist/assets/provider-retry-CsxOvVfK.js                                      3.82 kB │ gzip:     1.58 kB
+dist/assets/index-rHHGf8tV.js                                               3.88 kB │ gzip:     1.57 kB
+dist/assets/preview-test-COHlDbnp.js                                        6.28 kB │ gzip:     2.56 kB
+dist/assets/LocalFirstRun-CzoWYAJV.js                                       6.61 kB │ gzip:     2.80 kB
+dist/assets/durable-checkpoints-DS_-wine.js                                 7.07 kB │ gzip:     2.64 kB
+dist/assets/charts-qZELiM5V.js                                             10.25 kB │ gzip:     3.39 kB
+dist/assets/platform-tools-BXoDuLHl.js                                     11.33 kB │ gzip:     4.28 kB
+dist/assets/transform-messages-Me5q4YfQ.js                                 13.25 kB │ gzip:     4.92 kB
+dist/assets/WhatHappenedView-ys-CRB97.js                                   18.47 kB │ gzip:     6.42 kB
+dist/assets/openai-responses-Bi6ME2yB.js                                   18.96 kB │ gzip:     5.86 kB
+dist/assets/transform-messages-CiVcpYn1.js                                 20.48 kB │ gzip:     7.19 kB
+dist/assets/DurableHistoryDialog-DMp1q12j.js                               20.84 kB │ gzip:     6.57 kB
+dist/assets/DesignSystem-BlENLX-I.js                                       21.50 kB │ gzip:     7.13 kB
+dist/assets/openai-responses-BG0lOrww.js                                   22.16 kB │ gzip:     7.04 kB
+dist/assets/openai-completions-C8_jYg2c.js                                 23.05 kB │ gzip:     7.18 kB
+dist/assets/openai-completions-DXcQ8Y7H.js                                 25.32 kB │ gzip:     7.77 kB
+dist/assets/UsagePage-fDAS-G00.js                                          26.15 kB │ gzip:     7.97 kB
+dist/assets/export-project-DkXpz64i.js                                     35.49 kB │ gzip:    11.02 kB
+dist/assets/AppSettingsDialog-C_EEcS0J.js                                  37.38 kB │ gzip:    11.74 kB
+dist/assets/durable-storage-CzSt0cbG.js                                    44.24 kB │ gzip:    12.50 kB
+dist/assets/anthropic-messages-f93vAqY8.js                                107.19 kB │ gzip:    27.25 kB
+dist/assets/hash-DR3CLykY.js                                              136.68 kB │ gzip:    33.24 kB
+dist/assets/anthropic-messages-DExRQKDZ.js                                225.73 kB │ gzip:    59.29 kB
+dist/assets/client-B4ksY-B4.js                                            282.19 kB │ gzip:    70.96 kB
+dist/assets/CapabilityWorkspace-DTSZS2PJ.js                               411.01 kB │ gzip:   132.50 kB
+dist/assets/parser-assets-DqDafawm.js                                     516.39 kB │ gzip:   101.60 kB
+dist/assets/index-CZxaWhkQ.js                                           1,210.01 kB │ gzip:   349.57 kB
+dist/assets/harness-CO3D76As.js                                         1,227.39 kB │ gzip:   248.41 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 14.88s

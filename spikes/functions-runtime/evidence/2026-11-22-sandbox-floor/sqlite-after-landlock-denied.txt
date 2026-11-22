@@ -1,0 +1,8 @@
+Command:
+  sqlite3 /tmp/konae-sandbox-floor-denied.sqlite 'select id, quantity from orders order by id;'
+
+Result after the authenticated POST received HTTP 503 sandbox_unavailable:
+  1|7
+  2|4
+
+The attempted function update set order 1 to quantity 99. The stored quantity stayed 7.
