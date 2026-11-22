@@ -788,11 +788,7 @@ impl Worker {
 fn poll_writable(fd: std::os::fd::RawFd, budget: &impl ExecutionBudget) -> Result<()> {
     loop {
         let left = remaining(budget)?;
-        let remainder_ms = left.subsec_nanos() % 1_000_000 != 0;
-        let milliseconds = left
-            .as_millis()
-            .saturating_add(u128::from(remainder_ms))
-            .min(i32::MAX as u128) as i32;
+        let milliseconds = left.as_millis().min(i32::MAX as u128) as i32;
         let mut descriptor = libc::pollfd {
             fd,
             events: libc::POLLOUT,
