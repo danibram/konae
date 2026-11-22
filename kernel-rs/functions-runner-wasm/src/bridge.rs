@@ -33,14 +33,14 @@ impl Bridge {
     pub fn new(
         limits: StoreLimits,
         deadline: Instant,
-        request: Arc<Request>,
+        request: Option<Arc<Request>>,
         replies: Arc<Receiver<ParentMessage>>,
         max_operations: usize,
     ) -> Self {
         Self {
             limits,
             deadline,
-            request: Some(request),
+            request,
             replies,
             max_operations,
             operations: 0,

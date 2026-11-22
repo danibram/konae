@@ -155,6 +155,7 @@ def main():
     parser.add_argument('runner', type=Path)
     parser.add_argument('--runs', type=int, default=30)
     parser.add_argument('--post', type=Path)
+    parser.add_argument('--skip-engine-size', action='store_true')
     args = parser.parse_args()
     binary = str(args.runner.resolve())
     if args.post:
@@ -180,11 +181,12 @@ def main():
             assert worker.get()['output']['body'] == 'ok'
             warm.append(worker.elapsed(started))
         after = rss(worker.process.pid)
+    engine_size = None if args.skip_engine_size else int(subprocess.check_output([binary, '--engine-size']))
     print(json.dumps(dict(cold_first_reply_ms=summary(cold), init_ms=summary(ready),
                           first_invoke_ms=summary(first), warm_ipc_get_ms=summary(warm),
                           rss_before_kib=before, rss_after_kib=after,
                           binary_bytes=os.stat(binary).st_size,
-                          compiled_engine_bytes=int(subprocess.check_output([binary, '--engine-size'])))))
+                          compiled_engine_bytes=engine_size)))
 
 
 if __name__ == '__main__':

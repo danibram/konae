@@ -111,16 +111,18 @@ static int prepare_runtime(size_t heap) {
     return ctx ? OK : HEAP_EXHAUSTED;
 }
 
-EXPORT(guest_pack_bootstrap) int guest_pack_bootstrap(char *source, size_t length) {
-    int code = prepare_runtime(64 * 1024 * 1024);
+EXPORT(guest_pack) int guest_pack(char *source, size_t length, size_t heap, int module) {
+    int code = prepare_runtime(heap);
     if (code != OK) return code;
-    JSValue compiled = JS_Eval(ctx, source, length, "web.js",
-                               JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    JSValue compiled = JS_Eval(ctx, source, length, module ? "function.mjs" : "web.js",
+                               (module ? JS_EVAL_TYPE_MODULE : JS_EVAL_TYPE_GLOBAL) |
+                               JS_EVAL_FLAG_COMPILE_ONLY);
     free(source);
-    if (JS_IsException(compiled)) return exception();
+    if (JS_IsException(compiled)) return import_denied ? IMPORT_FORBIDDEN : exception();
     reply = (const char *)JS_WriteObject(ctx, &reply_length, compiled, JS_WRITE_OBJ_BYTECODE);
     JS_FreeValue(ctx, compiled);
-    return reply ? OK : EXECUTION_FAILED;
+    if (reply) return OK;
+    return JS_HasException(ctx) ? exception() : EXECUTION_FAILED;
 }
 
 EXPORT(guest_init) int guest_init(char *bootstrap, size_t length, size_t heap) {
@@ -145,11 +147,14 @@ EXPORT(guest_init) int guest_init(char *bootstrap, size_t length, size_t heap) {
     return OK;
 }
 
-EXPORT(guest_load) int guest_load(char *source, size_t length) {
-    JSValue compiled = JS_Eval(ctx, source, length, "function.mjs",
-                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-    free(source);
-    if (JS_IsException(compiled)) return import_denied ? IMPORT_FORBIDDEN : exception();
+EXPORT(guest_load) int guest_load(char *bytecode, size_t length) {
+    JSValue compiled = JS_ReadObject(ctx, (const uint8_t *)bytecode, length, JS_READ_OBJ_BYTECODE);
+    free(bytecode);
+    if (JS_IsException(compiled)) return exception();
+    if (JS_ResolveModule(ctx, compiled) < 0) {
+        JS_FreeValue(ctx, compiled);
+        return import_denied ? IMPORT_FORBIDDEN : exception();
+    }
     JSModuleDef *module = JS_VALUE_GET_PTR(compiled);
     JSValue result;
     int status = settle(JS_EvalFunction(ctx, compiled), &result);

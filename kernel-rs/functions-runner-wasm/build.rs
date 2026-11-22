@@ -62,8 +62,8 @@ fn pack_bootstrap(module: &Module, source: &[u8]) -> Result<Vec<u8>> {
     );
     memory.write(&mut store, offset as usize, source)?;
     let code = guest
-        .get_typed_func::<(u32, u32), u32>(&mut store, "guest_pack_bootstrap")?
-        .call(&mut store, (offset, length))?;
+        .get_typed_func::<(u32, u32, u32, u32), u32>(&mut store, "guest_pack")?
+        .call(&mut store, (offset, length, 64 << 20, 0))?;
     ensure!(code == 0, "Could not compile the Web bootstrap ({code})");
     let offset = guest
         .get_typed_func::<(), u32>(&mut store, "guest_reply_ptr")?

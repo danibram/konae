@@ -35,12 +35,7 @@ pub struct Invocation {
 }
 
 impl Invocation {
-    pub fn new(
-        compiler: &Compiler,
-        bridge: Bridge,
-        limits: &WorkerLimits,
-        source: &str,
-    ) -> Result<Self> {
+    fn start(compiler: &Compiler, bridge: Bridge, limits: &WorkerLimits) -> Result<Self> {
         let mut store = Store::new(&compiler.engine, bridge);
         store.limiter(|bridge| &mut bridge.limits);
         store.set_epoch_deadline(1);
@@ -58,18 +53,40 @@ impl Invocation {
         })?;
         let mut result = Self { instance, store };
         result.call::<(), ()>("_initialize", ())?;
+        Ok(result)
+    }
+
+    pub fn pack(
+        compiler: &Compiler,
+        bridge: Bridge,
+        limits: &WorkerLimits,
+        source: &str,
+    ) -> Result<Vec<u8>> {
+        let mut guest = Self::start(compiler, bridge, limits)?;
+        let ptr = guest.copy_into_guest(source.as_bytes())?;
+        let code = guest.call(
+            "guest_pack",
+            (ptr, source.len() as u32, heap_limit(limits), 1_u32),
+        )?;
+        check_guest_code(code).context("Compile ESM")?;
+        guest.reply(|bytes| Ok(bytes.to_vec()))
+    }
+
+    pub fn new(
+        compiler: &Compiler,
+        bridge: Bridge,
+        limits: &WorkerLimits,
+        bytecode: &[u8],
+    ) -> Result<Self> {
+        let mut result = Self::start(compiler, bridge, limits)?;
         let ptr = result.copy_into_guest(BOOTSTRAP)?;
         let code = result.call(
             "guest_init",
-            (
-                ptr,
-                BOOTSTRAP.len() as u32,
-                limits.heap_bytes.min(u32::MAX as usize) as u32,
-            ),
+            (ptr, BOOTSTRAP.len() as u32, heap_limit(limits)),
         )?;
         check_guest_code(code).context("Web bootstrap")?;
-        let ptr = result.copy_into_guest(source.as_bytes())?;
-        let code = result.call("guest_load", (ptr, source.len() as u32))?;
+        let ptr = result.copy_into_guest(bytecode)?;
+        let code = result.call("guest_load", (ptr, bytecode.len() as u32))?;
         check_guest_code(code).context("ESM load")?;
         Ok(result)
     }
@@ -83,25 +100,29 @@ impl Invocation {
         }
         check_guest_code(code).context("handler")?;
         self.store.data().check()?;
+        let response = self.reply(|json| {
+            if json.len() > limit * 6 + 128 * 1024 {
+                return Err(WorkerError::new("response_too_large").into());
+            }
+            serde_json::from_slice(json).map_err(|_| WorkerError::new("invalid_response").into())
+        })?;
+        self.call::<(), ()>("guest_end_request", ())?;
+        self.store.data_mut().request = None;
+        Ok(response)
+    }
+
+    fn reply<T>(&mut self, read: impl FnOnce(&[u8]) -> Result<T>) -> Result<T> {
         let ptr: u32 = self.call("guest_reply_ptr", ())?;
         let len: u32 = self.call("guest_reply_len", ())?;
         let memory = self
             .instance
             .get_memory(&mut self.store, "memory")
             .ok_or_else(|| anyhow!("missing memory"))?;
-        let end = ptr as usize + len as usize;
-        let json = memory
+        let bytes = memory
             .data(&self.store)
-            .get(ptr as usize..end)
+            .get(ptr as usize..ptr as usize + len as usize)
             .ok_or_else(|| WorkerError::new("invalid_response"))?;
-        if json.len() > limit * 6 + 128 * 1024 {
-            return Err(WorkerError::new("response_too_large").into());
-        }
-        let response =
-            serde_json::from_slice(json).map_err(|_| WorkerError::new("invalid_response"))?;
-        self.call::<(), ()>("guest_end_request", ())?;
-        self.store.data_mut().request = None;
-        Ok(response)
+        read(bytes)
     }
 
     pub fn shutdown(&mut self, grace_ms: u64) -> (bool, Option<String>) {
@@ -148,6 +169,10 @@ impl Invocation {
         memory.write(&mut self.store, ptr as usize, bytes)?;
         Ok(ptr)
     }
+}
+
+fn heap_limit(limits: &WorkerLimits) -> u32 {
+    limits.heap_bytes.min(u32::MAX as usize) as u32
 }
 
 pub fn store_limits(heap: usize) -> wasmtime::StoreLimits {

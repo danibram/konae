@@ -79,7 +79,7 @@ fn dynamic_import_is_refused_before_loading_the_dependency() {
 #[test]
 fn globals_and_context_capabilities_do_not_cross_requests() {
     let bundle = Bundle::new(
-        "globalThis.count = (globalThis.count || 0) + 1; export function handle(request, context) { return Response.json({ count: globalThis.count, actor: context.actor.userId, actionCall: typeof context.actions.call, hasData: 'data' in context, hasGenericCall: 'call' in context }); }",
+        "globalThis.count = (globalThis.count || 0) + await Promise.resolve(1); export function handle(request, context) { return Response.json({ count: globalThis.count, actor: context.actor.userId, actionCall: typeof context.actions.call, hasData: 'data' in context, hasGenericCall: 'call' in context }); }",
     );
     let mut worker = worker(&bundle, Duration::from_secs(2));
     let pid = worker.pid().unwrap();

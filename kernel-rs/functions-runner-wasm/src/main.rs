@@ -9,6 +9,7 @@ use konae_functions_executor::{
     protocol::{self, ChildMessage, ParentMessage},
 };
 use runtime::{Compiler, Invocation};
+use sha2::{Digest, Sha256};
 use std::{
     io,
     sync::{
@@ -134,6 +135,23 @@ fn worker() -> Result<()> {
             engine.increment_epoch();
         }
     });
+    let bundle_hash = Sha256::digest(source.as_bytes());
+    let compile_bridge = Bridge::new(
+        runtime::store_limits(limits.heap_bytes),
+        Instant::now() + PARENT_FAILURE_LIMIT,
+        None,
+        replies.clone(),
+        0,
+    );
+    // IPC v2 pins one bundle per process, so this cache has a single slot.
+    let bytecode = Invocation::pack(&compiler, compile_bridge, &limits, &source).map_err(|error| {
+        let code = worker_error_code(&error);
+        if code == "worker_execution_failed" {
+            eprintln!("bundle {bundle_hash:x}: {error:#}");
+        }
+        code.to_owned()
+    });
+    drop(source);
     send(&ChildMessage::Ready { abi, generation })?;
 
     let mut last = None;
@@ -155,30 +173,31 @@ fn worker() -> Result<()> {
         let bridge = Bridge::new(
             runtime::store_limits(limits.heap_bytes),
             Instant::now() + PARENT_FAILURE_LIMIT,
-            request.clone(),
+            Some(request.clone()),
             replies.clone(),
             limits.operation_limit,
         );
-        let result = Invocation::new(&compiler, bridge, &limits, &source).and_then(|mut guest| {
-            if let Some(input) = input {
-                let output = guest.invoke(input, limits.response_bytes)?;
-                last = Some(guest);
-                Ok(output)
-            } else {
-                guest.spin()?;
-                bail!("unexpected_spin_result");
-            }
-        });
+        let result = bytecode
+            .as_ref()
+            .map_err(|code| WorkerError::new(code.as_str()).into())
+            .and_then(|bytecode| Invocation::new(&compiler, bridge, &limits, bytecode))
+            .and_then(|mut guest| {
+                if let Some(input) = input {
+                    let output = guest.invoke(input, limits.response_bytes)?;
+                    last = Some(guest);
+                    Ok(output)
+                } else {
+                    guest.spin()?;
+                    bail!("unexpected_spin_result");
+                }
+            });
         let capability = request.capability.clone();
         let response = match result {
             Ok(output) => ChildMessage::Reply { capability, output },
             Err(error) => {
-                let code = error
-                    .downcast_ref::<WorkerError>()
-                    .map(WorkerError::code)
-                    .unwrap_or("worker_execution_failed");
+                let code = worker_error_code(&error);
                 if code == "worker_execution_failed" {
-                    eprintln!("{error:#}");
+                    eprintln!("bundle {bundle_hash:x}: {error:#}");
                 }
                 ChildMessage::Failure {
                     capability: Some(capability),
@@ -193,4 +212,11 @@ fn worker() -> Result<()> {
 
 fn send(message: &ChildMessage) -> io::Result<()> {
     protocol::write(&mut io::stdout(), message)
+}
+
+fn worker_error_code(error: &anyhow::Error) -> &str {
+    error
+        .downcast_ref::<WorkerError>()
+        .map(WorkerError::code)
+        .unwrap_or("worker_execution_failed")
 }
