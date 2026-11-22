@@ -789,7 +789,7 @@ impl Worker {
 fn poll_writable(fd: std::os::fd::RawFd, budget: &impl ExecutionBudget) -> Result<()> {
     loop {
         let left = remaining(budget)?;
-        let milliseconds = left.as_millis().min(i32::MAX as u128) as i32;
+        let milliseconds = left.min(Duration::from_millis(5)).as_millis().max(1) as i32;
         let mut descriptor = libc::pollfd {
             fd,
             events: libc::POLLOUT,
@@ -875,6 +875,70 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct CancellableBudget {
+        deadline: Instant,
+        cancelled: AtomicBool,
+    }
+
+    impl ExecutionBudget for CancellableBudget {
+        fn deadline(&self) -> Instant {
+            self.deadline
+        }
+
+        fn is_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::SeqCst)
+        }
+    }
+
+    #[test]
+    fn blocked_pipe_write_observes_cancellation_before_deadline() {
+        let mut descriptors = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (descriptors[0], descriptors[1]);
+        let flags = unsafe { libc::fcntl(write_fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(write_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+
+        let bytes = [0u8; 8192];
+        loop {
+            let written = unsafe { libc::write(write_fd, bytes.as_ptr().cast(), bytes.len()) };
+            if written < 0 {
+                assert_eq!(
+                    std::io::Error::last_os_error().kind(),
+                    std::io::ErrorKind::WouldBlock
+                );
+                break;
+            }
+        }
+
+        let budget = Arc::new(CancellableBudget {
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancelled: AtomicBool::new(false),
+        });
+        let canceller = Arc::clone(&budget);
+        let cancel_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            canceller.cancelled.store(true, Ordering::SeqCst);
+        });
+        let start = Instant::now();
+        let error = poll_writable(write_fd, budget.as_ref()).unwrap_err();
+        let elapsed = start.elapsed();
+
+        cancel_thread.join().unwrap();
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        assert_eq!(error_code(&error), "cancelled");
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "poll waited {elapsed:?}"
+        );
+    }
 
     #[test]
     fn validates_bundle_names_and_source_budgets() {
