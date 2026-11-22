@@ -6,7 +6,8 @@ use crate::{
 use anyhow::Result;
 use serde_json::Value;
 use std::{
-    fmt, fs,
+    collections::BTreeMap,
+    fmt,
     io::{Read, Write},
     os::{fd::AsRawFd, unix::process::CommandExt},
     path::Path,
@@ -43,13 +44,26 @@ impl crate::RequestBody for Mutex<BufferedBody> {
 #[derive(Debug)]
 pub struct WorkerError {
     code: String,
+    detail: Option<String>,
 }
 impl WorkerError {
     pub fn new(code: impl Into<String>) -> Self {
-        Self { code: code.into() }
+        Self {
+            code: code.into(),
+            detail: None,
+        }
+    }
+    pub fn with_detail(code: impl Into<String>, detail: Option<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: detail.map(|text| bounded_detail(&text)),
+        }
     }
     pub fn code(&self) -> &str {
         &self.code
+    }
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
     }
 }
 impl fmt::Display for WorkerError {
@@ -63,8 +77,41 @@ pub fn error_code(error: &anyhow::Error) -> &str {
         .downcast_ref::<WorkerError>()
         .map_or("worker_failed", WorkerError::code)
 }
+pub fn error_detail(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<WorkerError>()
+        .and_then(WorkerError::detail)
+}
+fn bounded_detail(detail: &str) -> String {
+    let mut end = detail.len().min(4096);
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    detail[..end].to_owned()
+}
 fn fail(code: &str) -> anyhow::Error {
     WorkerError::new(code).into()
+}
+fn validate_bundles(bundles: &BTreeMap<String, String>) -> Result<()> {
+    let mut total = 0usize;
+    for (name, source) in bundles {
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(fail("invalid_function_name"));
+        }
+        if source.len() > 1024 * 1024 {
+            return Err(fail("bundle_too_large"));
+        }
+        total = total.saturating_add(source.len());
+    }
+    if bundles.is_empty() || total > protocol::MAX_SOURCE_BYTES {
+        return Err(fail("bundle_too_large"));
+    }
+    Ok(())
 }
 fn nonce() -> Result<String> {
     let mut bytes = [0u8; 32];
@@ -111,8 +158,7 @@ pub struct Worker {
 impl Worker {
     pub fn spawn_with_policy(
         executable: &Path,
-        function: &str,
-        bundle_dir: &Path,
+        bundles: &BTreeMap<String, String>,
         budget: &impl ExecutionBudget,
         limits: WorkerLimits,
         policy: MemoryPolicy,
@@ -121,32 +167,7 @@ impl Worker {
         if !limits.validate() {
             return Err(fail("invalid_worker_limits"));
         }
-        if function.is_empty()
-            || function.len() > 64
-            || !function
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err(fail("invalid_function_name"));
-        }
-        let primary = bundle_dir.join(format!("{function}.mjs"));
-        let path = if primary.exists() {
-            primary
-        } else {
-            bundle_dir.join(format!("{function}.js"))
-        };
-        let file = fs::File::open(&path)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.len() > protocol::MAX_SOURCE_BYTES as u64 {
-            return Err(fail("bundle_too_large"));
-        }
-        let mut bytes = Vec::new();
-        file.take(protocol::MAX_SOURCE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > protocol::MAX_SOURCE_BYTES {
-            return Err(fail("bundle_too_large"));
-        }
-        let source = String::from_utf8(bytes).map_err(|_| fail("bundle_invalid_utf8"))?;
+        validate_bundles(bundles)?;
         remaining(budget)?;
         let generation = nonce()?;
         let strict_linux = matches!(policy, MemoryPolicy::LinuxCgroup { .. });
@@ -284,8 +305,7 @@ impl Worker {
             worker.send(
                 &ParentMessage::Init {
                     abi: protocol::ABI.into(),
-                    function: function.into(),
-                    source,
+                    bundles: bundles.clone(),
                     generation,
                     limits,
                 },
@@ -317,7 +337,8 @@ impl Worker {
                 ChildMessage::Failure {
                     capability: None,
                     code,
-                } => Err(fail(&code)),
+                    detail,
+                } => Err(WorkerError::with_detail(code, detail).into()),
                 _ => Err(fail("worker_initialization_failed")),
             }
         })();
@@ -391,10 +412,18 @@ impl Worker {
     }
     fn exit_error(&self) -> anyhow::Error {
         if oom_kill_confirmed(self.oom_kills_at_spawn, self.containment.oom_kill_count()) {
-            fail("worker_memory_limit")
+            WorkerError::with_detail("worker_memory_limit", Some(self.stderr_tail())).into()
         } else {
-            fail("worker_failed")
+            WorkerError::with_detail("worker_failed", Some(self.stderr_tail())).into()
         }
+    }
+    fn stderr_tail(&self) -> String {
+        let stderr = self
+            .stderr
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let start = stderr.len().saturating_sub(4096);
+        String::from_utf8_lossy(&stderr[start..]).into_owned()
     }
     fn capability(&mut self) -> Result<Capability> {
         self.request = self
@@ -410,6 +439,7 @@ impl Worker {
     }
     pub fn invoke_with(
         &mut self,
+        function: &str,
         mut input: Input,
         budget: &impl ExecutionBudget,
         callback: &mut dyn FnMut(&str, Value) -> std::result::Result<Value, String>,
@@ -426,6 +456,7 @@ impl Worker {
         let capability = self.capability()?;
         let message = ParentMessage::Invoke {
             capability: capability.clone(),
+            function: function.to_owned(),
             input,
         };
         let body: Arc<dyn crate::RequestBody> = Arc::new(Mutex::new(BufferedBody {
@@ -436,6 +467,7 @@ impl Worker {
     }
     pub fn invoke_with_body(
         &mut self,
+        function: &str,
         input: Input,
         body: Arc<dyn crate::RequestBody>,
         budget: &impl ExecutionBudget,
@@ -452,6 +484,7 @@ impl Worker {
         let capability = self.capability()?;
         let message = ParentMessage::Invoke {
             capability: capability.clone(),
+            function: function.to_owned(),
             input,
         };
         self.execute(message, capability, body, budget, callback)
@@ -592,9 +625,11 @@ impl Worker {
                     ChildMessage::Failure {
                         capability: Some(received),
                         code,
+                        detail,
                     } if received == capability => {
                         self.synchronized = true;
-                        return Err(fail(native_error.as_deref().unwrap_or(&code)));
+                        let code = native_error.as_deref().unwrap_or(&code);
+                        return Err(WorkerError::with_detail(code, detail).into());
                     }
                     _ => return Err(fail("worker_protocol_error")),
                 }

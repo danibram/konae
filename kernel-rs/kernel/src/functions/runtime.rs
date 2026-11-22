@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     path::{Path, PathBuf},
     sync::{
@@ -340,10 +340,17 @@ impl Lease {
                     progress.cold = true;
                     progress.initialization_started = Some(started);
                 }
+                let primary = bundle_dir.join(format!("{function}.mjs"));
+                let source_path = if primary.exists() {
+                    primary
+                } else {
+                    bundle_dir.join(format!("{function}.js"))
+                };
+                let source = std::fs::read_to_string(source_path)?;
+                let bundles = BTreeMap::from([(function.to_owned(), source)]);
                 let spawned = Worker::spawn_with_policy(
                     &self.config.executable,
-                    function,
-                    bundle_dir,
+                    &bundles,
                     budget,
                     WorkerLimits::default(),
                     self.config.policy.clone(),
@@ -366,8 +373,8 @@ impl Lease {
             self.progress.lock().unwrap().execution_started = Some(started);
             let worker = self.worker.as_mut().unwrap();
             let result = match body {
-                Some(body) => worker.invoke_with_body(input, body, budget, callback),
-                None => worker.invoke_with(input, budget, callback),
+                Some(body) => worker.invoke_with_body(function, input, body, budget, callback),
+                None => worker.invoke_with(function, input, budget, callback),
             };
             execution = started.elapsed();
             let output = result?;

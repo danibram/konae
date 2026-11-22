@@ -7,6 +7,7 @@ use konae_functions_executor::{
 };
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     io::{self, Read},
     sync::{
         Arc, Mutex,
@@ -370,15 +371,14 @@ pub fn worker_main() -> Result<()> {
 
     let ParentMessage::Init {
         abi,
-        function,
-        source,
+        bundles,
         generation,
         limits,
     } = protocol::read(&mut input)?
     else {
         return Err(anyhow!("init_required"));
     };
-    if let Err(code) = validate_init(&abi, &limits, &source) {
+    if let Err(code) = validate_init(&abi, &limits, &bundles) {
         return worker_start_failure(code);
     }
 
@@ -433,10 +433,14 @@ pub fn worker_main() -> Result<()> {
 
     while let Ok(command) = command_rx.recv() {
         match command {
-            ParentMessage::Invoke { capability, input } => {
+            ParentMessage::Invoke { capability, function, input } => {
                 if capability.generation != generation {
                     return Err(anyhow!("generation_mismatch"));
                 }
+                let Some(source) = bundles.get(&function) else {
+                    send_invocation_result(&bridge, capability, Err(anyhow!("invalid_function_name")))?;
+                    continue;
+                };
                 drop(last_runtime.take());
                 bridge.begin(capability.clone());
                 let (result, completed_runtime) = match executor.block_on(Runtime::new(
@@ -447,7 +451,8 @@ pub fn worker_main() -> Result<()> {
                 )) {
                     Ok(mut runtime) => {
                         let result = executor.block_on(runtime.invoke(input, capability.clone()));
-                        let completed = result.is_ok();
+                        let completed = result.is_ok()
+                            || result.as_ref().is_err_and(|error| error_code(error) == "handler_error");
                         (result, completed.then_some(runtime))
                     }
                     Err(error) => (Err(error), None),
@@ -508,12 +513,14 @@ fn send_invocation_result(
             code: bridge
                 .error()
                 .unwrap_or_else(|| error_code(&error).to_owned()),
+            detail: executor::error_detail(&error).map(str::to_owned),
         },
         _ => ChildMessage::Failure {
             capability: Some(capability),
             code: bridge
                 .error()
                 .unwrap_or_else(|| "worker_execution_failed".into()),
+            detail: None,
         },
     };
     bridge.send(&reply)?;
@@ -526,16 +533,22 @@ fn worker_start_failure(code: &str) -> Result<()> {
         &ChildMessage::Failure {
             capability: None,
             code: code.into(),
+            detail: None,
         },
     );
     Err(executor::WorkerError::new(code).into())
 }
 
-fn validate_init(abi: &str, limits: &WorkerLimits, source: &str) -> Result<(), &'static str> {
+fn validate_init(abi: &str, limits: &WorkerLimits, bundles: &BTreeMap<String, String>) -> Result<(), &'static str> {
     if abi != protocol::ABI {
         return Err("worker_protocol_mismatch");
     }
-    if !limits.validate() || source.len() > protocol::MAX_SOURCE_BYTES {
+    let total = bundles.values().map(String::len).sum::<usize>();
+    if !limits.validate() || bundles.is_empty() || total > protocol::MAX_SOURCE_BYTES
+        || bundles.iter().any(|(name, source)| name.is_empty() || name.len() > 64
+            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            || source.len() > 1024 * 1024)
+    {
         return Err("invalid_init");
     }
     Ok(())

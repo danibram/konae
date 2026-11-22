@@ -302,8 +302,19 @@ impl Runtime {
             self.bridge.record_error("pending_work");
             return Err(anyhow!("pending_work"));
         }
-        let text = result?;
-        serde_json::from_str(&text).map_err(Into::into)
+        let text = match result {
+            Ok(text) => text,
+            Err(error) if self.bridge.error().is_none() => {
+                return Err(WorkerError::with_detail(
+                    "handler_error",
+                    Some(format!("{error:#}")),
+                ).into());
+            }
+            Err(error) => return Err(error),
+        };
+        serde_json::from_str(&text).map_err(|error| {
+            WorkerError::with_detail("handler_error", Some(error.to_string())).into()
+        })
     }
     pub async fn spin(&mut self, _capability: Capability) -> Result<Output> {
         let result = self
