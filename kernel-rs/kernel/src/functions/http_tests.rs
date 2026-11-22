@@ -1353,8 +1353,9 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     }
     if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
         let pressure = get("/pressure", &accounts[0].0).send().await.unwrap();
-        assert_eq!(pressure.status(), StatusCode::BAD_GATEWAY);
+        let status = pressure.status();
         let failure: Value = pressure.json().await.unwrap();
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{failure}");
         assert_eq!(failure["code"], "worker_memory_limit", "{failure}");
         let recovered = get("", &accounts[0].0).send().await.unwrap();
         assert_eq!(recovered.status(), StatusCode::OK);

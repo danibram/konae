@@ -94,8 +94,14 @@ jobs:
                   KONAE_TEST_FUNCTION_WORKER="$RUNNER_BIN" KONAE_TEST_FUNCTION_CGROUP="$cg/delegated" \
                   "$TEST_BINARY" "$@" --ignored --test-threads=1
               }
-              run_tests real_
-              run_tests functions_export_import_executes_the_published_bundle_with_imported_identity
+              diagnose() {
+                echo "::group::kernel log after the failure"
+                dmesg --time-format iso 2>/dev/null | grep -i -E "oom|killed process|memory cgroup" | tail -n 30 || true
+                echo "::endgroup::"
+                exit 1
+              }
+              run_tests real_ || diagnose
+              run_tests functions_export_import_executes_the_published_bundle_with_imported_identity || diagnose
             '
       - name: Build and run an exported function folder, then deny Landlock
         run: scripts/test-exported-functions-compose.sh
