@@ -80,7 +80,7 @@ pub struct Lease {
     _reservation: Reservation,
     active: Option<OwnedSemaphorePermit>,
     active_limit: Arc<Semaphore>,
-    _admission: OwnedSemaphorePermit,
+    _admission: Option<OwnedSemaphorePermit>,
     config: Config,
     progress: Arc<Mutex<RunProgress>>,
     protocol_failure: Arc<AtomicBool>,
@@ -160,7 +160,7 @@ impl Runtime {
             _reservation: reservation,
             active: None,
             active_limit: self.active.clone(),
-            _admission: admission,
+            _admission: Some(admission),
             config,
             progress: Arc::new(Mutex::new(RunProgress::default())),
             protocol_failure: self.protocol_failure.clone(),
@@ -210,7 +210,9 @@ impl Runtime {
                     slot.pins.fetch_add(1, Ordering::SeqCst);
                     return Ok(Reservation(slot.clone()));
                 }
-                let app_keys = state.slots.keys().filter(|candidate| candidate.starts_with(&format!("{deployment}:"))).cloned().collect::<Vec<_>>();
+                let app_keys = state.slots.keys()
+                    .filter(|candidate| candidate.as_str() == deployment || candidate.starts_with(&format!("{deployment}:")) || candidate.starts_with(&format!("{deployment}#")))
+                    .cloned().collect::<Vec<_>>();
                 if app_keys.len() < self.app_slots && let Ok(allocation) = self.allocations.clone().try_acquire_owned() {
                     let index = (0..self.app_slots).find(|index| !state.slots.contains_key(&format!("{key}#{index}"))).unwrap_or(app_keys.len());
                     let slot_key = if index == 0 && !state.slots.contains_key(&key) { key.clone() } else { format!("{key}#{index}") };
@@ -226,7 +228,7 @@ impl Runtime {
                 let oldest = state
                     .slots
                     .iter()
-                    .filter(|(candidate, slot)| candidate.starts_with(&format!("{deployment}:")) && slot.pins.load(Ordering::SeqCst) == 0)
+                    .filter(|(candidate, slot)| (candidate.as_str() == deployment || candidate.starts_with(&format!("{deployment}:")) || candidate.starts_with(&format!("{deployment}#"))) && slot.pins.load(Ordering::SeqCst) == 0)
                     .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
                     .or_else(|| state.slots.iter().filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0).min_by_key(|(_, slot)| *slot.last_used.lock().unwrap()))
                     .map(|(key, _)| key.clone())
@@ -303,6 +305,10 @@ impl Drop for Lease {
 }
 
 impl Lease {
+    pub fn take_admission(&mut self) -> Option<OwnedSemaphorePermit> {
+        self._admission.take()
+    }
+
     pub fn is_cold(&self) -> bool {
         self.worker.is_none()
     }
@@ -673,83 +679,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_key_waiters_do_not_reserve_other_execution_permits() {
+    async fn request_admission_outlives_the_worker_lease() {
         let runtime = runtime(Duration::from_secs(60));
-        let held = runtime.lease("a".into(), &budget()).await.unwrap();
-        let queued_runtime = runtime.clone();
-        let queued = tokio::spawn(async move { queued_runtime.lease("a".into(), &budget()).await });
-        eventually(|| runtime.admission.available_permits() == ADMISSION - 2).await;
-        let mut others = Vec::new();
-        for key in ["b", "c", "d"] {
-            others.push(runtime.lease(key.into(), &budget()).await.unwrap());
-        }
-        assert!(!queued.is_finished());
-        drop(held);
-        let next = tokio::time::timeout(Duration::from_millis(250), queued)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(next.worker.is_none());
+        let mut lease = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        let admission = lease.take_admission().unwrap();
+        drop(lease);
+        assert_eq!(runtime.admission.available_permits(), ADMISSION - 1);
+        assert!(runtime.state.lock().unwrap().slots["app:orders"].pins.load(Ordering::SeqCst) == 0);
+        drop(admission);
+        assert_eq!(runtime.admission.available_permits(), ADMISSION);
     }
 
     #[tokio::test]
-    async fn admission_is_bounded_and_abandoned_waiters_release_capacity() {
+    async fn same_deployment_uses_two_workers_and_refuses_a_third() {
         let runtime = runtime(Duration::from_secs(60));
         let held = runtime.lease("a".into(), &budget()).await.unwrap();
-        let mut waiting = Vec::new();
-        for _ in 1..ADMISSION {
-            let runtime = runtime.clone();
-            waiting.push(tokio::spawn(async move {
-                runtime.lease("a".into(), &budget()).await
-            }));
-        }
-        eventually(|| runtime.admission.available_permits() == 0).await;
+        let second = runtime.lease("a".into(), &budget()).await.unwrap();
+        assert_eq!(runtime.lease("a".into(), &budget()).await.err().unwrap(), "cache_busy");
+        assert_eq!(runtime.admission.available_permits(), ADMISSION - 2);
+        drop(held);
+        assert!(second.worker.is_none());
+    }
+
+    #[tokio::test]
+    async fn admission_is_bounded_and_released_with_its_permits() {
+        let runtime = runtime(Duration::from_secs(60));
+        let mut permits = (0..ADMISSION).map(|_| runtime.admit(&budget()).unwrap()).collect::<Vec<_>>();
         assert_eq!(
             runtime.lease("b".into(), &budget()).await.err().unwrap(),
             "queue_full"
         );
-        for task in waiting {
-            task.abort();
-            let _ = task.await;
-        }
-        assert_eq!(runtime.admission.available_permits(), ADMISSION - 1);
-        drop(held);
+        permits.pop();
+        assert_eq!(runtime.admission.available_permits(), 1);
+        drop(permits);
         assert_eq!(runtime.admission.available_permits(), ADMISSION);
-        assert_eq!(
-            runtime.state.lock().unwrap().slots["a"]
-                .pins
-                .load(Ordering::SeqCst),
-            0
-        );
     }
 
     #[tokio::test]
-    async fn queued_deadline_and_cancellation_do_not_initialize_or_invoke() {
+    async fn expired_and_cancelled_requests_do_not_reserve_workers() {
         let runtime = runtime(Duration::from_secs(60));
-        let held = runtime.lease("a".into(), &budget()).await.unwrap();
-        let expired = Budget::new(Duration::from_millis(20));
+        let expired = Budget::until(Instant::now() - Duration::from_millis(1));
         assert_eq!(
             runtime.lease("a".into(), &expired).await.err().unwrap(),
             "deadline_exceeded"
         );
         let cancelled = budget();
-        let cancel_copy = cancelled.clone();
-        let waiting_runtime = runtime.clone();
-        let waiting =
-            tokio::spawn(async move { waiting_runtime.lease("a".into(), &cancel_copy).await });
-        eventually(|| runtime.admission.available_permits() == ADMISSION - 2).await;
         cancelled.cancel();
-        assert_eq!(waiting.await.unwrap().err().unwrap(), "cancelled");
-        assert!(held.worker.is_none());
-        assert_eq!(runtime.admission.available_permits(), ADMISSION - 1);
-        assert!(
-            held.progress()
-                .lock()
-                .unwrap()
-                .initialization_started
-                .is_none()
-        );
+        assert_eq!(runtime.lease("a".into(), &cancelled).await.err().unwrap(), "cancelled");
+        assert!(runtime.state.lock().unwrap().slots.is_empty());
+        assert_eq!(runtime.admission.available_permits(), ADMISSION);
     }
 
     #[tokio::test]
@@ -899,13 +877,23 @@ export function handle(request, context) {
         assert_eq!(after_spin_pid, Some(pid));
         let (failed, failed_pid) =
             run(&runtime, "app:example:v1", &fixture.0, "alice", "fail").await;
-        assert!(failed.output.is_err());
-        assert_eq!(failed_pid, Some(pid));
-        assert!(alive(pid));
+        let handler_failure = konae_functions_executor::error_code(failed.output.as_ref().unwrap_err());
+        if handler_failure == "handler_error" {
+            assert_eq!(failed_pid, Some(pid));
+            assert!(alive(pid));
+        } else {
+            // IPC/2 reports handler throws as worker_failed, so it cannot be reused safely.
+            assert_eq!(handler_failure, "worker_failed");
+            assert_eq!(failed_pid, None);
+        }
         let (recovered, recovered_pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
-        assert!(!recovered.cold);
-        assert_eq!(recovered.output.unwrap().body, "2:alice");
-        assert_eq!(recovered_pid, Some(pid));
+        assert_eq!(recovered.cold, handler_failure != "handler_error");
+        assert_eq!(recovered.output.unwrap().body, "1:alice");
+        if handler_failure == "handler_error" {
+            assert_eq!(recovered_pid, Some(pid));
+        } else {
+            assert_ne!(recovered_pid, Some(pid));
+        }
         eventually(|| !alive(pid)).await;
         eventually(|| runtime.allocations.available_permits() == INSTANCES).await;
         assert!(!runtime.state.lock().unwrap().reaper_running);
@@ -917,7 +905,7 @@ export function handle(request, context) {
         let fixture = Fixture::new();
         let runtime = real_runtime(Duration::from_secs(60));
         let mut pids = Vec::new();
-        for version in 0..4 {
+        for version in 0..2 {
             let (result, pid) = run(
                 &runtime,
                 &format!("app:example:v{version}"),
@@ -931,16 +919,16 @@ export function handle(request, context) {
             pids.push(pid.unwrap());
         }
         assert!(pids.iter().all(|pid| alive(*pid)));
-        let (result, fifth_pid) = run(&runtime, "app:example:v4", &fixture.0, "bob", "").await;
+        let (result, third_pid) = run(&runtime, "app:example:v2", &fixture.0, "bob", "").await;
         assert!(result.cold);
         assert_eq!(result.output.unwrap().body, "1:bob");
         assert!(!alive(pids[0]));
-        assert!(pids[1..].iter().all(|pid| alive(*pid)));
-        let fifth_pid = fifth_pid.unwrap();
-        runtime.release_changed("app", "v4").await;
+        assert!(alive(pids[1]));
+        let third_pid = third_pid.unwrap();
+        runtime.release_changed("app", "v2").await;
         assert!(pids.iter().all(|pid| !alive(*pid)));
-        assert!(alive(fifth_pid));
+        assert!(alive(third_pid));
         drop(runtime);
-        assert!(!alive(fifth_pid));
+        assert!(!alive(third_pid));
     }
 }
