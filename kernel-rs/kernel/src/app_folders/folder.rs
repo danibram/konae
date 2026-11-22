@@ -72,6 +72,11 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let dist_digest = version_of(&dist);
     let server_artifact = crate::functions::read_artifact(&layout::server(root, id))?;
     let server = crate::functions::validate_artifact(server_artifact.as_ref().map(|a| &a.manifest), server_artifact.as_ref())?;
+    if server.as_ref().is_some_and(|published| !published.manifest.functions.is_empty())
+        && std::env::var_os("KONAE_FUNCTIONS_RUNNER").is_none()
+    {
+        eprintln!("konae: app {id} publishes server functions, but KONAE_FUNCTIONS_RUNNER is unset. Set it to the functions runner executable to serve function requests.");
+    }
     let server_changed = released.as_ref().is_some_and(|r| r.server != server);
     let rebuilt = server_changed || released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
     let candidate_sources = state.execution_mode.is_test();

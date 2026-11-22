@@ -118,6 +118,8 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
 
     The export fills `KONAE_KERNEL_IMAGE` with `ghcr.io/danibram/konae-kernel:<the version in konae.json>`. Add a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start. To run a checkout's Kernel instead, build it from the Konae checkout, then set `KONAE_KERNEL_IMAGE=konae-kernel:local` in the exported folder's `.env`.
 
+    If the published app has functions, the export also sets the packaged runner, worker identity and cgroup path in `.env.example` and `compose.yaml`. The entrypoint prepares the writable cgroup v2 subtree before starting the Kernel. The container needs cgroup v2 with the `memory` and `pids` controllers available.
+
     ```sh
     scripts/build-functions-runner.sh <amd64|arm64> .konae/functions-runner
     docker buildx build --build-context functions-runner=.konae/functions-runner \
@@ -132,7 +134,7 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
     docker compose logs kernel
     ```
 
-    With the example settings the app answers at `http://<slug>.localhost:8787`. `KONAE_PORT` and `KONAE_PUBLIC_ORIGIN` in `.env` change the port.
+    With the example settings the app answers at `http://<slug>.localhost:8787`. `KONAE_PORT` and `KONAE_PUBLIC_ORIGIN` in `.env` change the port. A function app's routes run through the runner in the matching Kernel image after `docker compose up -d`.
 
 The Kernel runs as the person who owns the folder, so the files it writes into it stay theirs.
 
