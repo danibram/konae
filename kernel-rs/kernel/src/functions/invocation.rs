@@ -1,5 +1,5 @@
-use crate::{ActionProgram, refusal::Refusal};
 use super::Function;
+use crate::{ActionProgram, refusal::Refusal};
 use konae_functions_executor::{Budget, BudgetError, MutationOutcomeState, Output};
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
@@ -618,67 +618,6 @@ impl Drop for RequestConnection {
 fn normalize_sql(sql: &str) -> String {
     sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
-pub fn request_fingerprint(
-    method: &str,
-    path: &str,
-    body: &[u8],
-    headers: &[(String, String)],
-) -> Result<String> {
-    let mut canonical: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut bytes = 0usize;
-    if headers.len() > MAX_HEADERS {
-        return Err(Failure::new(
-            "invalid_input",
-            400,
-            "The function request has too many headers.",
-        ));
-    }
-    for (name, value) in headers {
-        bytes = bytes.saturating_add(name.len()).saturating_add(value.len());
-        if bytes > MAX_RESPONSE_HEADER_BYTES
-            || axum::http::HeaderName::from_bytes(name.as_bytes()).is_err()
-            || axum::http::HeaderValue::from_str(value).is_err()
-        {
-            return Err(Failure::new(
-                "invalid_input",
-                400,
-                "The function request has invalid headers.",
-            ));
-        }
-        let name = name.to_ascii_lowercase();
-        if [
-            "cookie",
-            "authorization",
-            "proxy-authorization",
-            "idempotency-key",
-            "host",
-        ]
-        .contains(&name.as_str())
-        {
-            continue;
-        }
-        canonical
-            .entry(name)
-            .or_default()
-            .push(value.trim_matches([' ', '\t']).to_owned());
-    }
-    let mut digest = Sha256::new();
-    digest.update(b"konae-function-request-v2");
-    for part in [method.as_bytes(), path.as_bytes(), body] {
-        digest.update((part.len() as u64).to_be_bytes());
-        digest.update(part);
-    }
-    digest.update((canonical.len() as u64).to_be_bytes());
-    for (name, values) in canonical {
-        let value = values.join(", ");
-        for part in [name.as_bytes(), value.as_bytes()] {
-            digest.update((part.len() as u64).to_be_bytes());
-            digest.update(part);
-        }
-    }
-    Ok(hex::encode(digest.finalize()))
-}
-
 pub fn request_fingerprint_v3(
     method: &str,
     path: &str,

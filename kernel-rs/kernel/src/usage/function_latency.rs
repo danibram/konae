@@ -41,6 +41,8 @@ pub struct FunctionTiming {
     pub cold: bool,
     pub timed_out: bool,
     pub outcome: FunctionOutcome,
+    pub error_code: Option<String>,
+    pub error_detail: Option<String>,
 }
 
 impl FunctionTiming {
@@ -49,6 +51,8 @@ impl FunctionTiming {
             && self.name.len() <= 64
             && !self.version.is_empty()
             && self.version.len() <= 128
+            && self.error_code.as_ref().is_none_or(|value| !value.is_empty() && value.len() <= 64)
+            && self.error_detail.as_ref().is_none_or(|value| value.len() <= 4096)
             && self.budget >= Duration::from_millis(1)
             && [
                 self.budget,
@@ -69,18 +73,25 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
             name TEXT NOT NULL, version TEXT NOT NULL, budget_us INTEGER NOT NULL,
             total_us INTEGER NOT NULL, queue_us INTEGER NOT NULL,
             initialization_us INTEGER NOT NULL, execution_us INTEGER NOT NULL,
-            cold INTEGER NOT NULL, timed_out INTEGER NOT NULL, outcome TEXT NOT NULL
+            cold INTEGER NOT NULL, timed_out INTEGER NOT NULL, outcome TEXT NOT NULL,
+            error_code TEXT, error_detail TEXT
         );
         CREATE INDEX IF NOT EXISTS function_latency_by_time ON function_latency(at);",
     )?;
+    let mut columns = db.prepare("PRAGMA table_info(function_latency)")?;
+    let names = columns.query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+    drop(columns);
+    if !names.contains("error_code") { db.execute("ALTER TABLE function_latency ADD COLUMN error_code TEXT", [])?; }
+    if !names.contains("error_detail") { db.execute("ALTER TABLE function_latency ADD COLUMN error_detail TEXT", [])?; }
     Ok(())
 }
 
 pub(super) fn write(db: &Connection, at: u64, sample: &FunctionTiming) -> Result<()> {
     db.execute(
         "INSERT INTO function_latency(at,name,version,budget_us,total_us,queue_us,
-          initialization_us,execution_us,cold,timed_out,outcome)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+          initialization_us,execution_us,cold,timed_out,outcome,error_code,error_detail)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         params![
             at as i64,
             sample.name,
@@ -92,7 +103,9 @@ pub(super) fn write(db: &Connection, at: u64, sample: &FunctionTiming) -> Result
             sample.execution.as_micros() as i64,
             sample.cold,
             sample.timed_out,
-            sample.outcome.name()
+            sample.outcome.name(),
+            sample.error_code.as_deref().map(|value| super::truncate(value, 64)),
+            sample.error_detail.as_deref().map(|value| super::truncate(value, 4096))
         ],
     )?;
     Ok(())
@@ -144,6 +157,7 @@ struct Group {
     unknown: u64,
     replays: u64,
     last_at: i64,
+    errors: Vec<Value>,
 }
 
 fn percentiles(values: &mut [i64]) -> Value {
@@ -172,12 +186,22 @@ pub(super) fn read(path: &std::path::Path, from: i64, to: i64) -> Result<Value> 
         .ok();
     let retained_from: Option<i64> =
         db.query_row("SELECT MIN(at) FROM function_latency", [], |row| row.get(0))?;
+    let columns = {
+        let mut query = db.prepare("PRAGMA table_info(function_latency)")?;
+        query.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?
+    };
+    let error_fields = if columns.contains("error_code") && columns.contains("error_detail") {
+        "substr(error_code,1,64),substr(error_detail,1,4096)"
+    } else {
+        "NULL,NULL"
+    };
     let mut groups: BTreeMap<(String, String, i64), Group> = BTreeMap::new();
-    let mut query = db.prepare(
+    let mut query = db.prepare(&format!(
         "SELECT substr(name,1,64),substr(version,1,128),budget_us,total_us,
-        queue_us,initialization_us,execution_us,cold,timed_out,substr(outcome,1,32),at
-        FROM function_latency WHERE at >= ?1 AND at < ?2 ORDER BY id DESC LIMIT ?3",
-    )?;
+        queue_us,initialization_us,execution_us,cold,timed_out,substr(outcome,1,32),at,
+        {error_fields} FROM function_latency WHERE at >= ?1 AND at < ?2 ORDER BY id DESC LIMIT ?3"
+    ))?;
     let mut rows = query.query(params![from, to, MAX_SAMPLES])?;
     while let Some(row) = rows.next()? {
         let budget: i64 = row.get(2)?;
@@ -196,6 +220,11 @@ pub(super) fn read(path: &std::path::Path, from: i64, to: i64) -> Result<Value> 
         group.unknown += u64::from(outcome == "mutation_outcome_unknown");
         group.replays += u64::from(outcome == "replayed");
         group.last_at = group.last_at.max(row.get(10)?);
+        if let Some(code) = row.get::<_, Option<String>>(11)? {
+            if group.errors.len() < 5 {
+                group.errors.push(json!({"code": code, "detail": row.get::<_, Option<String>>(12)?}));
+            }
+        }
     }
     let mut series: Vec<Value> = groups
         .into_iter()
@@ -207,7 +236,8 @@ pub(super) fn read(path: &std::path::Path, from: i64, to: i64) -> Result<Value> 
             "budgetP95Percent": total["p95Ms"].as_f64().unwrap() * 100_000.0 / budget as f64,
             "total": total, "queue": percentiles(&mut group.queue),
             "initialization": percentiles(&mut group.initialization),
-            "execution": percentiles(&mut group.execution), "lastAt": group.last_at})
+            "execution": percentiles(&mut group.execution), "lastAt": group.last_at,
+            "errors": group.errors})
         })
         .collect();
     series.sort_by_key(|row| std::cmp::Reverse(row["lastAt"].as_i64().unwrap_or(0)));
@@ -254,6 +284,8 @@ mod tests {
             cold: false,
             timed_out: false,
             outcome: FunctionOutcome::Ok,
+            error_code: None,
+            error_detail: None,
         }
     }
 
@@ -287,6 +319,8 @@ mod tests {
         cold.initialization = Duration::from_millis(90);
         cold.timed_out = true;
         cold.outcome = FunctionOutcome::DeadlineExceeded;
+        cold.error_code = Some("deadline_exceeded".into());
+        cold.error_detail = Some("request exceeded its deadline".into());
         let mut next = timing(20);
         next.version = "version-b".into();
         let mut new_limit = timing(30);
@@ -306,6 +340,8 @@ mod tests {
         assert_eq!(groups[2]["timeouts"], 1);
         assert_eq!(groups[2]["coldStarts"], 1);
         assert_eq!(groups[2]["budgetP95Percent"], 110.0);
+        assert_eq!(groups[2]["errors"][0]["code"], "deadline_exceeded");
+        assert_eq!(groups[2]["errors"][0]["detail"], "request exceeded its deadline");
     }
 
     #[test]

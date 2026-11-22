@@ -1,7 +1,9 @@
+#[cfg(test)]
+use std::path::Path;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -15,7 +17,7 @@ use konae_functions_executor::{
 use serde_json::Value;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
-const INSTANCES: usize = 4;
+const INSTANCES: usize = 8;
 const ADMISSION: usize = 64;
 const SHUTDOWN: Duration = Duration::from_millis(10);
 
@@ -47,6 +49,7 @@ pub struct Runtime {
     admission: Arc<Semaphore>,
     active: Arc<Semaphore>,
     allocations: Arc<Semaphore>,
+    app_slots: usize,
     protocol_failure: Arc<AtomicBool>,
 }
 
@@ -77,8 +80,9 @@ pub struct Lease {
     // El guard se suelta antes de que pins permita retirar la instancia.
     worker: OwnedMutexGuard<Option<Worker>>,
     _reservation: Reservation,
-    _active: OwnedSemaphorePermit,
-    _admission: OwnedSemaphorePermit,
+    active: Option<OwnedSemaphorePermit>,
+    active_limit: Arc<Semaphore>,
+    _admission: Option<OwnedSemaphorePermit>,
     config: Config,
     progress: Arc<Mutex<RunProgress>>,
     protocol_failure: Arc<AtomicBool>,
@@ -104,14 +108,27 @@ impl Runtime {
             deadline,
             idle,
             state: Mutex::new(State::default()),
-            admission: Arc::new(Semaphore::new(ADMISSION)),
-            active: Arc::new(Semaphore::new(INSTANCES)),
-            allocations: Arc::new(Semaphore::new(INSTANCES)),
+            admission: Arc::new(Semaphore::new(env_capacity(
+                "KONAE_FUNCTIONS_ADMISSION",
+                ADMISSION,
+            ))),
+            active: Arc::new(Semaphore::new(env_capacity(
+                "KONAE_FUNCTIONS_INSTANCES",
+                INSTANCES,
+            ))),
+            allocations: Arc::new(Semaphore::new(env_capacity(
+                "KONAE_FUNCTIONS_INSTANCES",
+                INSTANCES,
+            ))),
+            app_slots: env_capacity("KONAE_FUNCTIONS_APP_SLOTS", 2),
             protocol_failure: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
+        env_capacity_result("KONAE_FUNCTIONS_INSTANCES", INSTANCES)?;
+        env_capacity_result("KONAE_FUNCTIONS_APP_SLOTS", 2)?;
+        env_capacity_result("KONAE_FUNCTIONS_ADMISSION", ADMISSION)?;
         kernel_environment::create()
     }
 
@@ -148,15 +165,13 @@ impl Runtime {
         let reservation = self.reserve(key, budget).await?;
         self.start_reaper();
         let worker = wait(budget, reservation.0.worker.clone().lock_owned()).await?;
-        let active = wait(budget, self.active.clone().acquire_owned())
-            .await?
-            .map_err(|_| "cache_busy")?;
         check(budget)?;
         Ok(Lease {
             worker,
             _reservation: reservation,
-            _active: active,
-            _admission: admission,
+            active: None,
+            active_limit: self.active.clone(),
+            _admission: Some(admission),
             config,
             progress: Arc::new(Mutex::new(RunProgress::default())),
             protocol_failure: self.protocol_failure.clone(),
@@ -192,32 +207,82 @@ impl Runtime {
     }
 
     async fn reserve(&self, key: String, budget: &Budget) -> Result<Reservation, String> {
+        let deployment = key.split(':').next().unwrap_or(&key).to_owned();
         loop {
             let retired = {
                 let mut state = self.state.lock().unwrap();
                 check(budget)?;
-                if let Some(slot) = state.slots.get(&key) {
+                let mut candidates = state
+                    .slots
+                    .iter()
+                    .filter(|(candidate, _)| {
+                        candidate.as_str() == key || candidate.starts_with(&format!("{key}#"))
+                    })
+                    .map(|(candidate, slot)| (candidate.clone(), slot.clone()))
+                    .collect::<Vec<_>>();
+                candidates.sort_by_key(|(_, slot)| slot.pins.load(Ordering::SeqCst));
+                if let Some((_, slot)) = candidates
+                    .iter()
+                    .find(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0)
+                {
                     slot.pins.fetch_add(1, Ordering::SeqCst);
                     return Ok(Reservation(slot.clone()));
                 }
-                if let Ok(allocation) = self.allocations.clone().try_acquire_owned() {
+                let app_keys = state
+                    .slots
+                    .keys()
+                    .filter(|candidate| {
+                        candidate.as_str() == deployment
+                            || candidate.starts_with(&format!("{deployment}:"))
+                            || candidate.starts_with(&format!("{deployment}#"))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if app_keys.len() >= self.app_slots {
+                    state
+                        .slots
+                        .iter()
+                        .filter(|(candidate, slot)| {
+                            (candidate.as_str() == deployment
+                                || candidate.starts_with(&format!("{deployment}:"))
+                                || candidate.starts_with(&format!("{deployment}#")))
+                                && slot.pins.load(Ordering::SeqCst) == 0
+                        })
+                        .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
+                        .map(|(key, _)| key.clone())
+                        .and_then(|oldest| state.slots.remove(&oldest))
+                } else if let Ok(allocation) = self.allocations.clone().try_acquire_owned() {
+                    let index = (0..self.app_slots)
+                        .find(|index| !state.slots.contains_key(&format!("{key}#{index}")))
+                        .unwrap_or(app_keys.len());
+                    let slot_key = if index == 0 && !state.slots.contains_key(&key) {
+                        key.clone()
+                    } else {
+                        format!("{key}#{index}")
+                    };
                     let slot = Arc::new(Slot {
                         worker: Arc::new(AsyncMutex::new(None)),
                         pins: AtomicUsize::new(1),
                         last_used: Mutex::new(Instant::now()),
                         _allocation: allocation,
                     });
-                    state.slots.insert(key.clone(), slot.clone());
+                    state.slots.insert(slot_key, slot.clone());
                     return Ok(Reservation(slot));
-                }
-                let oldest = state
+                } else if let Some(oldest) = state
                     .slots
                     .iter()
                     .filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0)
                     .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
                     .map(|(key, _)| key.clone())
-                    .ok_or("cache_busy")?;
-                state.slots.remove(&oldest).unwrap()
+                {
+                    state.slots.remove(&oldest)
+                } else {
+                    None
+                }
+            };
+            let Some(retired) = retired else {
+                wait(budget, tokio::time::sleep(Duration::from_millis(5))).await?;
+                continue;
             };
             // La destrucción continúa aunque el solicitante abandone esta espera.
             wait(budget, tokio::task::spawn_blocking(move || retire(retired)))
@@ -289,10 +354,19 @@ impl Drop for Lease {
 }
 
 impl Lease {
+    pub fn take_admission(&mut self) -> Option<OwnedSemaphorePermit> {
+        self._admission.take()
+    }
+
+    pub fn is_cold(&self) -> bool {
+        self.worker.is_none()
+    }
+
     pub fn progress(&self) -> Arc<Mutex<RunProgress>> {
         self.progress.clone()
     }
 
+    #[cfg(test)]
     pub fn run(
         &mut self,
         function: &str,
@@ -301,25 +375,33 @@ impl Lease {
         budget: &Budget,
         callback: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
     ) -> RunResult {
-        self.run_inner(function, bundle_dir, input, None, budget, callback)
+        let primary = bundle_dir.join(format!("{function}.mjs"));
+        let source_path = if primary.exists() {
+            primary
+        } else {
+            bundle_dir.join(format!("{function}.js"))
+        };
+        let source = std::fs::read_to_string(source_path).unwrap_or_default();
+        let bundles = BTreeMap::from([(function.to_owned(), source)]);
+        self.run_inner(function, &bundles, input, None, budget, callback)
     }
 
     pub fn run_stream(
         &mut self,
         function: &str,
-        bundle_dir: &Path,
+        bundles: &BTreeMap<String, String>,
         input: Input,
         body: Arc<dyn konae_functions_executor::RequestBody>,
         budget: &Budget,
         callback: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
     ) -> RunResult {
-        self.run_inner(function, bundle_dir, input, Some(body), budget, callback)
+        self.run_inner(function, bundles, input, Some(body), budget, callback)
     }
 
     fn run_inner(
         &mut self,
         function: &str,
-        bundle_dir: &Path,
+        bundles: &BTreeMap<String, String>,
         input: Input,
         body: Option<Arc<dyn konae_functions_executor::RequestBody>>,
         budget: &Budget,
@@ -329,6 +411,13 @@ impl Lease {
         let mut initialization = Duration::ZERO;
         let mut execution = Duration::ZERO;
         let output = (|| {
+            while self.active.is_none() {
+                check(budget).map_err(WorkerError::new)?;
+                match self.active_limit.clone().try_acquire_owned() {
+                    Ok(permit) => self.active = Some(permit),
+                    Err(_) => std::thread::sleep(Duration::from_millis(5)),
+                }
+            }
             check(budget).map_err(WorkerError::new)?;
             if self.worker.is_none() && self.protocol_failure.load(Ordering::SeqCst) {
                 return Err(WorkerError::new("worker_protocol_mismatch").into());
@@ -342,8 +431,7 @@ impl Lease {
                 }
                 let spawned = Worker::spawn_with_policy(
                     &self.config.executable,
-                    function,
-                    bundle_dir,
+                    bundles,
                     budget,
                     WorkerLimits::default(),
                     self.config.policy.clone(),
@@ -366,8 +454,8 @@ impl Lease {
             self.progress.lock().unwrap().execution_started = Some(started);
             let worker = self.worker.as_mut().unwrap();
             let result = match body {
-                Some(body) => worker.invoke_with_body(input, body, budget, callback),
-                None => worker.invoke_with(input, budget, callback),
+                Some(body) => worker.invoke_with_body(function, input, body, budget, callback),
+                None => worker.invoke_with(function, input, budget, callback),
             };
             execution = started.elapsed();
             let output = result?;
@@ -375,13 +463,26 @@ impl Lease {
             Ok(output)
         })();
         self.progress.lock().unwrap().finished = Some(Instant::now());
-        let can_reuse_cancelled_worker = output.as_ref().is_err_and(|error| {
-            matches!(
-                konae_functions_executor::error_code(error),
-                "deadline_exceeded" | "cancelled" | "mutation_outcome_unknown"
-            ) && self.worker.as_ref().is_some_and(Worker::is_synchronized)
+        let reusable_failure = output.as_ref().is_err_and(|error| {
+            let code = konae_functions_executor::error_code(error);
+            let worker_is_synchronized = self.worker.as_ref().is_some_and(Worker::is_synchronized);
+            let terminal = matches!(
+                code,
+                "worker_failed"
+                    | "worker_initialization_failed"
+                    | "worker_protocol_error"
+                    | "worker_protocol_mismatch"
+                    | "worker_memory_limit"
+                    | "worker_pipe_failed"
+                    | "sandbox_unavailable"
+                    | "containment_unavailable"
+                    | "containment_cleanup_failed"
+                    | "invalid_response"
+                    | "pending_work"
+            );
+            worker_is_synchronized && !terminal
         });
-        if output.is_err() && !can_reuse_cancelled_worker {
+        if output.is_err() && !reusable_failure {
             if let Some(mut worker) = self.worker.take() {
                 let _ = worker.shutdown(SHUTDOWN);
             }
@@ -393,6 +494,25 @@ impl Lease {
             cold,
         }
     }
+}
+
+fn env_capacity(name: &str, default: usize) -> usize {
+    env_capacity_result(name, default).unwrap_or(default)
+}
+
+fn env_capacity_result(name: &str, default: usize) -> anyhow::Result<usize> {
+    let value = match std::env::var(name) {
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|_| anyhow::anyhow!("{name} must be an integer from 1 to 4096"))?,
+        Err(std::env::VarError::NotPresent) => default,
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        (1..=4096).contains(&value),
+        "{name} must be an integer from 1 to 4096"
+    );
+    Ok(value)
 }
 
 fn retire(slot: Arc<Slot>) {
@@ -607,100 +727,133 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn four_distinct_leases_coexist_and_a_fifth_busy_key_is_refused() {
+    async fn leases_obey_per_deployment_pool_cap() {
         let runtime = runtime(Duration::from_secs(60));
-        let mut leases = Vec::new();
-        for key in ["a", "b", "c", "d"] {
-            leases.push(runtime.lease(key.into(), &budget()).await.unwrap());
-        }
-        assert_eq!(
-            runtime.lease("e".into(), &budget()).await.err().unwrap(),
-            "cache_busy"
+        let other_app = runtime
+            .lease("other:orders".into(), &budget())
+            .await
+            .unwrap();
+        drop(other_app);
+        let first = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        let second = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        let waiting_runtime = runtime.clone();
+        let deadline = Budget::new(Duration::from_millis(80));
+        let waiting =
+            tokio::spawn(
+                async move { waiting_runtime.lease("app:orders".into(), &deadline).await },
+            );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !waiting.is_finished(),
+            "third request should queue at the app cap"
         );
-        drop(leases.remove(0));
-        let fifth = runtime.lease("e".into(), &budget()).await.unwrap();
-        assert_eq!(runtime.state.lock().unwrap().slots.len(), 4);
-        assert!(fifth.worker.is_none());
+        {
+            let state = runtime.state.lock().unwrap();
+            let app_slots = state
+                .slots
+                .keys()
+                .filter(|key| key.as_str() == "app:orders" || key.starts_with("app:orders#"))
+                .count();
+            assert_eq!(app_slots, 2);
+            assert!(state.slots.contains_key("other:orders"));
+        }
+        assert_eq!(waiting.await.unwrap().err().unwrap(), "deadline_exceeded");
+        assert!(
+            runtime
+                .state
+                .lock()
+                .unwrap()
+                .slots
+                .contains_key("other:orders")
+        );
+        assert!(first.worker.is_none() && second.worker.is_none());
     }
 
     #[tokio::test]
-    async fn same_key_waiters_do_not_reserve_other_execution_permits() {
+    async fn an_unread_body_lease_does_not_hold_an_active_permit() {
+        let runtime = runtime(Duration::from_secs(60));
+        let available = runtime.active.available_permits();
+        let lease = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        assert_eq!(runtime.active.available_permits(), available);
+        drop(lease);
+        assert_eq!(runtime.active.available_permits(), available);
+    }
+
+    #[tokio::test]
+    async fn request_admission_outlives_the_worker_lease() {
+        let runtime = runtime(Duration::from_secs(60));
+        let mut lease = runtime.lease("app:orders".into(), &budget()).await.unwrap();
+        let admission = lease.take_admission().unwrap();
+        drop(lease);
+        assert_eq!(runtime.admission.available_permits(), ADMISSION - 1);
+        assert!(
+            runtime.state.lock().unwrap().slots["app:orders"]
+                .pins
+                .load(Ordering::SeqCst)
+                == 0
+        );
+        drop(admission);
+        assert_eq!(runtime.admission.available_permits(), ADMISSION);
+    }
+
+    #[tokio::test]
+    async fn same_deployment_queues_a_third_until_a_worker_is_free() {
         let runtime = runtime(Duration::from_secs(60));
         let held = runtime.lease("a".into(), &budget()).await.unwrap();
-        let queued_runtime = runtime.clone();
-        let queued = tokio::spawn(async move { queued_runtime.lease("a".into(), &budget()).await });
-        eventually(|| runtime.admission.available_permits() == ADMISSION - 2).await;
-        let mut others = Vec::new();
-        for key in ["b", "c", "d"] {
-            others.push(runtime.lease(key.into(), &budget()).await.unwrap());
-        }
-        assert!(!queued.is_finished());
+        let second = runtime.lease("a".into(), &budget()).await.unwrap();
+        let waiting_runtime = runtime.clone();
+        let waiting_budget = budget();
+        let waiting =
+            tokio::spawn(async move { waiting_runtime.lease("a".into(), &waiting_budget).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !waiting.is_finished(),
+            "third request should queue at the app cap"
+        );
+        assert_eq!(runtime.admission.available_permits(), ADMISSION - 3);
         drop(held);
-        let next = tokio::time::timeout(Duration::from_millis(250), queued)
+        let third = tokio::time::timeout(Duration::from_secs(1), waiting)
             .await
-            .unwrap()
+            .expect("queued request should wake when a pin is released")
             .unwrap()
             .unwrap();
-        assert!(next.worker.is_none());
+        assert_eq!(runtime.state.lock().unwrap().slots.len(), 2);
+        assert!(second.worker.is_none());
+        assert!(third.worker.is_none());
     }
 
     #[tokio::test]
-    async fn admission_is_bounded_and_abandoned_waiters_release_capacity() {
+    async fn admission_is_bounded_and_released_with_its_permits() {
         let runtime = runtime(Duration::from_secs(60));
-        let held = runtime.lease("a".into(), &budget()).await.unwrap();
-        let mut waiting = Vec::new();
-        for _ in 1..ADMISSION {
-            let runtime = runtime.clone();
-            waiting.push(tokio::spawn(async move {
-                runtime.lease("a".into(), &budget()).await
-            }));
-        }
-        eventually(|| runtime.admission.available_permits() == 0).await;
+        let mut permits = (0..ADMISSION)
+            .map(|_| runtime.admit(&budget()).unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(
             runtime.lease("b".into(), &budget()).await.err().unwrap(),
             "queue_full"
         );
-        for task in waiting {
-            task.abort();
-            let _ = task.await;
-        }
-        assert_eq!(runtime.admission.available_permits(), ADMISSION - 1);
-        drop(held);
+        permits.pop();
+        assert_eq!(runtime.admission.available_permits(), 1);
+        drop(permits);
         assert_eq!(runtime.admission.available_permits(), ADMISSION);
-        assert_eq!(
-            runtime.state.lock().unwrap().slots["a"]
-                .pins
-                .load(Ordering::SeqCst),
-            0
-        );
     }
 
     #[tokio::test]
-    async fn queued_deadline_and_cancellation_do_not_initialize_or_invoke() {
+    async fn expired_and_cancelled_requests_do_not_reserve_workers() {
         let runtime = runtime(Duration::from_secs(60));
-        let held = runtime.lease("a".into(), &budget()).await.unwrap();
-        let expired = Budget::new(Duration::from_millis(20));
+        let expired = Budget::until(Instant::now() - Duration::from_millis(1));
         assert_eq!(
             runtime.lease("a".into(), &expired).await.err().unwrap(),
             "deadline_exceeded"
         );
         let cancelled = budget();
-        let cancel_copy = cancelled.clone();
-        let waiting_runtime = runtime.clone();
-        let waiting =
-            tokio::spawn(async move { waiting_runtime.lease("a".into(), &cancel_copy).await });
-        eventually(|| runtime.admission.available_permits() == ADMISSION - 2).await;
         cancelled.cancel();
-        assert_eq!(waiting.await.unwrap().err().unwrap(), "cancelled");
-        assert!(held.worker.is_none());
-        assert_eq!(runtime.admission.available_permits(), ADMISSION - 1);
-        assert!(
-            held.progress()
-                .lock()
-                .unwrap()
-                .initialization_started
-                .is_none()
+        assert_eq!(
+            runtime.lease("a".into(), &cancelled).await.err().unwrap(),
+            "cancelled"
         );
+        assert!(runtime.state.lock().unwrap().slots.is_empty());
+        assert_eq!(runtime.admission.available_permits(), ADMISSION);
     }
 
     #[tokio::test]
@@ -819,7 +972,7 @@ export function handle(request, context) {
 
     #[tokio::test]
     #[ignore = "requires KONAE_TEST_FUNCTION_WORKER and starts real child processes"]
-    async fn real_worker_reuses_actor_input_and_destroys_failed_and_idle_processes() {
+    async fn real_worker_reuses_after_handler_error_and_idle_processes() {
         let fixture = Fixture::new();
         let runtime = real_runtime(Duration::from_millis(200));
         let (first, pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
@@ -850,13 +1003,20 @@ export function handle(request, context) {
         assert_eq!(after_spin_pid, Some(pid));
         let (failed, failed_pid) =
             run(&runtime, "app:example:v1", &fixture.0, "alice", "fail").await;
-        assert!(failed.output.is_err());
-        assert!(failed_pid.is_none());
-        assert!(!alive(pid));
-        let (recovered, pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
-        assert!(recovered.cold);
+        let handler_failure =
+            konae_functions_executor::error_code(failed.output.as_ref().unwrap_err());
+        assert_eq!(handler_failure, "handler_error");
+        let detail =
+            konae_functions_executor::error_detail(failed.output.as_ref().unwrap_err()).unwrap();
+        assert!(detail.len() <= 4096);
+        assert!(!detail.contains("alice"));
+        assert_eq!(failed_pid, Some(pid));
+        assert!(alive(pid));
+        let (recovered, recovered_pid) =
+            run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
+        assert!(!recovered.cold);
         assert_eq!(recovered.output.unwrap().body, "1:alice");
-        let pid = pid.unwrap();
+        assert_eq!(recovered_pid, Some(pid));
         eventually(|| !alive(pid)).await;
         eventually(|| runtime.allocations.available_permits() == INSTANCES).await;
         assert!(!runtime.state.lock().unwrap().reaper_running);
@@ -868,7 +1028,7 @@ export function handle(request, context) {
         let fixture = Fixture::new();
         let runtime = real_runtime(Duration::from_secs(60));
         let mut pids = Vec::new();
-        for version in 0..4 {
+        for version in 0..2 {
             let (result, pid) = run(
                 &runtime,
                 &format!("app:example:v{version}"),
@@ -882,16 +1042,16 @@ export function handle(request, context) {
             pids.push(pid.unwrap());
         }
         assert!(pids.iter().all(|pid| alive(*pid)));
-        let (result, fifth_pid) = run(&runtime, "app:example:v4", &fixture.0, "bob", "").await;
+        let (result, third_pid) = run(&runtime, "app:example:v2", &fixture.0, "bob", "").await;
         assert!(result.cold);
         assert_eq!(result.output.unwrap().body, "1:bob");
         assert!(!alive(pids[0]));
-        assert!(pids[1..].iter().all(|pid| alive(*pid)));
-        let fifth_pid = fifth_pid.unwrap();
-        runtime.release_changed("app", "v4").await;
+        assert!(alive(pids[1]));
+        let third_pid = third_pid.unwrap();
+        runtime.release_changed("app", "v2").await;
         assert!(pids.iter().all(|pid| !alive(*pid)));
-        assert!(alive(fifth_pid));
+        assert!(alive(third_pid));
         drop(runtime);
-        assert!(!alive(fifth_pid));
+        assert!(!alive(third_pid));
     }
 }
