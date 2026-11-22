@@ -1,7 +1,9 @@
+#[cfg(test)]
+use std::path::Path;
 use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -106,9 +108,18 @@ impl Runtime {
             deadline,
             idle,
             state: Mutex::new(State::default()),
-            admission: Arc::new(Semaphore::new(env_capacity("KONAE_FUNCTIONS_ADMISSION", ADMISSION))),
-            active: Arc::new(Semaphore::new(env_capacity("KONAE_FUNCTIONS_INSTANCES", INSTANCES))),
-            allocations: Arc::new(Semaphore::new(env_capacity("KONAE_FUNCTIONS_INSTANCES", INSTANCES))),
+            admission: Arc::new(Semaphore::new(env_capacity(
+                "KONAE_FUNCTIONS_ADMISSION",
+                ADMISSION,
+            ))),
+            active: Arc::new(Semaphore::new(env_capacity(
+                "KONAE_FUNCTIONS_INSTANCES",
+                INSTANCES,
+            ))),
+            allocations: Arc::new(Semaphore::new(env_capacity(
+                "KONAE_FUNCTIONS_INSTANCES",
+                INSTANCES,
+            ))),
             app_slots: env_capacity("KONAE_FUNCTIONS_APP_SLOTS", 2),
             protocol_failure: Arc::new(AtomicBool::new(false)),
         }
@@ -201,21 +212,43 @@ impl Runtime {
             let retired = {
                 let mut state = self.state.lock().unwrap();
                 check(budget)?;
-                let mut candidates = state.slots.iter()
-                    .filter(|(candidate, _)| candidate.as_str() == key || candidate.starts_with(&format!("{key}#")))
+                let mut candidates = state
+                    .slots
+                    .iter()
+                    .filter(|(candidate, _)| {
+                        candidate.as_str() == key || candidate.starts_with(&format!("{key}#"))
+                    })
                     .map(|(candidate, slot)| (candidate.clone(), slot.clone()))
                     .collect::<Vec<_>>();
                 candidates.sort_by_key(|(_, slot)| slot.pins.load(Ordering::SeqCst));
-                if let Some((_, slot)) = candidates.iter().find(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0) {
+                if let Some((_, slot)) = candidates
+                    .iter()
+                    .find(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0)
+                {
                     slot.pins.fetch_add(1, Ordering::SeqCst);
                     return Ok(Reservation(slot.clone()));
                 }
-                let app_keys = state.slots.keys()
-                    .filter(|candidate| candidate.as_str() == deployment || candidate.starts_with(&format!("{deployment}:")) || candidate.starts_with(&format!("{deployment}#")))
-                    .cloned().collect::<Vec<_>>();
-                if app_keys.len() < self.app_slots && let Ok(allocation) = self.allocations.clone().try_acquire_owned() {
-                    let index = (0..self.app_slots).find(|index| !state.slots.contains_key(&format!("{key}#{index}"))).unwrap_or(app_keys.len());
-                    let slot_key = if index == 0 && !state.slots.contains_key(&key) { key.clone() } else { format!("{key}#{index}") };
+                let app_keys = state
+                    .slots
+                    .keys()
+                    .filter(|candidate| {
+                        candidate.as_str() == deployment
+                            || candidate.starts_with(&format!("{deployment}:"))
+                            || candidate.starts_with(&format!("{deployment}#"))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if app_keys.len() < self.app_slots
+                    && let Ok(allocation) = self.allocations.clone().try_acquire_owned()
+                {
+                    let index = (0..self.app_slots)
+                        .find(|index| !state.slots.contains_key(&format!("{key}#{index}")))
+                        .unwrap_or(app_keys.len());
+                    let slot_key = if index == 0 && !state.slots.contains_key(&key) {
+                        key.clone()
+                    } else {
+                        format!("{key}#{index}")
+                    };
                     let slot = Arc::new(Slot {
                         worker: Arc::new(AsyncMutex::new(None)),
                         pins: AtomicUsize::new(1),
@@ -228,9 +261,20 @@ impl Runtime {
                 let oldest = state
                     .slots
                     .iter()
-                    .filter(|(candidate, slot)| (candidate.as_str() == deployment || candidate.starts_with(&format!("{deployment}:")) || candidate.starts_with(&format!("{deployment}#"))) && slot.pins.load(Ordering::SeqCst) == 0)
+                    .filter(|(candidate, slot)| {
+                        (candidate.as_str() == deployment
+                            || candidate.starts_with(&format!("{deployment}:"))
+                            || candidate.starts_with(&format!("{deployment}#")))
+                            && slot.pins.load(Ordering::SeqCst) == 0
+                    })
                     .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
-                    .or_else(|| state.slots.iter().filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0).min_by_key(|(_, slot)| *slot.last_used.lock().unwrap()))
+                    .or_else(|| {
+                        state
+                            .slots
+                            .iter()
+                            .filter(|(_, slot)| slot.pins.load(Ordering::SeqCst) == 0)
+                            .min_by_key(|(_, slot)| *slot.last_used.lock().unwrap())
+                    })
                     .map(|(key, _)| key.clone())
                     .ok_or("cache_busy")?;
                 state.slots.remove(&oldest).unwrap()
@@ -317,6 +361,7 @@ impl Lease {
         self.progress.clone()
     }
 
+    #[cfg(test)]
     pub fn run(
         &mut self,
         function: &str,
@@ -325,25 +370,33 @@ impl Lease {
         budget: &Budget,
         callback: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
     ) -> RunResult {
-        self.run_inner(function, bundle_dir, input, None, budget, callback)
+        let primary = bundle_dir.join(format!("{function}.mjs"));
+        let source_path = if primary.exists() {
+            primary
+        } else {
+            bundle_dir.join(format!("{function}.js"))
+        };
+        let source = std::fs::read_to_string(source_path).unwrap_or_default();
+        let bundles = BTreeMap::from([(function.to_owned(), source)]);
+        self.run_inner(function, &bundles, input, None, budget, callback)
     }
 
     pub fn run_stream(
         &mut self,
         function: &str,
-        bundle_dir: &Path,
+        bundles: &BTreeMap<String, String>,
         input: Input,
         body: Arc<dyn konae_functions_executor::RequestBody>,
         budget: &Budget,
         callback: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
     ) -> RunResult {
-        self.run_inner(function, bundle_dir, input, Some(body), budget, callback)
+        self.run_inner(function, bundles, input, Some(body), budget, callback)
     }
 
     fn run_inner(
         &mut self,
         function: &str,
-        bundle_dir: &Path,
+        bundles: &BTreeMap<String, String>,
         input: Input,
         body: Option<Arc<dyn konae_functions_executor::RequestBody>>,
         budget: &Budget,
@@ -371,17 +424,9 @@ impl Lease {
                     progress.cold = true;
                     progress.initialization_started = Some(started);
                 }
-                let primary = bundle_dir.join(format!("{function}.mjs"));
-                let source_path = if primary.exists() {
-                    primary
-                } else {
-                    bundle_dir.join(format!("{function}.js"))
-                };
-                let source = std::fs::read_to_string(source_path)?;
-                let bundles = BTreeMap::from([(function.to_owned(), source)]);
                 let spawned = Worker::spawn_with_policy(
                     &self.config.executable,
-                    &bundles,
+                    bundles,
                     budget,
                     WorkerLimits::default(),
                     self.config.policy.clone(),
@@ -416,13 +461,20 @@ impl Lease {
         let reusable_failure = output.as_ref().is_err_and(|error| {
             let code = konae_functions_executor::error_code(error);
             let worker_is_synchronized = self.worker.as_ref().is_some_and(Worker::is_synchronized);
-            let terminal = matches!(code,
-                "worker_failed" | "worker_initialization_failed" | "worker_protocol_error"
-                | "worker_protocol_mismatch" | "worker_memory_limit" | "worker_pipe_failed"
-                | "sandbox_unavailable" | "containment_unavailable" | "containment_cleanup_failed"
-                | "invalid_response" | "pending_work"
+            let terminal = matches!(
+                code,
+                "worker_failed"
+                    | "worker_initialization_failed"
+                    | "worker_protocol_error"
+                    | "worker_protocol_mismatch"
+                    | "worker_memory_limit"
+                    | "worker_pipe_failed"
+                    | "sandbox_unavailable"
+                    | "containment_unavailable"
+                    | "containment_cleanup_failed"
+                    | "invalid_response"
+                    | "pending_work"
             );
-            // TODO(executor-v3): read the handler failure code and detail from the typed error.
             worker_is_synchronized && !terminal
         });
         if output.is_err() && !reusable_failure {
@@ -437,7 +489,6 @@ impl Lease {
             cold,
         }
     }
-
 }
 
 fn env_capacity(name: &str, default: usize) -> usize {
@@ -446,11 +497,16 @@ fn env_capacity(name: &str, default: usize) -> usize {
 
 fn env_capacity_result(name: &str, default: usize) -> anyhow::Result<usize> {
     let value = match std::env::var(name) {
-        Ok(value) => value.parse::<usize>().map_err(|_| anyhow::anyhow!("{name} must be an integer from 1 to 4096"))?,
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|_| anyhow::anyhow!("{name} must be an integer from 1 to 4096"))?,
         Err(std::env::VarError::NotPresent) => default,
         Err(error) => return Err(error.into()),
     };
-    anyhow::ensure!((1..=4096).contains(&value), "{name} must be an integer from 1 to 4096");
+    anyhow::ensure!(
+        (1..=4096).contains(&value),
+        "{name} must be an integer from 1 to 4096"
+    );
     Ok(value)
 }
 
@@ -670,7 +726,14 @@ mod tests {
         let runtime = runtime(Duration::from_secs(60));
         let first = runtime.lease("app:orders".into(), &budget()).await.unwrap();
         let second = runtime.lease("app:orders".into(), &budget()).await.unwrap();
-        assert_eq!(runtime.lease("app:orders".into(), &budget()).await.err().unwrap(), "cache_busy");
+        assert_eq!(
+            runtime
+                .lease("app:orders".into(), &budget())
+                .await
+                .err()
+                .unwrap(),
+            "cache_busy"
+        );
         assert_eq!(runtime.state.lock().unwrap().slots.len(), 2);
         assert!(first.worker.is_none() && second.worker.is_none());
     }
@@ -692,7 +755,12 @@ mod tests {
         let admission = lease.take_admission().unwrap();
         drop(lease);
         assert_eq!(runtime.admission.available_permits(), ADMISSION - 1);
-        assert!(runtime.state.lock().unwrap().slots["app:orders"].pins.load(Ordering::SeqCst) == 0);
+        assert!(
+            runtime.state.lock().unwrap().slots["app:orders"]
+                .pins
+                .load(Ordering::SeqCst)
+                == 0
+        );
         drop(admission);
         assert_eq!(runtime.admission.available_permits(), ADMISSION);
     }
@@ -702,7 +770,10 @@ mod tests {
         let runtime = runtime(Duration::from_secs(60));
         let held = runtime.lease("a".into(), &budget()).await.unwrap();
         let second = runtime.lease("a".into(), &budget()).await.unwrap();
-        assert_eq!(runtime.lease("a".into(), &budget()).await.err().unwrap(), "cache_busy");
+        assert_eq!(
+            runtime.lease("a".into(), &budget()).await.err().unwrap(),
+            "cache_busy"
+        );
         assert_eq!(runtime.admission.available_permits(), ADMISSION - 2);
         drop(held);
         assert!(second.worker.is_none());
@@ -711,7 +782,9 @@ mod tests {
     #[tokio::test]
     async fn admission_is_bounded_and_released_with_its_permits() {
         let runtime = runtime(Duration::from_secs(60));
-        let mut permits = (0..ADMISSION).map(|_| runtime.admit(&budget()).unwrap()).collect::<Vec<_>>();
+        let mut permits = (0..ADMISSION)
+            .map(|_| runtime.admit(&budget()).unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(
             runtime.lease("b".into(), &budget()).await.err().unwrap(),
             "queue_full"
@@ -732,7 +805,10 @@ mod tests {
         );
         let cancelled = budget();
         cancelled.cancel();
-        assert_eq!(runtime.lease("a".into(), &cancelled).await.err().unwrap(), "cancelled");
+        assert_eq!(
+            runtime.lease("a".into(), &cancelled).await.err().unwrap(),
+            "cancelled"
+        );
         assert!(runtime.state.lock().unwrap().slots.is_empty());
         assert_eq!(runtime.admission.available_permits(), ADMISSION);
     }
@@ -884,23 +960,20 @@ export function handle(request, context) {
         assert_eq!(after_spin_pid, Some(pid));
         let (failed, failed_pid) =
             run(&runtime, "app:example:v1", &fixture.0, "alice", "fail").await;
-        let handler_failure = konae_functions_executor::error_code(failed.output.as_ref().unwrap_err());
-        if handler_failure == "handler_error" {
-            assert_eq!(failed_pid, Some(pid));
-            assert!(alive(pid));
-        } else {
-            // IPC/2 reports handler throws as worker_failed, so it cannot be reused safely.
-            assert_eq!(handler_failure, "worker_failed");
-            assert_eq!(failed_pid, None);
-        }
-        let (recovered, recovered_pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
-        assert_eq!(recovered.cold, handler_failure != "handler_error");
+        let handler_failure =
+            konae_functions_executor::error_code(failed.output.as_ref().unwrap_err());
+        assert_eq!(handler_failure, "handler_error");
+        let detail =
+            konae_functions_executor::error_detail(failed.output.as_ref().unwrap_err()).unwrap();
+        assert!(detail.len() <= 4096);
+        assert!(!detail.contains("alice"));
+        assert_eq!(failed_pid, Some(pid));
+        assert!(alive(pid));
+        let (recovered, recovered_pid) =
+            run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
+        assert!(!recovered.cold);
         assert_eq!(recovered.output.unwrap().body, "1:alice");
-        if handler_failure == "handler_error" {
-            assert_eq!(recovered_pid, Some(pid));
-        } else {
-            assert_ne!(recovered_pid, Some(pid));
-        }
+        assert_eq!(recovered_pid, Some(pid));
         eventually(|| !alive(pid)).await;
         eventually(|| runtime.allocations.available_permits() == INSTANCES).await;
         assert!(!runtime.state.lock().unwrap().reaper_running);

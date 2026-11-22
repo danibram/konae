@@ -1,9 +1,9 @@
+use super::invocation::{Admission, InvocationConfig};
+use super::{Function, invocation as function_data, runtime::RunProgress};
 use crate::{
     AppState, Deployment, Operation,
     usage::{FunctionOutcome, FunctionTiming},
 };
-use super::{Function, invocation as function_data, runtime::RunProgress};
-use super::invocation::{Admission, InvocationConfig};
 use axum::{
     Json,
     body::Body,
@@ -22,7 +22,6 @@ use std::{
 };
 
 const MAX_FUNCTION_BODY_BYTES: usize = 100_000_000;
-const MAX_LEGACY_FUNCTION_BODY_BYTES: usize = 16 * 1024;
 const MAX_AGGREGATE_PENDING_BODY_BYTES: usize = 8 * 1024 * 1024;
 static FUNCTION_BODY_BUDGET: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
@@ -182,65 +181,6 @@ fn start_body_pump(body: Body, budget: Budget) -> (Arc<IngressBody>, BodyPump) {
     (ingress, BodyPump(task))
 }
 
-async fn read_replay_body(
-    body: Body,
-    legacy: bool,
-    budget: &Budget,
-) -> Result<
-    (
-        usize,
-        [u8; 32],
-        Option<Vec<u8>>,
-        Vec<tokio::sync::OwnedSemaphorePermit>,
-    ),
-    Response,
-> {
-    let mut incoming = body.into_data_stream();
-    let mut length = 0usize;
-    let mut digest = Sha256::new();
-    let mut legacy_bytes = legacy.then(Vec::new);
-    let mut permits = Vec::new();
-    while let Some(chunk) = tokio::time::timeout_at(
-        tokio::time::Instant::from_std(budget.deadline()),
-        incoming.next(),
-    )
-    .await
-    .map_err(|_| executor_failure("deadline_exceeded"))?
-    {
-        let chunk = chunk.map_err(|_| {
-            failure(
-                400,
-                "invalid_body",
-                "The function request body could not be read.",
-            )
-        })?;
-        for bytes in chunk.chunks(konae_functions_executor::protocol::BODY_CHUNK_BYTES) {
-            if length.saturating_add(bytes.len()) > MAX_FUNCTION_BODY_BYTES {
-                return Err(failure(
-                    413,
-                    "body_too_large",
-                    "The function request exceeds 100000000 bytes.",
-                ));
-            }
-            let next_length = length + bytes.len();
-            if legacy_bytes.is_some() && next_length > MAX_LEGACY_FUNCTION_BODY_BYTES {
-                legacy_bytes = None;
-                permits.clear();
-            }
-            length = next_length;
-            digest.update(bytes);
-            let permit = function_body_budget()
-                .try_acquire_many_owned(bytes.len() as u32)
-                .map_err(|_| executor_failure("function.capacity"))?;
-            if let Some(legacy_bytes) = &mut legacy_bytes {
-                permits.push(permit);
-                legacy_bytes.extend_from_slice(bytes);
-            }
-        }
-    }
-    Ok((length, digest.finalize().into(), legacy_bytes, permits))
-}
-
 struct Cancel(Budget);
 impl Drop for Cancel {
     fn drop(&mut self) {
@@ -254,6 +194,8 @@ struct Timed {
     execution: Duration,
     cold: bool,
     outcome: FunctionOutcome,
+    error_code: Option<String>,
+    error_detail: Option<String>,
 }
 struct PreparedRun {
     lease: super::runtime::Lease,
@@ -297,6 +239,36 @@ enum ReceiptPrelookup {
     Continue(Body),
     Replay(Timed),
 }
+async fn read_replay_body(body: Body, budget: &Budget) -> Result<(usize, [u8; 32]), Response> {
+    let mut incoming = body.into_data_stream();
+    let mut length = 0usize;
+    let mut digest = Sha256::new();
+    while let Some(chunk) = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(budget.deadline()),
+        incoming.next(),
+    )
+    .await
+    .map_err(|_| executor_failure("deadline_exceeded"))?
+    {
+        let chunk = chunk.map_err(|_| {
+            failure(
+                400,
+                "invalid_body",
+                "The function request body could not be read.",
+            )
+        })?;
+        if length.saturating_add(chunk.len()) > MAX_FUNCTION_BODY_BYTES {
+            return Err(failure(
+                413,
+                "body_too_large",
+                "The function request exceeds 100000000 bytes.",
+            ));
+        }
+        length += chunk.len();
+        digest.update(chunk);
+    }
+    Ok((length, digest.finalize().into()))
+}
 impl Timed {
     fn refusal(response: Response, elapsed: Duration) -> Self {
         Self {
@@ -306,6 +278,8 @@ impl Timed {
             execution: Duration::ZERO,
             cold: false,
             outcome: FunctionOutcome::Refused,
+            error_code: None,
+            error_detail: None,
         }
     }
 }
@@ -327,27 +301,17 @@ async fn prelookup_receipt(
     let Some(stored_fingerprint) = candidate else {
         return Ok(ReceiptPrelookup::Continue(body));
     };
-    let legacy = !stored_fingerprint.starts_with("v3:");
-    let (body_len, body_digest, legacy_body, _permits) =
-        read_replay_body(body, legacy, budget).await?;
-    if legacy && legacy_body.is_none() {
+    let (body_len, body_digest) = read_replay_body(body, budget).await?;
+    let fingerprint =
+        function_data::request_fingerprint_v3(method, path, body_len, &body_digest, headers)
+            .map_err(|error| failure(error.status, error.code, &error.message))?;
+    if !stored_fingerprint.starts_with("v3:") {
         return Err(failure(
             409,
             "idempotency_conflict",
             "Idempotency-Key was already used with a different request.",
         ));
     }
-    let fingerprint = if legacy {
-        function_data::request_fingerprint(
-            method,
-            path,
-            legacy_body.as_deref().unwrap_or_default(),
-            headers,
-        )
-    } else {
-        function_data::request_fingerprint_v3(method, path, body_len, &body_digest, headers)
-    }
-    .map_err(|error| failure(error.status, error.code, &error.message))?;
     if fingerprint != stored_fingerprint {
         return Err(failure(
             409,
@@ -363,6 +327,8 @@ async fn prelookup_receipt(
         execution: Duration::ZERO,
         cold: false,
         outcome: FunctionOutcome::Replayed,
+        error_code: None,
+        error_detail: None,
     }))
 }
 
@@ -457,6 +423,8 @@ fn interrupted(budget: &Budget, code: &str, started: Instant, progress: &RunProg
         execution,
         cold: progress.cold,
         outcome: outcome(code),
+        error_code: Some(code.to_owned()),
+        error_detail: None,
     }
 }
 
@@ -483,6 +451,8 @@ fn record(
             cold: timed.cold,
             timed_out: now >= budget.deadline(),
             outcome: timed.outcome,
+            error_code: timed.error_code,
+            error_detail: timed.error_detail,
         },
     );
     timed.response
@@ -515,20 +485,6 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
     let budget = Budget::until(started + state.functions.deadline);
     let _cancel = Cancel(budget.clone());
     let deadline = tokio::time::Instant::from_std(budget.deadline());
-    let admission = match state.functions.admit(&budget) {
-        Ok(admission) => admission,
-        Err(code) => {
-            let timed = Timed::refusal(executor_failure(&code), started.elapsed());
-            return Ok(record(
-                state,
-                &observed,
-                observed_name,
-                &budget,
-                started,
-                timed,
-            ));
-        }
-    };
     let (generation, held, deployment) = match tokio::time::timeout_at(deadline, async {
         let generation = state.copies.generations.clone().read_owned().await;
         let held = crate::named_lock(state, &format!("publish:{}", observed.id), false).await;
@@ -561,7 +517,13 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
     let Some((name, function)) = declaration(&deployment, request.uri().path()) else {
         return Err(request);
     };
-    let bundle_hash = deployment.server.as_ref().unwrap().hashes[&name].clone();
+    let server_digest = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(deployment.server.as_ref().unwrap())
+                .expect("published metadata serializes")
+        )
+    );
     let operation = request
         .extensions()
         .get::<Operation>()
@@ -635,6 +597,23 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             )),
         };
         limited.map_err(crate::http::rate_limited)?;
+        if request
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok())
+            .is_some_and(|length| length > MAX_FUNCTION_BODY_BYTES)
+        {
+            return Err(failure(
+                413,
+                "body_too_large",
+                "The function request exceeds 100000000 bytes.",
+            ));
+        }
+        let admission = state
+            .functions
+            .admit(&budget)
+            .map_err(|code| executor_failure(&code))?;
         let actor_id = actor.map(|user| user.user_id);
         let headers = [header::ACCEPT, header::CONTENT_TYPE]
             .into_iter()
@@ -702,11 +681,8 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             }
         }
         let cache_key = format!(
-            "{}:{}:{}:{bundle_hash}:{}",
-            deployment.id,
-            name,
-            deployment.artifact_version,
-            konae_functions_executor::protocol::ABI
+            "{}:{}:{server_digest}",
+            deployment.id, deployment.artifact_version
         );
         let lease = state
             .functions
@@ -787,8 +763,8 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 let _held = held;
                 let mut sql_slot = None;
                 let mut sql_guard = None;
-                let bundle = match pinned_bundle(&state, &deployment, &name) {
-                    Ok(directory) => directory,
+                let bundles = match pinned_bundle(&state, &deployment, &name) {
+                    Ok(bundles) => bundles,
                     Err(_) => {
                         return Timed::refusal(
                             failure(
@@ -808,7 +784,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 let mut config = Some(config);
                 let request_body: Arc<dyn konae_functions_executor::RequestBody> = body.clone();
                 let action_body = body.clone();
-                let run = lease.run_stream(&name, &bundle.0, input, request_body, &budget, &mut |operation, args| {
+                let run = lease.run_stream(&name, &bundles, input, request_body, &budget, &mut |operation, args| {
                     if operation != "action" {
                         return Err("function.operation-forbidden".into());
                     }
@@ -894,6 +870,8 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         }
                     }
                 });
+                let _admission = lease.take_admission();
+                drop(lease);
                 let ingress = body.drain();
                 if let Err(code) = ingress {
                     let (status, message) = match code.as_str() {
@@ -912,9 +890,32 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         execution: began.elapsed().saturating_sub(run.initialization),
                         cold: run.cold,
                         outcome: outcome(&code),
+                        error_code: Some(code.clone()),
+                        error_detail: None,
                     };
                 }
                 if run.output.is_err() && invocation.is_none() && replayed.is_none() {
+                    let error_detail = native_failure
+                        .as_ref()
+                        .map(|error| error.message.clone())
+                        .or_else(|| {
+                            run.output
+                                .as_ref()
+                                .err()
+                                .and_then(konae_functions_executor::error_detail)
+                                .map(str::to_owned)
+                        });
+                    let error_code = native_failure
+                        .as_ref()
+                        .map(|error| error.code.to_owned())
+                        .or_else(|| {
+                            Some(budget.failure_code().map(str::to_owned).unwrap_or_else(|| {
+                                konae_functions_executor::error_code(
+                                    run.output.as_ref().unwrap_err(),
+                                )
+                                .to_owned()
+                            }))
+                        });
                     let (response, result_outcome) = if let Some(error) = native_failure {
                         (
                             failure(error.status, error.code, &error.message),
@@ -934,6 +935,8 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         execution: began.elapsed().saturating_sub(run.initialization),
                         cold: run.cold,
                         outcome: result_outcome,
+                        error_code,
+                        error_detail,
                     };
                 }
                 if replayed.is_none() && invocation.is_none() {
@@ -1000,9 +1003,13 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         execution: began.elapsed().saturating_sub(run.initialization),
                         cold: run.cold,
                         outcome: FunctionOutcome::Replayed,
+                        error_code: None,
+                        error_detail: None,
                     };
                 }
                 let mut invocation = invocation.unwrap();
+                let mut failure_code = None;
+                let mut failure_detail = None;
                 let (response, result_outcome) = match run.output {
                     Ok(mut output) => {
                         output.headers.retain(|(name, _)| {
@@ -1020,15 +1027,21 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                                 };
                                 (respond(output), outcome)
                             }
-                            Err(error) => (
-                                failure(error.status, error.code, &error.message),
-                                outcome(error.code),
-                            ),
+                            Err(error) => {
+                                failure_code = Some(error.code.to_owned());
+                                failure_detail = Some(error.message.clone());
+                                (
+                                    failure(error.status, error.code, &error.message),
+                                    outcome(error.code),
+                                )
+                            }
                         }
                     }
                     Err(error) => {
                         let _ = invocation.abort();
                         if let Some(error) = native_failure {
+                            failure_code = Some(error.code.to_owned());
+                            failure_detail = Some(error.message.clone());
                             (
                                 failure(error.status, error.code, &error.message),
                                 outcome(error.code),
@@ -1038,6 +1051,9 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                                 budget.failure_code().map(str::to_owned).unwrap_or_else(|| {
                                     konae_functions_executor::error_code(&error).to_owned()
                                 });
+                            failure_code = Some(code.clone());
+                            failure_detail =
+                                konae_functions_executor::error_detail(&error).map(str::to_owned);
                             (executor_failure(&code), outcome(&code))
                         }
                     }
@@ -1050,6 +1066,8 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                     execution: began.elapsed().saturating_sub(run.initialization),
                     cold: run.cold,
                     outcome: result_outcome,
+                    error_code: failure_code,
+                    error_detail: failure_detail,
                 }
             });
             match tokio::time::timeout_at(deadline, task).await {
@@ -1068,30 +1086,50 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
     Ok(record(state, &deployment, name, &budget, started, timed))
 }
 
-struct Bundle(PathBuf);
-impl Drop for Bundle {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-fn pinned_bundle(state: &AppState, deployment: &Deployment, name: &str) -> anyhow::Result<Bundle> {
-    let (artifact, metadata) = crate::functions::read_artifact_with_metadata(
-        &crate::layout::server(&state.data_root, &deployment.id),
-    )?
-    .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
+static BUNDLE_CACHE: OnceLock<
+    Mutex<std::collections::HashMap<String, Arc<std::collections::BTreeMap<String, String>>>>,
+> = OnceLock::new();
+
+fn pinned_bundle(
+    state: &AppState,
+    deployment: &Deployment,
+    name: &str,
+) -> anyhow::Result<Arc<std::collections::BTreeMap<String, String>>> {
+    let published = deployment
+        .server
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Missing published metadata"))?;
     anyhow::ensure!(
-        Some(metadata) == deployment.server,
+        published.hashes.contains_key(name),
+        "Missing published bundle hash"
+    );
+    let server_digest = format!("{:x}", Sha256::digest(serde_json::to_vec(published)?));
+    let version_key = format!("{}:{}:", deployment.id, deployment.artifact_version);
+    let cache_key = format!("{version_key}{server_digest}");
+    let server = crate::layout::server(&state.data_root, &deployment.id);
+    let disk_metadata: crate::functions::Published =
+        serde_json::from_slice(&std::fs::read(server.join("manifest.json"))?)?;
+    let disk_digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&disk_metadata)?));
+    anyhow::ensure!(
+        disk_digest == server_digest,
         "Published server artifact changed"
     );
-    let directory = crate::layout::private(&state.data_root, &deployment.id)
-        .join(format!("function-input-{}", uuid::Uuid::new_v4().simple()));
-    let bundle = Bundle(directory);
-    std::fs::create_dir_all(&bundle.0)?;
-    std::fs::write(
-        bundle.0.join(format!("{name}.mjs")),
-        &artifact.bundles[name],
-    )?;
-    Ok(bundle)
+    let cache = BUNDLE_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Some(bundles) = cache.lock().unwrap().get(&cache_key).cloned() {
+        anyhow::ensure!(bundles.contains_key(name), "Missing function bundle");
+        return Ok(bundles);
+    }
+    let (artifact, checked) = crate::functions::read_artifact_with_metadata(&server)?
+        .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
+    anyhow::ensure!(&checked == published, "Published server artifact changed");
+    let source = Arc::new(artifact.bundles);
+    let mut cache = cache.lock().unwrap();
+    cache.retain(|key, _| {
+        !key.starts_with(&format!("{}:", deployment.id)) || key.starts_with(&version_key)
+    });
+    cache.insert(cache_key, source.clone());
+    anyhow::ensure!(source.contains_key(name), "Missing function bundle");
+    Ok(source)
 }
 fn respond(output: Output) -> Response {
     let mut response = Response::new(Body::from(output.body));

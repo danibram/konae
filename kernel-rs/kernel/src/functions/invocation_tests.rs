@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -10,6 +11,10 @@ struct Fixture {
     path: PathBuf,
     program: Arc<ActionProgram>,
     function: Function,
+}
+fn fingerprint(method: &str, path: &str, body: &[u8], headers: &[(String, String)]) -> String {
+    let digest: [u8; 32] = Sha256::digest(body).into();
+    request_fingerprint_v3(method, path, body.len(), &digest, headers).unwrap()
 }
 impl Fixture {
     fn new() -> Self {
@@ -57,8 +62,7 @@ impl Fixture {
             method: method.into(),
             path: "/orders/1?view=short".into(),
             body_len: body.len(),
-            fingerprint: request_fingerprint(method, "/orders/1?view=short", body, &headers)
-                .unwrap(),
+            fingerprint: fingerprint(method, "/orders/1?view=short", body, &headers),
             headers,
             idempotency_key: Some(key.into()),
         }
@@ -71,8 +75,7 @@ impl Fixture {
     }
     fn refresh(config: &mut InvocationConfig, body: &[u8]) {
         config.body_len = body.len();
-        config.fingerprint =
-            request_fingerprint(&config.method, &config.path, body, &config.headers).unwrap();
+        config.fingerprint = fingerprint(&config.method, &config.path, body, &config.headers);
     }
     fn state(&self) -> (i64, i64, i64) {
         let db = Connection::open(&self.path).unwrap();
