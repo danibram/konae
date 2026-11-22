@@ -398,12 +398,12 @@ impl Worker {
         self.synchronized && self.child.is_some()
     }
     fn memory_check(&self) -> Result<()> {
-        let pid = self.pid().ok_or_else(|| fail("worker_failed"))?;
+        let pid = self
+            .pid()
+            .ok_or_else(|| self.crash_error("worker_failed"))?;
         if let Some(rss) = resident_bytes(pid) {
             if rss > self.limits.rss_bytes {
-                return Err(
-                    WorkerError::with_detail("worker_memory_limit", self.stderr_tail()).into(),
-                );
+                return Err(self.crash_error("worker_memory_limit"));
             }
         }
         Ok(())
@@ -417,22 +417,27 @@ impl Worker {
             match self
                 .input
                 .as_mut()
-                .ok_or_else(|| fail("worker_failed"))?
+                .ok_or_else(|| self.crash_error("worker_failed"))?
                 .write(&frame[offset..])
             {
-                Ok(0) => return Err(fail("worker_failed")),
+                Ok(0) => return Err(self.crash_error("worker_failed")),
                 Ok(n) => offset += n,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    poll_writable(
+                    if let Err(error) = poll_writable(
                         self.input
                             .as_ref()
-                            .ok_or_else(|| fail("worker_failed"))?
+                            .ok_or_else(|| self.crash_error("worker_failed"))?
                             .as_raw_fd(),
                         budget,
-                    )?;
+                    ) {
+                        if matches!(error_code(&error), "deadline_exceeded" | "cancelled") {
+                            return Err(error);
+                        }
+                        return Err(self.crash_error("worker_failed"));
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => return Err(fail("worker_failed")),
+                Err(_) => return Err(self.crash_error("worker_failed")),
             }
         }
         Ok(())
@@ -457,10 +462,13 @@ impl Worker {
     }
     fn exit_error(&self) -> anyhow::Error {
         if oom_kill_confirmed(self.oom_kills_at_spawn, self.containment.oom_kill_count()) {
-            WorkerError::with_detail("worker_memory_limit", self.stderr_tail()).into()
+            self.crash_error("worker_memory_limit")
         } else {
-            WorkerError::with_detail("worker_failed", self.stderr_tail()).into()
+            self.crash_error("worker_failed")
         }
+    }
+    fn crash_error(&self, code: &str) -> anyhow::Error {
+        WorkerError::with_detail(code, self.stderr_tail()).into()
     }
     fn stderr_tail(&self) -> Option<String> {
         let stderr = self
