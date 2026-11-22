@@ -1365,9 +1365,31 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         let throttled =
             status == StatusCode::GATEWAY_TIMEOUT && failure["code"] == "deadline_exceeded";
         assert!(killed || throttled, "{status} {failure}");
-        let recovered = get("", &accounts[0].0).send().await.unwrap();
-        assert_eq!(recovered.status(), StatusCode::OK);
-        println!("kernel_http_oom={} recovery=200", failure["code"]);
+        // A worker killed while it thrashes at memory.max can take seconds to leave its cgroup,
+        // and the next request on the same app waits for that teardown. Recovery must happen,
+        // and the log records how long it took.
+        let recovery_started = Instant::now();
+        let mut attempts = Vec::new();
+        loop {
+            let recovered = get("", &accounts[0].0).send().await.unwrap();
+            let status = recovered.status();
+            let body = recovered.text().await.unwrap();
+            attempts.push(format!("{status} {body}"));
+            if status == StatusCode::OK {
+                break;
+            }
+            assert!(
+                recovery_started.elapsed() < Duration::from_secs(20),
+                "no recovery after the memory limit: {attempts:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        println!(
+            "kernel_http_oom={} recovery=200 recovery_ms={} attempts={}",
+            failure["code"],
+            recovery_started.elapsed().as_millis(),
+            attempts.len()
+        );
     }
     if let Some(destination) = std::env::var_os("KONAE_TEST_PRESERVE_APP_DIR") {
         let destination = PathBuf::from(destination);
