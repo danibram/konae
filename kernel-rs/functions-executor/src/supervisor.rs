@@ -845,7 +845,7 @@ fn worker_identity() -> Result<(libc::uid_t, libc::gid_t)> {
         .and_then(|value| value.parse::<libc::gid_t>().ok())
         .filter(|gid| *gid != u32::MAX && *gid != unsafe { libc::getegid() })
         .ok_or_else(unavailable)?;
-    let status = fs::read_to_string("/proc/self/status").map_err(|_| unavailable())?;
+    let status = std::fs::read_to_string("/proc/self/status").map_err(|_| unavailable())?;
     let effective = status
         .lines()
         .find_map(|line| line.strip_prefix("CapEff:\t"))
@@ -1036,7 +1036,7 @@ fn resident_bytes(pid: u32) -> Option<usize> {
 }
 #[cfg(target_os = "linux")]
 fn resident_bytes(pid: u32) -> Option<usize> {
-    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     status.lines().find_map(|line| {
         line.strip_prefix("VmRSS:")
             .and_then(|s| s.split_whitespace().next())
