@@ -7,6 +7,18 @@ on:
       - kernel-rs/Cargo.toml
       - kernel-rs/functions-executor/**
       - kernel-rs/functions-runner/**
+      - kernel-rs/kernel/src/functions/**
+      - kernel-rs/kernel/src/app_folders/folder.rs
+      - scripts/build-functions-runner.sh
+      - scripts/build-functions-images.sh
+      - ops/kernel-entrypoint.sh
+      - Dockerfile.kernel
+      - docker-compose.yml
+      - scripts/test-exported-functions-compose.sh
+      - src/lib/app-folder.ts
+      - src/lib/app-folder.test.ts
+      - docs/functions.md
+      - docs/guides/take-the-app-elsewhere.md
   workflow_dispatch:
 
 permissions:
@@ -24,3 +36,64 @@ jobs:
         run: rustup toolchain install 1.91.0 --profile minimal
       - name: Test the runner and watchdog
         run: cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml
+
+  strict-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install 1.91.0 --profile minimal
+      - uses: oven-sh/setup-bun@v2
+      - name: Install editor dependencies
+        run: bun install --frozen-lockfile
+      - name: Build the runner for this Linux architecture
+        run: cargo build --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml
+      - name: Run ignored real-worker tests with cgroup v2
+        run: |
+          mkdir -p "$RUNNER_TEMP/functions-runner"
+          install -m 755 kernel-rs/functions-runner/target/release/konae-functions-runner "$RUNNER_TEMP/functions-runner/konae-functions-runner"
+          docker run --rm --cap-add SYS_ADMIN --cgroupns private --security-opt seccomp=unconfined \
+            -v "$PWD:/repo" -v "$RUNNER_TEMP/functions-runner:/bundle:ro" -w /repo \
+            -e CARGO_BUILD_JOBS=2 rust:1.91-bookworm sh -ec '
+              mkdir -p /tmp/cgroup
+              mount -t cgroup2 -o nosuid,nodev,noexec cgroup2 /tmp/cgroup
+              mkdir /tmp/cgroup/setup
+              printf "%s\\n" "$$" > /tmp/cgroup/setup/cgroup.procs
+              printf "%s\\n" "+memory +pids" > /tmp/cgroup/cgroup.subtree_control
+              mkdir /tmp/cgroup/delegated
+              printf "%s\\n" "+memory +pids" > /tmp/cgroup/delegated/cgroup.subtree_control
+              mkdir /tmp/cgroup/delegated/kernel-manager
+              printf "%s\\n" "$$" > /tmp/cgroup/delegated/kernel-manager/cgroup.procs
+              test -e /tmp/cgroup/delegated/cgroup.kill
+              chown 10001:10001 /tmp/cgroup/delegated /tmp/cgroup/delegated/cgroup.procs
+              chown 10001:10001 /tmp/cgroup/delegated/kernel-manager /tmp/cgroup/delegated/kernel-manager/cgroup.procs
+              cargo test --locked --manifest-path kernel-rs/Cargo.toml -p kernel --lib --no-run
+              test_binary=$(find kernel-rs/target/debug/deps -maxdepth 1 -type f -name "kernel-*" -perm -111 | head -n 1)
+              test -n "$test_binary"
+              uname -srmo
+              setpriv --reuid=10001 --regid=10001 --clear-groups --bounding-set=-all,+setuid,+setgid \
+                --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid --no-new-privs \
+                env KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
+                KONAE_TEST_FUNCTION_WORKER=/bundle/konae-functions-runner \
+                KONAE_TEST_FUNCTION_CGROUP=/tmp/cgroup/delegated \
+                "$test_binary" real_ --ignored --test-threads=1
+              setpriv --reuid=10001 --regid=10001 --clear-groups --bounding-set=-all,+setuid,+setgid \
+                --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid --no-new-privs \
+                env KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
+                KONAE_TEST_FUNCTION_WORKER=/bundle/konae-functions-runner \
+                KONAE_TEST_FUNCTION_CGROUP=/tmp/cgroup/delegated \
+                "$test_binary" functions_export_import_executes_the_published_bundle_with_imported_identity --ignored --test-threads=1
+            '
+      - name: Build and run an exported function folder, then deny Landlock
+        run: scripts/test-exported-functions-compose.sh

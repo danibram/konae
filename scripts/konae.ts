@@ -893,8 +893,15 @@ async function writeDist(root: string, artifact: { files: Record<string, string>
 /** The files beside app/, dist/ and data/ that every app folder carries. */
 async function folderFiles(root: string, settings: AppSettings) {
   const read = (file: string) => readFile(path.join(appDir(root), file), "utf8").catch(() => "");
+  const publishedServer = await readFile(path.join(root, "server/manifest.json"), "utf8").catch(() => "");
+  let hasFunctions = false;
+  if (publishedServer) {
+    const manifest = JSON.parse(publishedServer) as { manifest?: { functions?: Record<string, unknown> } };
+    hasFunctions = Object.keys(manifest.manifest?.functions ?? {}).length > 0;
+  }
   return generatedFiles({
     settings, actionsSource: await read("actions.json") || '{"version":1,"actions":{}}', schemaSource: await read("schema.sql"),
+    hasFunctions,
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
     localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),

@@ -102,12 +102,12 @@ export function secretNames(actionsSource: string): string[] {
  * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
  * both local build doors run.
  */
-export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string }): FolderEntry[] {
+export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string; hasFunctions?: boolean }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
   return [
-    { path: "compose.yaml", contents: composeFile(settings) },
-    { path: ".env.example", contents: envExample(settings) },
+    { path: "compose.yaml", contents: composeFile(settings, input.hasFunctions === true) },
+    { path: ".env.example", contents: envExample(settings, input.hasFunctions === true) },
     { path: ".gitignore", contents: gitignore },
     { path: "AGENTS.md", contents: agentsGuide(settings, secretNames(input.actionsSource)) },
     { path: "action-contract.md", contents: renderActionContractMarkdown(contract) },
@@ -130,7 +130,7 @@ node_modules/
 `;
 
 /** The image is the Kernel version konae.json names, so an exported folder runs the Kernel that wrote it. */
-function envExample(settings: AppSettings) {
+function envExample(settings: AppSettings, hasFunctions: boolean) {
   return `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
 # The image to run. A release publishes this tag for linux/amd64 and linux/arm64. A local image can replace it.
 KONAE_KERNEL_IMAGE=ghcr.io/danibram/konae-kernel:${settings.kernel}
@@ -142,10 +142,18 @@ KONAE_HOST_SUFFIX=localhost
 # How account email leaves: resend, smtp or development, which writes it to mailbox.jsonl in the Kernel's volume.
 # Without a transport, invitations and password resets are refused.
 KONAE_MAIL_TRANSPORT=
+${hasFunctions ? `# The runner shipped in the Kernel image executes published functions.
+KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner
+# The entrypoint finds this service's private subtree and replaces "auto" with its path.
+KONAE_FUNCTIONS_CGROUP=auto
+# The Kernel starts isolated workers with this separate Linux identity.
+KONAE_FUNCTIONS_UID=10002
+KONAE_FUNCTIONS_GID=10002
+` : ""}
 `;
 }
 
-function composeFile(settings: AppSettings) {
+function composeFile(settings: AppSettings, hasFunctions: boolean) {
   return `# Runs the Kernel on this folder. The Kernel opens it as apps/${settings.id}
 # of its data directory, checks it as a release, and serves it. Set
 # KONAE_KERNEL_IMAGE in .env to a published or local Kernel image.
@@ -157,12 +165,32 @@ services:
       KONAE_BIND: "0.0.0.0"
       KONAE_KERNEL_PORT: "8787"
       KONAE_DATA_DIR: /kernel
-    ports:
+${hasFunctions ? `      # The image includes the runner built with this Kernel.
+      KONAE_FUNCTIONS_RUNNER: \${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner}
+      # The entrypoint prepares this cgroup v2 subtree before starting the Kernel.
+      KONAE_FUNCTIONS_CGROUP: \${KONAE_FUNCTIONS_CGROUP:-auto}
+      # The Kernel starts isolated workers with this separate Linux identity.
+      KONAE_FUNCTIONS_UID: \${KONAE_FUNCTIONS_UID:-10002}
+      KONAE_FUNCTIONS_GID: \${KONAE_FUNCTIONS_GID:-10002}
+` : ""}    ports:
       - "127.0.0.1:\${KONAE_PORT:-8787}:8787"
+${hasFunctions ? `    # A private cgroup namespace gives the entrypoint a container-local cgroup root.
+    cgroup: private
+    # The unique parent keeps this app's writable cgroup subtree separate from other containers.
+    cgroup_parent: konae-${settings.id}
+    # SETUID and SETGID let the Kernel start each worker with its separate identity.
+    cap_add:
+      - SETUID
+      - SETGID
+    # Docker mounts this app-specific cgroup parent writable inside the service.
     volumes:
       - ./:/kernel/apps/${settings.id}
       - kernel:/kernel
-volumes:
+      - /sys/fs/cgroup/konae-${settings.id}:/sys/fs/cgroup:rw
+` : `    volumes:
+      - ./:/kernel/apps/${settings.id}
+      - kernel:/kernel
+`}volumes:
   kernel:
 `;
 }
