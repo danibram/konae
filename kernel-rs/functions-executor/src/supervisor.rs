@@ -6,13 +6,14 @@ use crate::{
 use anyhow::Result;
 use serde_json::Value;
 use std::{
-    fmt, fs,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
     io::{Read, Write},
     os::{fd::AsRawFd, unix::process::CommandExt},
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -43,13 +44,26 @@ impl crate::RequestBody for Mutex<BufferedBody> {
 #[derive(Debug)]
 pub struct WorkerError {
     code: String,
+    detail: Option<String>,
 }
 impl WorkerError {
     pub fn new(code: impl Into<String>) -> Self {
-        Self { code: code.into() }
+        Self {
+            code: code.into(),
+            detail: None,
+        }
+    }
+    pub fn with_detail(code: impl Into<String>, detail: Option<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: detail.map(|text| bounded_detail(&text)),
+        }
     }
     pub fn code(&self) -> &str {
         &self.code
+    }
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
     }
 }
 impl fmt::Display for WorkerError {
@@ -63,8 +77,41 @@ pub fn error_code(error: &anyhow::Error) -> &str {
         .downcast_ref::<WorkerError>()
         .map_or("worker_failed", WorkerError::code)
 }
+pub fn error_detail(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<WorkerError>()
+        .and_then(WorkerError::detail)
+}
+fn bounded_detail(detail: &str) -> String {
+    let mut end = detail.len().min(4096);
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    detail[..end].to_owned()
+}
 fn fail(code: &str) -> anyhow::Error {
     WorkerError::new(code).into()
+}
+fn validate_bundles(bundles: &BTreeMap<String, String>) -> Result<()> {
+    let mut total = 0usize;
+    for (name, source) in bundles {
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(fail("invalid_function_name"));
+        }
+        if source.len() > 1024 * 1024 {
+            return Err(fail("bundle_too_large"));
+        }
+        total = total.saturating_add(source.len());
+    }
+    if bundles.is_empty() || total > protocol::MAX_SOURCE_BYTES {
+        return Err(fail("bundle_too_large"));
+    }
+    Ok(())
 }
 fn nonce() -> Result<String> {
     let mut bytes = [0u8; 32];
@@ -91,6 +138,41 @@ impl ExecutionBudget for Until {
     }
 }
 
+struct SpawnRequest {
+    command: Command,
+    reply: mpsc::SyncSender<std::io::Result<Child>>,
+}
+
+fn child_spawner() -> std::io::Result<&'static mpsc::Sender<SpawnRequest>> {
+    static SPAWNER: OnceLock<std::result::Result<mpsc::Sender<SpawnRequest>, ()>> = OnceLock::new();
+    SPAWNER
+        .get_or_init(|| {
+            let (sender, requests) = mpsc::channel::<SpawnRequest>();
+            thread::Builder::new()
+                .name("konae-function-spawner".into())
+                .spawn(move || {
+                    while let Ok(mut request) = requests.recv() {
+                        let result = request.command.spawn();
+                        let _ = request.reply.send(result);
+                    }
+                })
+                .map_err(|_| ())?;
+            Ok(sender)
+        })
+        .as_ref()
+        .map_err(|_| std::io::Error::other("worker_spawner_failed"))
+}
+
+fn spawn_child(command: Command) -> std::io::Result<Child> {
+    let (reply, result) = mpsc::sync_channel(1);
+    child_spawner()?
+        .send(SpawnRequest { command, reply })
+        .map_err(|_| std::io::Error::other("worker_spawner_failed"))?;
+    result
+        .recv()
+        .map_err(|_| std::io::Error::other("worker_spawner_failed"))?
+}
+
 pub struct Worker {
     child: Option<Child>,
     input: Option<ChildStdin>,
@@ -101,6 +183,7 @@ pub struct Worker {
     stderr: Arc<Mutex<Vec<u8>>>,
     limits: WorkerLimits,
     generation: String,
+    functions: BTreeSet<String>,
     request: u64,
     busy: bool,
     synchronized: bool,
@@ -111,8 +194,7 @@ pub struct Worker {
 impl Worker {
     pub fn spawn_with_policy(
         executable: &Path,
-        function: &str,
-        bundle_dir: &Path,
+        bundles: &BTreeMap<String, String>,
         budget: &impl ExecutionBudget,
         limits: WorkerLimits,
         policy: MemoryPolicy,
@@ -121,32 +203,7 @@ impl Worker {
         if !limits.validate() {
             return Err(fail("invalid_worker_limits"));
         }
-        if function.is_empty()
-            || function.len() > 64
-            || !function
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err(fail("invalid_function_name"));
-        }
-        let primary = bundle_dir.join(format!("{function}.mjs"));
-        let path = if primary.exists() {
-            primary
-        } else {
-            bundle_dir.join(format!("{function}.js"))
-        };
-        let file = fs::File::open(&path)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.len() > protocol::MAX_SOURCE_BYTES as u64 {
-            return Err(fail("bundle_too_large"));
-        }
-        let mut bytes = Vec::new();
-        file.take(protocol::MAX_SOURCE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > protocol::MAX_SOURCE_BYTES {
-            return Err(fail("bundle_too_large"));
-        }
-        let source = String::from_utf8(bytes).map_err(|_| fail("bundle_invalid_utf8"))?;
+        validate_bundles(bundles)?;
         remaining(budget)?;
         let generation = nonce()?;
         let strict_linux = matches!(policy, MemoryPolicy::LinuxCgroup { .. });
@@ -202,7 +259,7 @@ impl Worker {
                 });
             }
         }
-        let mut child = child_command.spawn()?;
+        let mut child = spawn_child(child_command)?;
         if let Err(error) = containment.attach(child.id()) {
             let _ = child.kill();
             let _ = child.wait();
@@ -273,6 +330,7 @@ impl Worker {
             stderr,
             limits: limits.clone(),
             generation: generation.clone(),
+            functions: bundles.keys().cloned().collect(),
             request: 0,
             busy: false,
             synchronized: true,
@@ -284,8 +342,7 @@ impl Worker {
             worker.send(
                 &ParentMessage::Init {
                     abi: protocol::ABI.into(),
-                    function: function.into(),
-                    source,
+                    bundles: bundles.clone(),
                     generation,
                     limits,
                 },
@@ -317,7 +374,8 @@ impl Worker {
                 ChildMessage::Failure {
                     capability: None,
                     code,
-                } => Err(fail(&code)),
+                    detail,
+                } => Err(WorkerError::with_detail(code, detail).into()),
                 _ => Err(fail("worker_initialization_failed")),
             }
         })();
@@ -340,10 +398,12 @@ impl Worker {
         self.synchronized && self.child.is_some()
     }
     fn memory_check(&self) -> Result<()> {
-        let pid = self.pid().ok_or_else(|| fail("worker_failed"))?;
+        let pid = self
+            .pid()
+            .ok_or_else(|| self.crash_error("worker_failed"))?;
         if let Some(rss) = resident_bytes(pid) {
             if rss > self.limits.rss_bytes {
-                return Err(fail("worker_memory_limit"));
+                return Err(self.crash_error("worker_memory_limit"));
             }
         }
         Ok(())
@@ -354,19 +414,29 @@ impl Worker {
         while offset < frame.len() {
             remaining(budget)?;
             self.memory_check()?;
-            match self
-                .input
-                .as_mut()
-                .ok_or_else(|| fail("worker_failed"))?
-                .write(&frame[offset..])
-            {
-                Ok(0) => return Err(fail("worker_failed")),
+            let write_result = match self.input.as_mut() {
+                Some(input) => input.write(&frame[offset..]),
+                None => return Err(self.crash_error("worker_failed")),
+            };
+            match write_result {
+                Ok(0) => return Err(self.crash_error("worker_failed")),
                 Ok(n) => offset += n,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(1))
+                    if let Err(error) = poll_writable(
+                        self.input
+                            .as_ref()
+                            .ok_or_else(|| self.crash_error("worker_failed"))?
+                            .as_raw_fd(),
+                        budget,
+                    ) {
+                        if matches!(error_code(&error), "deadline_exceeded" | "cancelled") {
+                            return Err(error);
+                        }
+                        return Err(self.crash_error("worker_failed"));
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => return Err(fail("worker_failed")),
+                Err(_) => return Err(self.crash_error("worker_failed")),
             }
         }
         Ok(())
@@ -391,10 +461,21 @@ impl Worker {
     }
     fn exit_error(&self) -> anyhow::Error {
         if oom_kill_confirmed(self.oom_kills_at_spawn, self.containment.oom_kill_count()) {
-            fail("worker_memory_limit")
+            self.crash_error("worker_memory_limit")
         } else {
-            fail("worker_failed")
+            self.crash_error("worker_failed")
         }
+    }
+    fn crash_error(&self, code: &str) -> anyhow::Error {
+        WorkerError::with_detail(code, self.stderr_tail()).into()
+    }
+    fn stderr_tail(&self) -> Option<String> {
+        let stderr = self
+            .stderr
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let start = stderr.len().saturating_sub(4096);
+        (!stderr.is_empty()).then(|| String::from_utf8_lossy(&stderr[start..]).into_owned())
     }
     fn capability(&mut self) -> Result<Capability> {
         self.request = self
@@ -410,10 +491,14 @@ impl Worker {
     }
     pub fn invoke_with(
         &mut self,
+        function: &str,
         mut input: Input,
         budget: &impl ExecutionBudget,
         callback: &mut dyn FnMut(&str, Value) -> std::result::Result<Value, String>,
     ) -> Result<Output> {
+        if !self.functions.contains(function) {
+            return Err(fail("invalid_function_name"));
+        }
         let body = std::mem::take(&mut input.body);
         if body.len() != input.body_len
             || body.len() > 100_000_000
@@ -426,6 +511,7 @@ impl Worker {
         let capability = self.capability()?;
         let message = ParentMessage::Invoke {
             capability: capability.clone(),
+            function: function.to_owned(),
             input,
         };
         let body: Arc<dyn crate::RequestBody> = Arc::new(Mutex::new(BufferedBody {
@@ -436,11 +522,15 @@ impl Worker {
     }
     pub fn invoke_with_body(
         &mut self,
+        function: &str,
         input: Input,
         body: Arc<dyn crate::RequestBody>,
         budget: &impl ExecutionBudget,
         callback: &mut dyn FnMut(&str, Value) -> std::result::Result<Value, String>,
     ) -> Result<Output> {
+        if !self.functions.contains(function) {
+            return Err(fail("invalid_function_name"));
+        }
         if !input.body.is_empty()
             || input.body_len > 100_000_000
             || header_bytes(&input.headers) > protocol::MAX_HEADER_BYTES
@@ -452,6 +542,7 @@ impl Worker {
         let capability = self.capability()?;
         let message = ParentMessage::Invoke {
             capability: capability.clone(),
+            function: function.to_owned(),
             input,
         };
         self.execute(message, capability, body, budget, callback)
@@ -592,9 +683,11 @@ impl Worker {
                     ChildMessage::Failure {
                         capability: Some(received),
                         code,
+                        detail,
                     } if received == capability => {
                         self.synchronized = true;
-                        return Err(fail(native_error.as_deref().unwrap_or(&code)));
+                        let code = native_error.as_deref().unwrap_or(&code);
+                        return Err(WorkerError::with_detail(code, detail).into());
                     }
                     _ => return Err(fail("worker_protocol_error")),
                 }
@@ -603,6 +696,7 @@ impl Worker {
         if result.is_err() {
             let code = error_code(result.as_ref().err().unwrap());
             let interrupted = matches!(code, "deadline_exceeded" | "cancelled");
+            let reusable_handler_error = code == "handler_error" && self.synchronized;
             if interrupted && can_resynchronize && !self.synchronized {
                 let grace = Until(Instant::now() + CANCEL_GRACE);
                 if self
@@ -633,7 +727,7 @@ impl Worker {
                     }
                 }
             }
-            if !interrupted || !self.synchronized {
+            if (!interrupted && !reusable_handler_error) || !self.synchronized {
                 self.stop();
             }
         }
@@ -689,6 +783,33 @@ impl Worker {
             let _ = reader.join();
         }
         self.containment.cleanup()
+    }
+}
+
+fn poll_writable(fd: std::os::fd::RawFd, budget: &impl ExecutionBudget) -> Result<()> {
+    loop {
+        let left = remaining(budget)?;
+        let milliseconds = left.min(Duration::from_millis(5)).as_millis().max(1) as i32;
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut descriptor, 1, milliseconds) };
+        if result > 0 {
+            if descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                return Err(fail("worker_failed"));
+            }
+            return Ok(());
+        }
+        if result == 0 {
+            remaining(budget)?;
+            continue;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(fail("worker_failed"));
+        }
     }
 }
 #[cfg(target_os = "linux")]
@@ -754,6 +875,102 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct CancellableBudget {
+        deadline: Instant,
+        cancelled: AtomicBool,
+    }
+
+    impl ExecutionBudget for CancellableBudget {
+        fn deadline(&self) -> Instant {
+            self.deadline
+        }
+
+        fn is_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::SeqCst)
+        }
+    }
+
+    #[test]
+    fn blocked_pipe_write_observes_cancellation_before_deadline() {
+        let mut descriptors = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (descriptors[0], descriptors[1]);
+        let flags = unsafe { libc::fcntl(write_fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(write_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+
+        let bytes = [0u8; 8192];
+        loop {
+            let written = unsafe { libc::write(write_fd, bytes.as_ptr().cast(), bytes.len()) };
+            if written < 0 {
+                assert_eq!(
+                    std::io::Error::last_os_error().kind(),
+                    std::io::ErrorKind::WouldBlock
+                );
+                break;
+            }
+        }
+
+        let budget = Arc::new(CancellableBudget {
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancelled: AtomicBool::new(false),
+        });
+        let canceller = Arc::clone(&budget);
+        let cancel_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            canceller.cancelled.store(true, Ordering::SeqCst);
+        });
+        let start = Instant::now();
+        let error = poll_writable(write_fd, budget.as_ref()).unwrap_err();
+        let elapsed = start.elapsed();
+
+        cancel_thread.join().unwrap();
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        assert_eq!(error_code(&error), "cancelled");
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "poll waited {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn validates_bundle_names_and_source_budgets() {
+        let valid = BTreeMap::from([("orders".into(), "export function handle() {}".into())]);
+        assert!(validate_bundles(&valid).is_ok());
+        let oversized = BTreeMap::from([("orders".into(), "x".repeat(1024 * 1024 + 1))]);
+        assert_eq!(
+            error_code(&validate_bundles(&oversized).unwrap_err()),
+            "bundle_too_large"
+        );
+        let total_oversized = (0..9)
+            .map(|index| (format!("function-{index}"), "x".repeat(1024 * 1024)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            error_code(&validate_bundles(&total_oversized).unwrap_err()),
+            "bundle_too_large"
+        );
+        let invalid_name = BTreeMap::from([("orders/1".into(), "x".into())]);
+        assert_eq!(
+            error_code(&validate_bundles(&invalid_name).unwrap_err()),
+            "invalid_function_name"
+        );
+    }
+
+    #[test]
+    fn bounds_worker_error_detail_to_four_kibibytes() {
+        let error = WorkerError::with_detail("handler_error", Some("x".repeat(4097))).to_string();
+        assert_eq!(error, "handler_error");
+        let error: anyhow::Error =
+            WorkerError::with_detail("handler_error", Some("x".repeat(4097))).into();
+        assert_eq!(error_detail(&error).unwrap().len(), 4096);
+    }
 
     #[test]
     fn classifies_only_a_new_cgroup_oom_as_memory_limit() {
