@@ -1,65 +1,83 @@
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-};
+use deno_core::{JsRuntimeForSnapshot, OpState, op2, v8};
+use deno_error::JsErrorBox;
+use konae_functions_executor::protocol::{BodyChunk, Capability};
+use std::{env, fs, path::PathBuf};
 
-const EXTENSIONS: [(&str, &str); 4] = [
-    ("deno_webidl", "0.260.0"),
-    ("deno_web", "0.291.0"),
-    ("deno_net", "0.252.0"),
-    ("deno_fetch", "0.284.0"),
-];
-
-fn main() {
-    let cargo_home = env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .expect("CARGO_HOME or HOME must point to the Cargo cache");
-    let registry = cargo_home.join("registry/src");
-    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set"));
-    let embedded = out.join("embedded");
-    fs::create_dir_all(&embedded).expect("create embedded extension directory");
-
-    let mut generated = String::from(
-        "pub(super) fn source(extension: &str, file: &str) -> Option<&'static str> {\n match (extension, file) {\n",
-    );
-    for (crate_name, version) in EXTENSIONS {
-        let source_root = find_crate(&registry, crate_name, version);
-        println!("cargo:rerun-if-changed={}", source_root.display());
-        let mut files: Vec<_> = fs::read_dir(&source_root)
-            .expect("read extension sources")
-            .map(|entry| entry.expect("read extension entry").path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
-            .collect();
-        files.sort();
-        for path in files {
-            let name = path
-                .file_name()
-                .unwrap()
-                .to_str()
-                .expect("JS filename is UTF-8");
-            let packaged = embedded.join(format!("{crate_name}-{name}"));
-            fs::copy(&path, &packaged).expect("copy extension source to build output");
-            let include_path = packaged.to_str().expect("OUT_DIR path is UTF-8");
-            generated.push_str(&format!(
-                "({crate_name:?}, {name:?}) => Some(include_str!({include_path:?})),\n"
-            ));
-        }
-    }
-    generated.push_str("_ => None,\n }\n}\n");
-    fs::write(out.join("embedded_extensions.rs"), generated)
-        .expect("write embedded extension lookup");
+#[op2]
+#[serde]
+fn op_worker_call(
+    _state: &mut OpState,
+    #[serde] _capability: Capability,
+    #[string] _operation: String,
+    #[serde] _args: serde_json::Value,
+) -> Result<serde_json::Value, JsErrorBox> {
+    Err(JsErrorBox::generic("snapshot_op_unavailable"))
 }
 
-fn find_crate(registry: &Path, name: &str, version: &str) -> PathBuf {
-    for index in fs::read_dir(registry).expect("read Cargo registry source directory") {
-        let path = index
-            .expect("read registry index")
-            .path()
-            .join(format!("{name}-{version}"));
-        if path.is_dir() {
-            return path;
-        }
+#[op2(fast)]
+fn op_worker_failure(_state: &mut OpState, #[string] _code: String) {}
+
+#[op2]
+#[serde]
+fn op_worker_body_read(
+    _state: &mut OpState,
+    #[serde] _capability: Capability,
+    #[number] _sequence: u64,
+    #[number] _maximum: usize,
+) -> Result<BodyChunk, JsErrorBox> {
+    Err(JsErrorBox::generic("snapshot_op_unavailable"))
+}
+
+deno_core::extension!(
+    functions_bridge,
+    ops = [op_worker_call, op_worker_failure, op_worker_body_read]
+);
+
+fn main() {
+    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set"));
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set");
+    let extensions = vec![
+        deno_webidl::deno_webidl::init(),
+        deno_web::deno_web::init(
+            std::sync::Arc::new(deno_web::BlobStore::default()),
+            None,
+            false,
+            Default::default(),
+        ),
+        deno_net::deno_net::init(None, None),
+        deno_fetch::deno_fetch::init(Default::default()),
+        functions_bridge::init(),
+    ];
+    let snapshot = deno_core::snapshot::create_snapshot(
+        deno_core::snapshot::CreateSnapshotOptions {
+            cargo_manifest_dir: Box::leak(manifest_dir.into_boxed_str()),
+            startup_snapshot: None,
+            skip_op_registration: false,
+            extensions,
+            extension_transpiler: None,
+            with_runtime_cb: Some(Box::new(|runtime: &mut JsRuntimeForSnapshot| {
+                let bootstrap_source = include_str!("src/bootstrap.js")
+                    .replace("delete globalThis.Deno;", "")
+                    .replace("delete globalThis.__bootstrap;", "");
+                let bootstrap = runtime
+                    .execute_script("worker:bootstrap", bootstrap_source)
+                    .expect("execute runner bootstrap");
+                deno_core::scope!(scope, runtime);
+                let global = scope.get_current_context().global(scope);
+                let key = v8::String::new(scope, "__functions_bootstrap")
+                    .expect("allocate bootstrap global name");
+                global
+                    .set(scope, key.into(), v8::Local::new(scope, bootstrap))
+                    .expect("save runner bootstrap callbacks");
+            })),
+        },
+        None,
+    )
+    .expect("create runner startup snapshot");
+    for path in snapshot.files_loaded_during_snapshot {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
-    panic!("missing source for pinned extension {name}-{version}");
+    fs::write(out.join("startup_snapshot.bin"), snapshot.output)
+        .expect("write runner startup snapshot");
+    println!("cargo:rerun-if-changed=src/bootstrap.js");
 }

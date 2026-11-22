@@ -1,9 +1,8 @@
 use crate::worker::{ChildBridge, ExecutionWatchdog, IsolateRegistration};
 use anyhow::{Result, anyhow};
 use deno_core::{
-    Extension, ExtensionFileSource, JsRuntime, ModuleLoadOptions, ModuleLoadReferrer,
-    ModuleLoadResponse, ModuleLoader, ModuleSpecifier, OpState, ResolutionKind, RuntimeOptions,
-    op2, v8,
+    JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader,
+    ModuleSpecifier, OpState, ResolutionKind, RuntimeOptions, op2, v8,
 };
 use deno_error::JsErrorBox;
 pub use konae_functions_executor::{Input, Output};
@@ -12,7 +11,6 @@ use konae_functions_executor::{
     protocol::{Capability, WorkerLimits},
 };
 use std::{
-    borrow::Cow,
     rc::Rc,
     sync::{
         Arc,
@@ -21,71 +19,60 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod embedded_extensions {
-    include!(concat!(env!("OUT_DIR"), "/embedded_extensions.rs"));
-}
-
-fn embed_extension(mut extension: Extension) -> Result<Extension> {
-    fn embed(
-        extension_name: &str,
-        sources: &mut Cow<'static, [ExtensionFileSource]>,
-    ) -> Result<()> {
-        let embedded = sources
-            .iter()
-            .map(|source| {
-                let file = source
-                    .specifier
-                    .rsplit('/')
-                    .next()
-                    .ok_or_else(|| anyhow!("invalid_extension_specifier"))?;
-                let code = embedded_extensions::source(extension_name, file)
-                    .ok_or_else(|| anyhow!("extension_source_missing"))?;
-                Ok(ExtensionFileSource::new_computed(
-                    source.specifier,
-                    Arc::<str>::from(code),
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        *sources = Cow::Owned(embedded);
-        Ok(())
-    }
-
-    embed(extension.name, &mut extension.js_files)?;
-    embed(extension.name, &mut extension.esm_files)?;
-    embed(extension.name, &mut extension.lazy_loaded_esm_files)?;
-    embed(extension.name, &mut extension.lazy_loaded_js_files)?;
-    Ok(extension)
-}
-
 #[cfg(test)]
-mod embedded_extension_tests {
+mod startup_snapshot_tests {
     use super::*;
 
     #[test]
-    fn runtime_extensions_no_longer_reference_build_paths() {
-        let extensions = [
-            embed_extension(deno_webidl::deno_webidl::init()).unwrap(),
-            embed_extension(deno_web::deno_web::init(
+    fn restored_runtime_has_bootstrap_globals_and_runtime_ops() {
+        const CHILD: &str = "KONAE_SNAPSHOT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runtime::startup_snapshot_tests::restored_runtime_has_bootstrap_globals_and_runtime_ops",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let extensions = vec![
+            deno_webidl::deno_webidl::init(),
+            deno_web::deno_web::init(
                 Arc::new(deno_web::BlobStore::default()),
                 None,
                 false,
                 Default::default(),
-            ))
-            .unwrap(),
-            embed_extension(deno_net::deno_net::init(None, None)).unwrap(),
-            embed_extension(deno_fetch::deno_fetch::init(Default::default())).unwrap(),
+            ),
+            deno_net::deno_net::init(None, None),
+            deno_fetch::deno_fetch::init(Default::default()),
+            functions_bridge::init(),
         ];
-        for extension in extensions {
-            for source in extension
-                .js_files
-                .iter()
-                .chain(extension.esm_files.iter())
-                .chain(extension.lazy_loaded_esm_files.iter())
-                .chain(extension.lazy_loaded_js_files.iter())
-            {
-                assert!(source.is_runtime_loadable(), "{}", source.specifier);
-            }
-        }
+        let mut js = JsRuntime::new(RuntimeOptions {
+            startup_snapshot: Some(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/startup_snapshot.bin"
+            ))),
+            extensions,
+            ..Default::default()
+        });
+        let state = js
+            .execute_script(
+                "worker:snapshot-test",
+                "(() => { const bootstrap = globalThis.__functions_bootstrap; delete globalThis.__functions_bootstrap; delete globalThis.Deno; delete globalThis.__bootstrap; return JSON.stringify({request: typeof Request, response: typeof Response, deno: typeof Deno, bootstrap: typeof __bootstrap, invoke: typeof bootstrap.invoke, timeout: typeof AbortSignal.timeout}); })()",
+            )
+            .unwrap();
+        deno_core::scope!(scope, js);
+        let value = v8::Local::new(scope, state);
+        let text = value.to_rust_string_lossy(scope);
+        assert!(text.contains("\"request\":\"function\""));
+        assert!(text.contains("\"response\":\"function\""));
+        assert!(text.contains("\"deno\":\"undefined\""));
+        assert!(text.contains("\"bootstrap\":\"undefined\""));
+        assert!(text.contains("\"invoke\":\"function\""));
+        assert!(text.contains("\"timeout\":\"function\""));
     }
 }
 
@@ -176,21 +163,25 @@ impl Runtime {
         bridge: Arc<ChildBridge>,
     ) -> Result<Self> {
         let extensions = vec![
-            embed_extension(deno_webidl::deno_webidl::init())?,
-            embed_extension(deno_web::deno_web::init(
+            deno_webidl::deno_webidl::init(),
+            deno_web::deno_web::init(
                 Arc::new(deno_web::BlobStore::default()),
                 None,
                 false,
                 Default::default(),
-            ))?,
-            embed_extension(deno_net::deno_net::init(None, None))?,
-            embed_extension(deno_fetch::deno_fetch::init(Default::default()))?,
+            ),
+            deno_net::deno_net::init(None, None),
+            deno_fetch::deno_fetch::init(Default::default()),
             functions_bridge::init(),
         ];
         let specifier =
             deno_core::ModuleSpecifier::parse(&format!("file:///function/{function}.mjs"))?;
         let rejected_import = Arc::new(AtomicBool::new(false));
         let mut js = JsRuntime::new(RuntimeOptions {
+            startup_snapshot: Some(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/startup_snapshot.bin"
+            ))),
             create_params: Some(v8::CreateParams::default().heap_limits(0, limits.heap_bytes)),
             module_loader: Some(Rc::new(RejectUserModules {
                 denied: rejected_import.clone(),
@@ -209,7 +200,10 @@ impl Runtime {
                 deno_permissions::Permissions::none_without_prompt(),
             ));
         js.op_state().borrow_mut().put(bridge.clone());
-        let bootstrap = js.execute_script("worker:bootstrap", include_str!("bootstrap.js"))?;
+        let bootstrap = js.execute_script(
+            "worker:bootstrap-result",
+            "(() => { const value = globalThis.__functions_bootstrap; delete globalThis.__functions_bootstrap; delete globalThis.Deno; delete globalThis.__bootstrap; return value; })()",
+        )?;
         let (invoke, cancel, shutdown) = {
             deno_core::scope!(scope, js);
             let object = v8::Local::new(scope, bootstrap)
