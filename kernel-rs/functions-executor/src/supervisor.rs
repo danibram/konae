@@ -696,6 +696,7 @@ impl Worker {
         if result.is_err() {
             let code = error_code(result.as_ref().err().unwrap());
             let interrupted = matches!(code, "deadline_exceeded" | "cancelled");
+            let reusable_handler_error = code == "handler_error" && self.synchronized;
             if interrupted && can_resynchronize && !self.synchronized {
                 let grace = Until(Instant::now() + CANCEL_GRACE);
                 if self
@@ -726,7 +727,7 @@ impl Worker {
                     }
                 }
             }
-            if !interrupted || !self.synchronized {
+            if (!interrupted && !reusable_handler_error) || !self.synchronized {
                 self.stop();
             }
         }
