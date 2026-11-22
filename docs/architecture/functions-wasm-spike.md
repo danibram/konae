@@ -1,6 +1,6 @@
 # Wasm functions runner spike
 
-The spike asks whether an exported app folder can carry its function code to another machine and keep the same isolation. The HTTP-facing Kernel must be able to run under an ordinary account on macOS, stock Debian 12 with Linux 6.1, and stock Ubuntu 24.04 with Linux 6.8. The performance limits are 250 ms for a cold instantiate and for the slowest case in the existing suite, and 5 ms for the warm median of a trivial GET. These limits use a 1 s function deadline.
+The spike asks whether an exported app folder can carry its function code to another machine and keep the same isolation. The HTTP-facing Kernel must be able to run under an ordinary account on macOS, stock Debian 12 with Linux 6.1, and stock Ubuntu 24.04 with Linux 6.8. The first two rounds used 250 ms for a cold instantiate and the slowest case, and 5 ms for the warm median of a trivial GET. The final round compares StarlingMonkey against deno_core in the same harness and keeps the 250 ms cold reply guard.
 
 ## Engine check
 
@@ -76,17 +76,17 @@ The same guest Wasm went into both builds. Its SHA-256 was `5a943a0ce21cae2a3e3c
 
 These are direct IPC observations on macOS. The compiled probe mounted real middleware and sent a signed HS256 test token to the JWT route.
 
-| Middleware | QuickJS in Wasm | deno_core |
-| --- | --- | --- |
-| JWT | 500, `crypto is not defined` | Same |
-| Default ETag | 500, `crypto is not defined` | Same |
-| ETag with supplied digest | 200 with `ETag: "010203"` | Same |
-| Cache | Route returned 200 and `cacheAvailable: false` | Same |
-| Signed cookie | 500, `crypto is not defined` | Same |
-| `streamText` with two writes | 200, buffered `onetwo` | Same |
-| `streamText` with `sleep(1)` between writes | 200, partial body `one` | No reply within the probe's 10 s limit |
+| Middleware | QuickJS in Wasm | deno_core | StarlingMonkey |
+| --- | --- | --- | --- |
+| JWT | 500, `crypto is not defined` | Same | Same |
+| Default ETag | 500, `crypto is not defined` | Same | Same |
+| ETag with supplied digest | 200 with `ETag: "010203"` | Same | 500, `res.clone is not a function` |
+| Cache | Route returned 200 and `cacheAvailable: false` | Same | Same |
+| Signed cookie | 500, `crypto is not defined` | Same | Same |
+| `streamText` with two writes | 200, buffered `onetwo` | Same | Same |
+| `streamText` with `sleep(1)` between writes | 200, partial body `one` | No reply within the probe's 10 s limit | 200, partial body `one` |
 
-Hono adds `Transfer-Encoding: chunked` to both stream variants. The executor rejects that hop-by-hop header. An application that emits a stream without that header still reaches a buffered UTF-8 IPC reply. Neither runner exposes a timer, WebCrypto or a persistent Cache API in this configuration.
+Hono adds `Transfer-Encoding: chunked` to both stream variants in the QuickJS and deno_core probes. The executor rejects that hop-by-hop header. StarlingMonkey's direct replies omitted the header. All three workers use buffered UTF-8 replies. All three lack timers, WebCrypto and a persistent Cache API in this configuration. The StarlingMonkey column came from one request per route through `hono.py` at 21:32:27 CET on the same Mac, at a one-minute host load of 9.71.
 
 ## Correctness and test commands
 
@@ -347,3 +347,149 @@ I reran `KONAE_TEST_FUNCTION_WORKER=<cached Wasm runner> KONAE_TEST_LEGACY_FUNCT
 | Stock-platform isolation without Linux containment | The container results show the same guest boundary and zero effective capabilities. The native Debian and Ubuntu kernels and a production Kernel policy remain unverified. |
 
 Cached QuickJS narrows the Hono latency gap and still misses the replacement criterion. The new StarlingMonkey measurements justify a full runner test. They establish that fresh pooled instances can execute the URL probe and one Hono GET within the warm median budget before IPC and Kernel work.
+
+## StarlingMonkey IPC v2 runner
+
+The `starling-runner` Cargo feature selects StarlingMonkey. The worker still reads one bundle at Init under `konae-functions-ipc/2`. It derives the cache key from the source SHA-256, the pinned StarlingMonkey engine digest, Wasmtime 38.0.4 and the guest adapter and build files. The compiled filename also names the target. The worker loads and links the locally precompiled component once. On a cache miss it can call the configured builder, which runs ComponentizeJS and Wizer, then precompiles the component with Wasmtime. Both build outputs enter the cache through renames. The runtime requires an operator-owned cache and reads native code only from that directory.
+
+Each Invoke uses a fresh Store and a pooled instance of the Wizer snapshot. The snapshot has already evaluated the module, so a request starts from the same top-level state. The previous successful Store lives until the next Invoke or Shutdown so its shutdown hook can run on retirement. The shared bridge checks capability nonces, pulls up to 64 KiB of body data per read, invokes named actions and forwards failure codes. It buffers the UTF-8 response within `WorkerLimits.response_bytes`. StarlingMonkey inserts a length for buffered responses. The adapter removes a length that matches the buffered reply so the executor can set HTTP framing. An incorrect length still reaches the executor's refusal. This also normalizes an explicitly supplied matching length.
+
+Wasmtime limits linear memory with `WorkerLimits.heap_bytes`, 64 MiB in these probes. Epoch interruption handles the executor's Cancel and the shutdown watchdog. IPC v2 carries no deadline value, so the parent must send Cancel when its request budget expires. The component links only the worker imports and one clock function for `Date.now()`. Wizer uses zero for that clock. ComponentizeJS disables its WASI clocks, entropy, networking and stdio. The guest adapter removes timers, fetch, WebCrypto and `performance`. JavaScript still has `Math.random()` with the generator state in the snapshot. `Date.now()` inside a handler uses wall time. General `Date` constructor behavior and randomness across independent invocations need parity tests.
+
+### Build and measurement commands
+
+Run from the repository root. `exported` is the two-function app folder used in the earlier HTTP proof. `tools`, `bundles` and the operator-owned cache are absolute paths outside the app folder. Set `KONAE_STARLING_WASMTIME` to the Wasmtime 38.0.4 CLI.
+
+```sh
+crate=kernel-rs/functions-runner-wasm
+m=$crate/measure
+cargo build --release --locked --manifest-path "$crate/Cargo.toml" \
+  --features starling-runner --bin konae-functions-runner-wasm
+starling=$PWD/$crate/target/release/konae-functions-runner-wasm
+
+mkdir -p "$tools" "$bundles" "$cache"
+npm install --prefix "$tools" --no-audit --no-fund \
+  @bytecodealliance/componentize-js@0.21.0 esbuild@0.25.12 es-module-lexer@1.7.0
+export KONAE_STARLING_TOOLS="$tools"
+export KONAE_STARLING_CACHE="$cache"
+export KONAE_STARLING_BUILDER="$PWD/$m/starling-component.sh"
+node "$m/legacy-host.mjs" --write-bundles "$bundles"
+printf '%s' "export function handle() { return new Response('ok'); }" >"$bundles/trivial.mjs"
+cp "$exported/server/count.mjs" "$exported/server/hello.mjs" "$bundles/"
+for name in trivial count hello orders preferences middleware; do
+  "$starling" --prepare "$bundles/$name.mjs"
+done
+
+# Use each portable .wasm path printed by --prepare for the Linux cache.
+"$KONAE_STARLING_WASMTIME" compile --target aarch64-unknown-linux-gnu \
+  -W gc-support=n -W threads=n -W stack-switching=n -W epoch-interruption=y \
+  -O pooling-allocator=y -o "${portable%.wasm}.aarch64-unknown-linux-gnu.cwasm" "$portable"
+
+unset KONAE_STARLING_BUILDER
+# Run each pair back to back with starling and deno pointing to the two binaries.
+for runner in "$starling" "$deno"; do
+  python3 "$m/protocol.py" "$runner" --runs 30 --skip-engine-size
+done
+for runner in "$starling" "$deno"; do
+  python3 "$m/protocol.py" "$runner" --post "$bundles/count.mjs" --runs 30
+done
+for runner in "$starling" "$deno"; do
+  python3 "$m/suite.py" "$runner" --runs 1 --repeat-slowest 30
+done
+python3 "$m/hono.py" "$starling" "$bundles/middleware.mjs"
+```
+
+The middleware bundle uses the original Hono probe build command above. The Linux runner uses the same locked release build with Rust 1.91.0 in `rust:1.91-bookworm`. To rerun the Linux comparisons, mount the repository, cache, release directory and directory containing the deno_core binary and count bundle as read-only directories. Set `KONAE_STARLING_CACHE` to the cache mount. Use the same three command pairs inside each image with the mounted paths.
+
+```sh
+docker run --rm --network none --user 65534:65534 --cap-drop=ALL \
+  --security-opt seccomp=unconfined --security-opt no-new-privileges \
+  --mount "type=bind,src=$PWD,dst=/src,readonly" \
+  --mount "type=bind,src=$cache,dst=/cache,readonly" \
+  --mount "type=bind,src=$linux_release_dir,dst=/bench-bin,readonly" \
+  --mount "type=bind,src=$linux_assets,dst=/assets,readonly" \
+  -e KONAE_STARLING_CACHE=/cache -e PYTHONDONTWRITEBYTECODE=1 "$image" sh /assets/bench.sh
+```
+
+In these runs `bench.sh` ran the three command pairs with `/src/kernel-rs/functions-runner-wasm/measure`, `/bench-bin/konae-functions-runner-wasm`, `/assets/deno` and `/assets/count.mjs`. For Kernel tests the supervisor clears the child environment. A launcher exports the absolute cache path and runs `exec /absolute/path/to/runner "$@"`. The launcher uses the cache alone. The ignored tests' finite bundles can be extracted with `python3 "$m/starling-kernel-bundles.py" "$bundles"` and prepared as above. No executor, Kernel or ADR change is needed for this development configuration.
+
+### Paired latency and RSS
+
+The final comparisons ran on November 22, 2026 on an Apple M3 Pro with 18 GiB RAM and 11 logical CPUs. macOS 26.6.1 build 25G76 reported `uname -r` as `25.6.0`. Its pairs ran from 21:31:03 to 21:31:26 CET with a one-minute host load average of 16.41 to 18.64. Docker Desktop 29.9.3 ran both arm64 images on `7.0.14-linuxkit` with nine vCPUs. Debian ran at 21:31:26 to 21:31:33 CET at VM load 4.47 to 4.74. Ubuntu ran at 21:31:33 to 21:31:40 at VM load 4.27 to 4.47. Another Rust build was active on the shared host. macOS used Node 26.0.0 and Python 3.14.5. Debian and Ubuntu used Node 22.23.5, with Python 3.11.2 and 3.12.3 respectively.
+
+Both container runs reported UID and GID 65534, all five capability masks zero, `NoNewPrivs=1`, `Seccomp=0` and zero seccomp filters. They used read-only cache mounts, no network beyond loopback, no delegated cgroup and no Landlock setup. The runner needs an ordinary process, threads, pipes, clocks, memory and file mappings, including executable mappings for the native cache. It used the same guest boundary in both images. The images ran the Docker VM kernel. The native 6.1 and 6.8 kernels remain untested.
+
+The macOS deno_core comparison used the round-two locked release binary. Linux used the IPC v2 release runner at `/usr/local/lib/konae/functions-runner` from `konae-functions-lab-kernel:ipc2-thr-kts9t7ufjf-20261121`, SHA-256 `9c74ed3d77259646477d3b6b1cd16daf40c17f257e00c6902da119d133a409b1`. Each pair shares its Python driver, IPC protocol, source and platform. The different deno_core builds and host conditions limit cross-platform comparisons.
+
+Each IPC series took 30 samples after one warm-up. Cold GET starts a new process for every sample and includes launching it, loading the precompiled component, linking, making the first instance and returning the first reply. The OS page cache stayed warm. Warm requests reuse the worker process and use a fresh JavaScript instance. The GET measures IPC, guest work, copying and scheduling. The POST also includes Python's SQLite transaction, action round trips and commit. RSS is the worker's resident memory after Ready and after the series. It includes shared pages and excludes transient peaks.
+
+| Platform and engine | Cold GET p50 / p95 / max, ms | Warm GET p50 / p95, ms | Warm POST p50 / p95, ms | GET RSS before / after, KiB | POST RSS before / after, KiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| macOS StarlingMonkey | 20.941 / 23.329 / 28.865 | 2.439 / 3.443 | 4.353 / 6.134 | 6,624 / 12,976 | 6,560 / 13,392 |
+| macOS deno_core | 48.743 / 59.774 / 67.645 | 26.725 / 38.275 | 34.448 / 51.181 | 4,208 / 30,560 | 4,192 / 30,688 |
+| Debian 12 StarlingMonkey | 22.831 / 30.576 / 32.641 | 1.654 / 3.096 | 4.414 / 6.228 | 4,048 / 13,460 | 4,048 / 13,776 |
+| Debian 12 deno_core | 53.266 / 67.647 / 73.225 | 0.425 / 2.132 | 2.048 / 2.964 | 37,476 / 38,196 | 37,456 / 38,508 |
+| Ubuntu 24.04 StarlingMonkey | 23.813 / 30.112 / 33.842 | 1.509 / 3.263 | 4.207 / 7.036 | 5,564 / 14,976 | 5,564 / 15,292 |
+| Ubuntu 24.04 deno_core | 51.836 / 62.970 / 64.594 | 0.401 / 1.112 | 1.801 / 3.188 | 37,632 / 38,336 | 37,592 / 38,656 |
+
+Each Hono sweep ran the same 200 checks and skipped the seven cases marked out of scope by the verifier. The harness restores SQLite state and repeats the slowest case in each of the main and rollback sweeps 30 times after one warm-up. The higher repeat maximum counts for the revised guard. This time includes local HTTP, two SQLite snapshots, routing, transaction work where applicable, and IPC. Case selection can differ by engine. In all six runs the highest repeated maximum came from the same rollback case. Every repeat passed.
+
+| Platform and engine | Passed / failed / skipped | Slowest in full sweep, ms | `a.internal-error.rollback-after-update` max of 30, ms |
+| --- | ---: | ---: | ---: |
+| macOS StarlingMonkey | 200 / 0 / 7 | 27.79, `a.authorization.alice.POST` | 22.44 |
+| macOS deno_core | 200 / 0 / 7 | 83.86, `a.absent.GET` | 41.41 |
+| Debian 12 StarlingMonkey | 200 / 0 / 7 | 53.46, `a.authorization.alice.GET` | 23.74 |
+| Debian 12 deno_core | 200 / 0 / 7 | 16.14, rollback | 7.12 |
+| Ubuntu 24.04 StarlingMonkey | 200 / 0 / 7 | 45.66, `alternation.preferences.0` | 10.87 |
+| Ubuntu 24.04 deno_core | 200 / 0 / 7 | 13.05, rollback | 5.68 |
+
+### Cache creation and component size
+
+A single actual IPC Init for the trivial bundle in a new empty cache took 5,984.43 ms to Ready and 5,986.81 ms to the first reply. The command used `protocol.Worker(starling, TRIVIAL, init_timeout=70)` followed by an asserted `worker.get()`. It ran at 21:32:33 to 21:32:39 CET with macOS host load 10.13 to 11.08. This includes starting the Node build process, bundling, Wizer, native compilation, then loading and calling the component. The 250 ms criterion uses an existing precompiled artifact. Production must do the slow part before the first request.
+
+The macOS StarlingMonkey release binary was 2,510,608 bytes. The Linux one was 2,946,040 bytes. The corresponding deno_core binaries were 80,028,256 and 94,500,152 bytes. The runners' sizes came from `protocol.py`. The component sizes came from `--prepare` on macOS and `wc -c` after cross-compiling the portable artifacts for Linux.
+
+| Bundle | Portable component bytes | macOS native bytes | Linux native bytes | macOS `--prepare` build, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Trivial GET | 12,521,534 | 49,962,640 | 50,044,560 | 5,941.15 |
+| Counter POST | 12,527,503 | 49,962,640 | 50,044,560 | Cache hit in the recorded batch |
+| Exported hello | 12,522,945 | 49,962,640 | 50,044,560 | 4,546.89 |
+| Hono orders | 19,930,305 | 57,499,280 | 57,581,200 | 5,363.36 |
+| Hono preferences | 12,954,824 | 49,962,640 | 50,044,560 | 6,152.39 |
+| Hono middleware | 13,311,171 | 49,962,640 | 50,044,560 | 5,315.58 |
+
+Each build-time cell is one miss. `--prepare` times writing the input, bundling, Wizer, precompiling and installing both files. The finite bundles built at 21:24:14 to 21:25:08 CET at macOS host load 15.22 to 16.86. The separate trivial build finished at 21:22:58. The five Linux native files timed together each took 1.23 to 1.37 s with `time -p` around the cross-target `wasmtime compile` command. That step reused the portable snapshots and took place at 21:27:46 to 21:27:52 with macOS host load 11.26 at start. The later exported hello build used the same cross-target command.
+
+To estimate the memory cost across app versions, I started one macOS IPC worker for the Hono orders component. I sampled `ps -o rss=` after Ready and after 30 successful `protocol.Worker.invoke` calls following a warm-up. The calls used `/a/orders/1` and answered the `readOrder` operation with Alice's fixture row. The series at 21:32:27 to 21:32:30 CET and host load 9.71 went from 8,672 to 17,632 KiB. Under IPC v2's one-worker-per-bundle model, 20 similar distinct warm components would sum to about 344 MiB of worker RSS. This extrapolation can count shared runner pages repeatedly and excludes request peaks and Kernel memory. Twenty Hono orders-sized components would also use about 380 MiB of portable artifacts and 1,097 MiB of macOS native cache. This disk estimate multiplies the file sizes above by 20.
+
+### Export and test results
+
+At 21:32:30 CET on macOS, `PORT=18811 "$m/run-export.sh" "$PWD/kernel-rs/target/debug/kernel" "$launcher" "$exported"` ran the exported app folder under the development Kernel and cache-only StarlingMonkey launcher. Host load was 9.71 at start and 10.13 at finish. The authenticated `GET /api/hello` returned HTTP 200 and `wasm-ok`. The first `POST /api/count` with `{"amount":1}` returned HTTP 200 and `{"n":1}`. The 30 subsequent transactions verified every increment through `{"n":31}`. Both worker PIDs stayed the same. The HTTP harness recorded warm GET p50/p95 of 6.109/10.103 ms and warm POST p50/p95 of 11.995/19.725 ms. This includes routing, authentication, IPC and scheduling. POST also includes the two named actions and the Kernel's idempotency and transaction work. An earlier attempt returned 502 because StarlingMonkey added `Content-Length`. The second run used the response adapter described above.
+
+The two containers ran the same export with the packaged IPC v2 lab Kernel and `"$m/run-export.sh" /assets/kernel /assets/worker /export`. The Docker command above also mounted the exported folder at `/export` and added `--init`. Both completed the same GET and all 31 POSTs as UID 65534 with zero capabilities and seccomp disabled. Debian ran 21:37:27 to 21:37:30 CET, and Ubuntu 21:37:30 to 21:37:32. VM load was 6.14 to 6.41. Debian's repeated GET and POST p50/p95 were 26.553/67.619 ms and 29.330/84.200 ms. Ubuntu's were 21.621/35.912 ms and 28.383/47.665 ms. The Linux Kernel showed no idle worker children at the snapshot points. These HTTP figures may include worker startup and are outside the warm IPC guard.
+
+| Command | macOS result |
+| --- | --- |
+| `cargo test --release --locked --manifest-path "$crate/Cargo.toml" --features starling-runner -- --test-threads=1` | 10 passed, 1 failed on the cache-hit rerun in 5.60 s. It finished at 21:34:57 CET and host load 18.59. The multipart file's bytes came back as the ASCII string `0255` in place of bytes 0 and 255. The initial run also failed the import-refusal test because the test builder could not find Node after the supervisor cleared its PATH. The rerun supplied the test builder's PATH and passed. |
+| `cargo test --release --locked --manifest-path "$crate/Cargo.toml" -- --test-threads=1` | QuickJS passed 11 in 1.36 s after rebuilding the guest. |
+| `KONAE_TEST_FUNCTION_WORKER="$launcher" KONAE_TEST_LEGACY_FUNCTION_WORKER="$legacy" cargo test -p kernel -- --ignored --test-threads=1` from `kernel-rs/` | 5 passed, 5 failed in 73.30 s. It ran 21:32:27 to 21:33:41 CET with host load 9.71 to 19.66. The export/import test, both worker lifecycle tests, the ABI mismatch check and the SQLite benchmark passed. Three copy tests lacked external credentials or fixtures. The oversized-body test returned 504 in place of 413, and the 100 MB stream test lost its TCP connection. The build-time handling of a top-level infinite loop still needs a direct parity test. The HTTP test stopped before it reached that assertion. |
+| `cargo test -p kernel -p konae` from `kernel-rs/` | The Kernel passed 623, failed 1 and ignored 10 in 61.88 s. One copy test reported `WouldBlock` on a file lock, and Cargo stopped before running Konae. The isolated `cargo test -p kernel common_cut_releases_partial_inventory_on_space_and_reader_limits -- --test-threads=1` retry passed. `cargo test -p konae` separately passed 96 tests. The follow-ups ran from 21:35:09 to 21:35:36 CET at host load 17.26 to 25.29. |
+| `CARGO_TARGET_DIR=/tmp/konae-wasm-deno-target cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml -- --test-threads=1` | The three unit tests passed. All eight isolation tests failed to spawn the runner because the cached harness embedded the old binary path. Rebuilding with `cargo rustc --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml --test worker_isolation -- -C opt-level=3` in the same target directory fixed the path. All eight passed when run serially. The retry took 1.85 s and ended at 21:40:51 CET and host load 6.35. |
+| `KONAE_MCP_TEST_PORT=61308 LITTLEBOX_MCP_TEST_PORT=61308 bun test --timeout 30000` | Bun 1.3.11 reported 1,718 passed, 14 skipped and one failure with one import error. The unchanged Node baseline test imports `node:sqlite`, which Bun could not resolve. All 54 MCP integration tests passed in the full run. The suite took 453.98 s, from 21:32:27 to 21:40:01 CET, with host load 9.71 at start and 8.80 at finish. |
+| `bun run build` | Passed. It ran immediately after the Bun suite and finished at 21:40:13 CET and host load 8.36. |
+
+A separate IPC boundary test used `protocol.Worker` to return `new Response('x'.repeat(size))` with default worker limits. The runner refused 2,097,153 bytes as `response_too_large`. The two 2,097,152-byte requests both hit `worker_memory_limit` before replying. This was the cache-hit retry at 21:36:26 CET on the Mac at host load 20.31. The wire-size guard works, and this response path can exhaust the 64 MiB guest memory ceiling before the configured reply limit.
+
+## Final verdict
+
+The ratio divides StarlingMonkey's time by the same-platform deno_core time above. Warm ratios must be at most 1.5. Every measured cold maximum must be under 250 ms.
+
+| Platform | Cold max, StarlingMonkey / deno_core | Warm GET ratio | Warm POST ratio | Slowest repeated Hono ratio |
+| --- | --- | --- | --- | --- |
+| macOS | 28.865 / 67.645 ms, pass | 0.09×, pass | 0.13×, pass | 0.54×, pass |
+| Debian 12 on Docker | 32.641 / 73.225 ms, pass | 3.89×, fail | 2.16×, fail | 3.33×, fail |
+| Ubuntu 24.04 on Docker | 33.842 / 64.594 ms, pass | 3.76×, fail | 2.34×, fail | 1.91×, fail |
+
+Keep deno_core in production. StarlingMonkey is the Wasm engine to take forward. It passed the Hono suite without Linux capabilities or containment setup and met every macOS timing guard. It missed all three warm guards in both containers. Stock Debian and Ubuntu kernels remain unverified. QuickJS remains rejected under its measured guards.
+
+Production would componentize during `konae build` and ship the portable component and digest in `server/`. The destination would precompile verified Wasm into its own trusted cache. The Gate and Kernel need shared refusals for missing or mismatched artifacts, unsupported versions, unexpected imports or exports, and builds that exceed their limits or require disallowed host effects during initialization. Production still needs a Wasm launch policy, native-kernel tests, a plan for per-version cache cost, and parity for large bodies, response memory, multipart files and `Response.clone`. It also needs a rule for top-level state that Wizer freezes before any request. IPC v3 changes how the worker receives and selects bundles and reports handler errors.
