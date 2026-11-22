@@ -119,7 +119,7 @@ fn strict_worker_survives_the_short_lived_spawn_thread() {
     let executable = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner")).to_owned();
     let bundles = bundle("export function handle() { return new Response('alive'); }");
     let root = std::env::var("KONAE_FUNCTIONS_CGROUP").expect("strict cgroup root required");
-    let worker = thread::spawn(move || {
+    let mut worker = thread::spawn(move || {
         Worker::spawn_with_policy(
             &executable,
             &bundles,
