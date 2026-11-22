@@ -95,7 +95,19 @@ jobs:
                   "$TEST_BINARY" "$@" --ignored --test-threads=1
               }
               diagnose() {
-                echo "::group::kernel log after the failure"
+                echo "::group::workers and cgroups left after the failure"
+                ps -o pid,ppid,uid,stat,rss,etime,cmd -u 65534 || true
+                for group in "$cg"/delegated/konae-worker-*; do
+                  test -d "$group" || continue
+                  echo "== $group"
+                  ls -ln "$group/cgroup.kill" "$group/cgroup.procs" || true
+                  echo "procs: $(cat "$group/cgroup.procs" | tr "\n" " ")"
+                  cat "$group/cgroup.events" "$group/memory.events" || true
+                  echo "memory.current=$(cat "$group/memory.current") memory.max=$(cat "$group/memory.max")"
+                  for pid in $(cat "$group/cgroup.procs"); do grep -E "^(State|SigPnd|ShdPnd|VmRSS):" "/proc/$pid/status" || true; done
+                  echo "writing cgroup.kill as root"; echo 1 > "$group/cgroup.kill" || true; sleep 1
+                  echo "procs after kill: $(cat "$group/cgroup.procs" | tr "\n" " ")"
+                done
                 dmesg --time-format iso 2>/dev/null | grep -i -E "oom|killed process|memory cgroup" | tail -n 30 || true
                 echo "::endgroup::"
                 exit 1

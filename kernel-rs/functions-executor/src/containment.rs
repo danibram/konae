@@ -94,7 +94,9 @@ impl Containment {
     }
     pub(crate) fn kill(&self) {
         if let Some(path) = &self.path {
-            let _ = std::fs::write(path.join("cgroup.kill"), "1");
+            if let Err(error) = std::fs::write(path.join("cgroup.kill"), "1") {
+                eprintln!("functions cgroup kill failed for {}: {error}", path.display());
+            }
         }
     }
     pub(crate) fn oom_kill_count(&self) -> Option<u64> {
