@@ -125,6 +125,32 @@ impl Runtime {
         }
     }
 
+    /// Test diagnostics: every slot with its pins and whether a worker is present, plus permits.
+    #[cfg(test)]
+    pub(crate) fn debug_state(&self) -> String {
+        let state = self.state.lock().unwrap();
+        let slots = state
+            .slots
+            .iter()
+            .map(|(key, slot)| {
+                let worker = match slot.worker.try_lock() {
+                    Ok(guard) => guard
+                        .as_ref()
+                        .map(|worker| format!("worker pid={:?} synchronized={}", worker.pid(), worker.is_synchronized()))
+                        .unwrap_or_else(|| "no worker".into()),
+                    Err(_) => "worker mutex held".into(),
+                };
+                format!("{key}: pins={} {worker}", slot.pins.load(Ordering::SeqCst))
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "slots={slots:?} admission={} active={} allocations={}",
+            self.admission.available_permits(),
+            self.active.available_permits(),
+            self.allocations.available_permits()
+        )
+    }
+
     pub fn from_env() -> anyhow::Result<Self> {
         env_capacity_result("KONAE_FUNCTIONS_INSTANCES", INSTANCES)?;
         env_capacity_result("KONAE_FUNCTIONS_APP_SLOTS", 2)?;

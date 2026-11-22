@@ -1378,6 +1378,23 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
             if status == StatusCode::OK {
                 break;
             }
+            println!("recovery_attempt status={status} runtime={}", state.functions.debug_state());
+            if let Some(root) = std::env::var_os("KONAE_TEST_FUNCTION_CGROUP") {
+                for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+                    let path = entry.path();
+                    if !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("konae-worker-")) {
+                        continue;
+                    }
+                    let read = |name: &str| std::fs::read_to_string(path.join(name)).unwrap_or_else(|error| format!("<{error}>")).replace('\n', " ");
+                    println!("worker_cgroup {} procs=[{}] events=[{}] memory.current={} memory.events=[{}]", path.display(), read("cgroup.procs").trim(), read("cgroup.events").trim(), read("memory.current").trim(), read("memory.events").trim());
+                    for pid in read("cgroup.procs").split_whitespace() {
+                        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+                        let fields = status.lines().filter(|line| line.starts_with("State:") || line.starts_with("SigPnd:") || line.starts_with("ShdPnd:") || line.starts_with("VmRSS:")).collect::<Vec<_>>();
+                        let wchan = std::fs::read_to_string(format!("/proc/{pid}/wchan")).unwrap_or_else(|error| format!("<{error}>"));
+                        println!("worker_process pid={pid} {fields:?} wchan={wchan}");
+                    }
+                }
+            }
             assert!(
                 recovery_started.elapsed() < Duration::from_secs(20),
                 "no recovery after the memory limit: {attempts:?}"
