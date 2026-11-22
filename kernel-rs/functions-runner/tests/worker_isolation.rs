@@ -3,7 +3,9 @@ use konae_functions_executor::{
     protocol::{Input, WorkerLimits},
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::Path, thread, time::Duration};
+#[cfg(target_os = "linux")]
+use std::thread;
+use std::{collections::BTreeMap, path::Path, time::Duration};
 
 type Bundle = BTreeMap<String, String>;
 
