@@ -459,10 +459,7 @@ pub fn worker_main() -> Result<()> {
                 )) {
                     Ok(mut runtime) => {
                         let result = executor.block_on(runtime.invoke(input, capability.clone()));
-                        let completed = result.is_ok()
-                            || result
-                                .as_ref()
-                                .is_err_and(|error| error_code(error) == "handler_error");
+                        let completed = result.is_ok();
                         (result, completed.then_some(runtime))
                     }
                     Err(error) => (Err(error), None),
