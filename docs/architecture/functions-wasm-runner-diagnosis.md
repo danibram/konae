@@ -75,6 +75,10 @@ I alternated five runs per variant with one warmed worker and 30 measured reques
 
 The existing HTTP fixture's byte iterator also costs time. With the prototype, checksumming 1 MiB of `x` took 2.879 s with `for…of` and 0.421 s with indexed reads. Both returned the correct checksum. Verify throughput separately from memory and keep the 100 MB checksum assertion.
 
+I did not prove the prototype through the Kernel. A 100 MB POST through `konae dev` with the prototype runner reached the 64 MiB cap at body read 1,023, after 57,737,228 bytes. The fixture chose its streaming branch with an `X-Upload` header. The Kernel forwards only `Accept` and `Content-Type` to a function ([http.rs](../../kernel-rs/kernel/src/functions/http.rs#L632-L641)), so the handler fell back to `request.json()` and buffered the body. This cause is derived from code. Replaying the same chunk sizes over direct IPC with the header present kept linear memory at 11,272,192 bytes for all 1,774 reads. The rerun with a path-routed fixture stopped on a GET 502 before the upload. The fix must route its upload fixture by path.
+
+The components in these runs bundled `web-streams-polyfill` 4.2.0 through a crate `node_modules` link to the shared tools. The crate's lockfile pins 4.5.1. Without the link, esbuild resolves the repository root's 3.3.3. The cache key hashes the lockfile, not the installed copy, so a component built from the wrong copy still matches.
+
 ## Use the same stream type for Request and Response
 
 [StarlingMonkey's entry](../../kernel-rs/functions-runner-wasm/guest/starling-entry.js#L5-L15) installs the JS stream polyfill and JS Request but leaves the native Response. The native Fetch constructor expects its own stream type. It coerces a polyfilled stream to text in the four-chunk test, which returned 200 with 23 bytes, `[object ReadableStream]`. That is the failure I reproduced. The earlier report recorded `worker_failed` from its stream probe.
