@@ -59,6 +59,30 @@ The Hono version above matches the package in the runtime fixture. Choose an exa
 
 The context is supplied on every call. `context.actor.userId` is the account ID authenticated when the Kernel admitted the request, or `null`; it is always present. That actor stays fixed for the invocation. `context.actions.call(name, input)` checks the action's access and bindings against that actor. The handler cannot pass an actor ID, SQL, cookies, or a session credential to that operation. Only `Accept` and `Content-Type` request headers reach the handler. The app folder does not receive a generated `FunctionContext` type.
 
+### Node compatibility at build time
+
+Both builders resolve this pinned subset before resolving npm packages. The provider build pins `unenv@2.0.0-rc.20`, `events@3.3.0`, `readable-stream@4.7.0` and `@noble/hashes@1.8.0`. The editor carries the generated provider bundle, and each app folder carries it with its local builder. The destination Kernel does not install these packages:
+
+| Imports | Shipped behavior |
+| --- | --- |
+| `buffer` | `Buffer` and `SlowBuffer`; the injected global and imports share one implementation. |
+| `events` | `EventEmitter` and `once`, including the callable CommonJS constructor. |
+| `stream`, `stream/promises` | `Readable`, `Writable`, `Duplex`, `Transform`, `PassThrough`, `pipeline` and `finished` from `readable-stream`. |
+| `stream/web` | The runner's Web stream constructors. |
+| `util`, `util/types` | The pinned unenv exports used by the supported subset. |
+| `path`, `path/posix` | POSIX path string functions. |
+| `url` | Runner `URL` constructors and string based URL helpers. |
+| `crypto` | Incremental SHA-1/SHA-2 `createHash` and `createHmac`, `getHashes`, and runner backed `randomBytes` and `randomUUID`. |
+| `assert`, `assert/strict`, `querystring` | The pinned unenv implementations. |
+| `string_decoder` | Streaming UTF-8 `StringDecoder`. Other encodings refuse when used. |
+| `process` | A frozen empty `env` and FIFO microtask `nextTick`. A free `process` reference uses the same object. |
+| `timers`, `timers/promises` | Web timer functions and promise `setTimeout`. |
+| `async_hooks` | Import stubs for `AsyncLocalStorage` and `AsyncResource`; construction refuses. |
+
+The builders refuse `fs`, `net`, `tls`, `http`, `https`, `http2`, `child_process`, `worker_threads`, `dgram`, `cluster`, `vm`, and other unlisted Node built-ins, including their subpaths. The refusal code is `function.node-module-unsupported`. Both validation doors use the message `Server functions cannot import the Node.js module node:<name>.` Explicit package imports such as `process/` still resolve as npm packages.
+
+The subset describes build availability. It does not add APIs to the configured runner. For example, `crypto.randomBytes` needs the runner's WebCrypto support, and timers need runner timer support. Check the runner's API coverage before relying on a bundled package at request time.
+
 ### Without a framework
 
 Save one of these alternatives as `app/functions/hello.js`.

@@ -24,6 +24,7 @@
   "function.wasm-init": { "fix": "capsule", "remedy": "Fix the function's top-level initialization error." },
   "function.wasm-build-limit": { "fix": "capsule", "remedy": "Reduce work and memory use during function initialization." },
   "function.wasm-invalid": { "fix": "operator", "remedy": "Check the preparer and component packaging, then prepare the function again." },
+  "function.node-module-unsupported": { "fix": "capsule", "remedy": "Remove the unsupported Node.js module import from the server function." },
   "function.artifact-size": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.artifact-missing": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.artifact-manifest": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },

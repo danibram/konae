@@ -2,6 +2,8 @@ import { serverFolderEntries } from "../kernel/functions";
 import { hostedRuntime, type BuildArtifact } from "../runtime/artifact";
 import staticArtifactSource from "./static-artifact.js?raw";
 import localBuilderSource from "./local-builder.js?raw";
+import nodeCompatSource from "./node-compat.js?raw";
+import nodeCompatProvidersSource from "./node-compat-providers.js?raw";
 import { platformMcp, decodeBase64, type Transfer } from "../mcp/client";
 import { createTar, readTar } from "./tar";
 import type { MiniAppProject } from "./types";
@@ -58,7 +60,7 @@ export async function createProjectExport(
   };
   const { parserSource, parserLicense } = await import("../kernel/parser-assets");
   const actionsSource = entries.some((item) => item.path === `${SOURCES_FOLDER}/actions.json`) ? text("actions.json") : '{"version":1,"actions":{}}';
-  entries.push(...generatedFiles({ settings, actionsSource, schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource, localBuilder: localBuilderSource, parserSource, parserLicense }));
+  entries.push(...generatedFiles({ settings, actionsSource, schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource, localBuilder: localBuilderSource, nodeCompat: nodeCompatSource, nodeCompatProviders: nodeCompatProvidersSource, parserSource, parserLicense }));
   const appSourceEntries = entries.filter((entry) => entry.path.startsWith(`${SOURCES_FOLDER}/`)).map((entry) => [
     entry.path.slice(SOURCES_FOLDER.length + 1),
     entry.contents instanceof Uint8Array ? entry.contents : new TextEncoder().encode(entry.contents),

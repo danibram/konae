@@ -23,7 +23,7 @@ const settings: AppSettings = {
 const repo = path.resolve(import.meta.dir, "../..");
 const parserSource = readFileSync(path.join(repo, "node_modules/@babel/parser/lib/index.js"), "utf8");
 const parserLicense = readFileSync(path.join(repo, "node_modules/@babel/parser/LICENSE"), "utf8");
-const generated = (input: Omit<Parameters<typeof generatedFiles>[0], "parserSource" | "parserLicense">) => generatedFiles({ ...input, parserSource, parserLicense });
+const generated = (input: Omit<Parameters<typeof generatedFiles>[0], "parserSource" | "parserLicense" | "nodeCompat" | "nodeCompatProviders">) => generatedFiles({ ...input, nodeCompat: readFileSync(path.join(repo, "src/lib/node-compat.js"), "utf8"), nodeCompatProviders: readFileSync(path.join(repo, "src/lib/node-compat-providers.js"), "utf8"), parserSource, parserLicense });
 const folderSettings = (hasFunctions = false) => generated({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "", hasFunctions });
 
 test("the app folder's AGENTS.md tells a person or agent to escape text written into the page", () => {

@@ -4,8 +4,9 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promis
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseFunctions } from "../kernel/functions";
+import { nodeModuleFromSource, parseFunctions, validateFunctionSources, validateServerArtifact } from "../kernel/functions";
 import { bundleFunctions, bundleModule } from "../lib/local-builder.js";
+import { nodeCompatPlugin } from "../lib/node-compat.js";
 import { buildLocal, exportLocal } from "../../scripts/konae";
 import { generatedFiles } from "../lib/app-folder";
 import { createDefaultManifest } from "../deployments/manifest";
@@ -43,7 +44,7 @@ test("local and refreshed folder builds validate candidate server bundles", asyn
   expect(local.serverArtifact?.bundles.orders).toContain("SERVER_TOP_LEVEL_SENTINEL");
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
   expect(JSON.stringify(local.artifact.files)).not.toContain("SERVER_PRIVATE_BYTES");
-  const generated = generatedFiles({ settings: { id: project.id, name: project.name, slug: project.slug, visibility: "public", kernel: "0.12.1", manifest: {}, modules: project.modules }, actionsSource: '{"version":1,"actions":{}}', schemaSource: "", runtime: "", staticArtifact: await readFile("src/lib/static-artifact.js", "utf8"), localBuilder: await readFile("src/lib/local-builder.js", "utf8"), parserSource: await readFile("node_modules/@babel/parser/lib/index.js", "utf8"), parserLicense: await readFile("node_modules/@babel/parser/LICENSE", "utf8") });
+  const generated = generatedFiles({ settings: { id: project.id, name: project.name, slug: project.slug, visibility: "public", kernel: "0.12.1", manifest: {}, modules: project.modules }, actionsSource: '{"version":1,"actions":{}}', schemaSource: "", runtime: "", staticArtifact: await readFile("src/lib/static-artifact.js", "utf8"), localBuilder: await readFile("src/lib/local-builder.js", "utf8"), nodeCompat: await readFile("src/lib/node-compat.js", "utf8"), nodeCompatProviders: await readFile("src/lib/node-compat-providers.js", "utf8"), parserSource: await readFile("node_modules/@babel/parser/lib/index.js", "utf8"), parserLicense: await readFile("node_modules/@babel/parser/LICENSE", "utf8") });
   const generatedBuilder = generated.find((entry) => entry.path === "scripts/local-builder.mjs")?.contents as string;
   for (const entry of generated) { await mkdir(path.dirname(path.join(root, entry.path)), { recursive: true }); await writeFile(path.join(root, entry.path), entry.contents); }
   expect(generated.find((entry) => entry.path === "scripts/build.mjs")?.contents).toContain("babel-parser.cjs");
@@ -51,10 +52,11 @@ test("local and refreshed folder builds validate candidate server bundles", asyn
   expect(generated.some((entry) => entry.path === "scripts/BABEL-PARSER-LICENSE")).toBe(true);
   await mkdir(path.join(root, "node_modules"));
   await symlink(path.resolve("node_modules/esbuild"), path.join(root, "node_modules/esbuild"));
+  await writeFile(path.join(root, "app/functions/orders.ts"), 'import { EventEmitter } from "node:events"; export const handle = () => new Response(String(new EventEmitter().listenerCount("ready")));');
   const process = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ exitCode: await process.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
-  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
+  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("listenerCount");
   expect(await readFile(path.join(root, "app/package-lock.json"), "utf8")).toBe(files["package-lock.json"]);
 
   await writeFile(path.join(root, "scripts/local-builder.mjs"), `export async function bundleModule() { return { script: "", styles: "" }; }
@@ -64,7 +66,7 @@ export async function bundleFunctions(app, manifest) { return { version: 1, abi:
   const [malformedCode, malformedError] = await Promise.all([malformed.exited, new Response(malformed.stderr).text()]);
   expect(malformedCode).not.toBe(0);
   expect(malformedError).toContain("Function orders bundle must be a self-contained ESM module exporting handle.");
-  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
+  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("listenerCount");
   await writeFile(path.join(root, "scripts/local-builder.mjs"), generatedBuilder);
 
   await writeFile(path.join(root, "app/functions/orders.ts"), "export default () => null;");
@@ -72,7 +74,7 @@ export async function bundleFunctions(app, manifest) { return { version: 1, abi:
   const [code, error] = await Promise.all([invalid.exited, new Response(invalid.stderr).text()]);
   expect(code).not.toBe(0);
   expect(error).toContain("Function orders bundle must be a self-contained ESM module exporting handle.");
-  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
+  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("listenerCount");
 });
 
 test("browser entries cannot import server sources", async () => {
@@ -97,8 +99,43 @@ test("both builders use the artifact contract refusal without handle", async () 
   const noHandle = "export default () => null;";
   await writeFile(path.join(root, "app/functions/orders.ts"), noHandle);
   const refusal = { code: "function.bundle-contract", message: "Function orders bundle must be a self-contained ESM module exporting handle." };
-  await expect(bundleFunctions(path.join(root, "app"), parseFunctions(source))).rejects.toMatchObject(refusal);
+  await expect(bundleFunctions(path.join(root, "app"), parseFunctions(source))).rejects.toThrow(refusal);
   await expect(buildProjectInBrowser({ ...project, files: { ...files, "functions/orders.ts": noHandle } })).rejects.toMatchObject(refusal);
+});
+
+test("editor and CLI match the shared Node module source cases", async () => {
+  const cases = JSON.parse(await readFile("kernel-rs/kernel/src/functions-node-module-cases.json", "utf8")) as { name: string; source: string; helper?: string; module?: string; unreferenced?: boolean }[];
+  for (const [index, item] of cases.entries()) {
+    const entry = `functions/case-${index}.ts`;
+    const files: Record<string, string> = item.unreferenced
+      ? { [entry]: 'export const handle = () => null;', "functions/unreferenced.js": item.source }
+      : { [entry]: item.source, ...(item.helper ? { "functions/helper.js": item.helper } : {}) };
+    const manifest = parseFunctions(JSON.stringify({ version: 1, functions: { test: { entry, mount: "/api/test", methods: ["GET"], access: "anonymous" } } }));
+    if (item.module) {
+      expect(() => validateFunctionSources(manifest, files)).toThrow({ code: "function.node-module-unsupported", message: `Server functions cannot import the Node.js module node:${item.module}.` });
+    } else {
+      expect(() => validateFunctionSources(manifest, files)).not.toThrow();
+      if (!item.unreferenced) expect(nodeModuleFromSource(item.source)).toBeUndefined();
+    }
+  }
+});
+
+test("the Server Artifact contract refuses unsupported imports before bundle shape checks", () => {
+  const manifest = parseFunctions(source);
+  const refusal = { code: "function.node-module-unsupported", message: "Server functions cannot import the Node.js module node:fs." };
+  expect(() => validateServerArtifact(manifest, { version: 1, abi: "konae-functions/1", manifest, bundles: { orders: 'import fs from "node:fs"; export const handle = () => fs;' } })).toThrow(refusal);
+  expect(() => validateServerArtifact(manifest, { version: 1, abi: "konae-functions/1", manifest, bundles: { orders: 'const text = "node:fs"; export const handle = () => text;' } })).not.toThrow();
+});
+
+test("the Node resolver refuses esm.sh Node modules and unsupported built-in subpaths", async () => {
+  const refusal = { code: "function.node-module-unsupported", message: "Server functions cannot import the Node.js module node:fs." };
+  await expect(esbuild.build({ entryPoints: ["entry"], bundle: true, write: false, plugins: [nodeCompatPlugin(), { name: "cdn-importer", setup(build) {
+    build.onResolve({ filter: /^entry$/ }, () => ({ path: "https://esm.sh/example@1.0.0", namespace: "cdn" }));
+    build.onLoad({ filter: /.*/, namespace: "cdn" }, () => ({ contents: 'import fs from "/node/fs.mjs"; export const handle = () => fs;', loader: "js" }));
+  } }] })).rejects.toMatchObject({ errors: [expect.objectContaining({ detail: refusal })] });
+  const root = await folder();
+  await writeFile(path.join(root, "app/functions/orders.ts"), 'import path from "node:path/win32"; export const handle = path;');
+  await expect(bundleFunctions(path.join(root, "app"), parseFunctions(source))).rejects.toThrow({ code: "function.node-module-unsupported", message: "Server functions cannot import the Node.js module node:path/win32." });
 });
 
 test("both builders preserve aliased handle, shutdown, and extra exports", async () => {

@@ -4,10 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { createServer } from "vite";
-import { patchEditor } from "./patch.mjs";
-import { providers } from "./installed-providers.mjs";
 import { cases, filesFor, settings } from "./cases.mjs";
-import { refusal } from "./policy.mjs";
 import { hash } from "node:crypto";
 
 const { bundleFunctions } = await import("../../src/lib/local-builder.js");
@@ -19,6 +16,7 @@ const packageText = await readFile(join(here, "package.json"), "utf8");
 const lock = await readFile(join(here, "package-lock.json"));
 const names = Object.keys(cases).filter((name) => !cases[name].refused);
 const refused = Object.keys(cases).filter((name) => cases[name].refused);
+const refusal = (module) => ({ code: "function.node-module-unsupported", message: `Server functions cannot import the Node.js module node:${module}.` });
 
 async function fixture(directory, fixtureNames) {
   const app = join(directory, "app");
@@ -41,20 +39,6 @@ const denied = await fixture(join(output, "refused"), refused);
 const server = await createServer({
   root,
   configFile: false,
-  plugins: [{
-    name: "node-compat-spike",
-    enforce: "pre",
-    configureServer(server) {
-      server.middlewares.use("/__node_compat", (request, response) => {
-        const source = providers.get(request.url.slice(1));
-        response.statusCode = source === undefined ? 404 : 200;
-        response.end(source);
-      });
-    },
-    transform(source, id) {
-      if (id === resolve(root, "src/runtime/browser-build.ts")) return patchEditor(source);
-    },
-  }],
   optimizeDeps: { include: ["esbuild-wasm", "@babel/parser"] },
   server: { host: "127.0.0.1", port: 0 },
 });

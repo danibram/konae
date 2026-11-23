@@ -1,4 +1,4 @@
-import { parseFunctions, validateFunctions, validateServerArtifact } from "../kernel/functions";
+import { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources } from "../kernel/functions";
 import { servedPath } from "../lib/static-artifact.js";
 import type { Database, SqlJsStatic } from "sql.js";
 import { notifyColumnRefusal, notifyReturning, notifyReturningStatement, parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
@@ -67,6 +67,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       try {
         const manifest = functionsSource === undefined ? undefined : parseFunctions(functionsSource);
         if (manifest) {
+          validateFunctionSources(manifest, Object.fromEntries(Object.entries(files).filter((entry): entry is [string, string] => typeof entry[1] === "string")));
           const actions = JSON.parse(files["actions.json"] ?? '{"actions":{}}');
           validateFunctions(manifest, { files: Object.keys(files), modules: facts.modules, actions: actions?.actions ?? {}, staticPaths: facts.staticPaths ?? Object.keys(files).flatMap((path) => { const served = servedPath(path); return served ? [served] : []; }) });
           hasFunctions = Object.keys(manifest.functions).length > 0;

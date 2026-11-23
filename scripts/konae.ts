@@ -34,7 +34,7 @@ import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule, bundleFunctions } from "../src/lib/local-builder.js";
-import { parseFunctions, validateFunctions, validateServerArtifact, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
+import { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
 import { readTar } from "../src/lib/tar";
 import { readAppFolder } from "../src/lib/import-folder";
 import { buildProjectEntries } from "../src/lib/build-project";
@@ -46,7 +46,7 @@ import { importWithLocalKernel, rehearsePulledSnapshot } from "./rehearse";
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
-type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string; typeScriptLibs: Record<string, string> };
+type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; nodeCompat: string; nodeCompatProviders: string; parserSource: string; parserLicense: string; typeScriptLibs: Record<string, string> };
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -516,6 +516,7 @@ async function hasPackageBuild(root: string) {
 async function refreshPageBuilder(root: string, sdk: boolean, authored: ReadonlySet<string> = new Set()) {
   const generated = await folderFiles(root, await readSettings(root));
   const resources = generated.filter((entry) => entry.path === "scripts/build.mjs" || entry.path === "scripts/local-builder.mjs"
+    || entry.path === "scripts/node-compat.js" || entry.path === "scripts/node-compat-providers.js"
     || entry.path === "scripts/static-artifact.mjs" || entry.path === "scripts/babel-parser.cjs" || entry.path === "scripts/BABEL-PARSER-LICENSE"
     || sdk && entry.path === "scripts/runtime.js").map(({ path: relative, contents }) => [relative, contents] as const);
   for (const [relative, contents] of resources) {
@@ -583,7 +584,10 @@ export async function buildLocal(root: string, options: { development?: boolean;
   const functionsSource = files["functions.json"];
   const functions = functionsSource === undefined ? undefined : parseFunctions(functionsSource);
   const functionsContext = { files: Object.keys(files), modules: settings?.modules, actions: JSON.parse(files["actions.json"] ?? '{"actions":{}}').actions ?? {} };
-  if (functions) validateFunctions(functions, functionsContext);
+  if (functions) {
+    validateFunctionSources(functions, files);
+    validateFunctions(functions, functionsContext);
+  }
   const serverArtifact = functions && Object.keys(functions.functions).length ? await bundleFunctions(appDir(root), functions, options.development) : undefined;
   validateServerArtifact(functions, serverArtifact);
   const saveServer = async (staticPaths: string[]) => {
@@ -905,6 +909,8 @@ async function folderFiles(root: string, settings: AppSettings) {
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
     localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),
+    nodeCompat: embeddedResources?.nodeCompat ?? await readFile(path.join(toolRoot!, "src/lib/node-compat.js"), "utf8"),
+    nodeCompatProviders: embeddedResources?.nodeCompatProviders ?? await readFile(path.join(toolRoot!, "src/lib/node-compat-providers.js"), "utf8"),
     parserSource: embeddedResources?.parserSource ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/lib/index.js"), "utf8"),
     parserLicense: embeddedResources?.parserLicense ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/LICENSE"), "utf8"),
   });

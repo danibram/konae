@@ -150,6 +150,39 @@ export const cases = {
       };`,
     expected: { env: [], mode: null, next: 7, path: "b", host: "example.test", format: "é", query: ["1", "2"], asyncHooks: "ERR_KONAE_UNSUPPORTED_NODE_API" },
   },
+  bareBuiltin: {
+    source: `import { EventEmitter } from "events";
+      export const handle = () => Response.json(new EventEmitter().listenerCount("ready"));`,
+    expected: 0,
+  },
+  npmProcess: {
+    source: `import processPackage from "process/";
+      export const handle = () => Response.json({ same: processPackage === process, env: Object.keys(processPackage.env) });`,
+    expected: { same: false, env: [] },
+  },
+  commonJsEvents: {
+    source: `const EventEmitter = require("events");
+      export const handle = () => Response.json(new EventEmitter().listenerCount("ready"));`,
+    expected: 0,
+  },
+  dynamicBuiltin: {
+    source: `export const handle = async () => {
+      const { EventEmitter } = await import("node:events");
+      return Response.json(new EventEmitter().listenerCount("ready"));
+    };`,
+    expected: 0,
+  },
+  reexportBuiltin: {
+    source: `import { EventEmitter } from "node:events";
+      export { EventEmitter };
+      export const handle = () => Response.json(new EventEmitter().listenerCount("ready"));`,
+    expected: 0,
+  },
+  typeOnlyBuiltin: {
+    source: `import type { Stats } from "node:fs";
+      export const handle = (): Response => Response.json(typeof (null as Stats | null));`,
+    expected: "object",
+  },
 };
 
 const rejectedSpecifiers = {

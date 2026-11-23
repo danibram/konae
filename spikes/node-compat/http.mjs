@@ -31,8 +31,7 @@ for (const door of ["cli", "editor"]) {
   };
   let command = [kernel];
   if (door === "cli") {
-    command = [process.execPath, "--preload", "./spikes/node-compat/preload.mjs",
-      "scripts/konae.ts", "dev", "--dir", folder, "--port", port, "--events-port", String(await freePort())];
+    command = [process.execPath, "scripts/konae.ts", "dev", "--dir", folder, "--port", port, "--events-port", String(await freePort())];
   } else {
     await mkdir(join(data, "apps"), { recursive: true });
     await symlink(folder, join(data, "apps", settings.id)).catch((error) => {
