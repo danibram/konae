@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() -> Result<()> {
+    println!("cargo:rerun-if-env-changed=KONAE_STARLING_TOOLS");
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let guest = root.join("../functions-runner-wasm/guest");
     let tools = env::var_os("KONAE_STARLING_TOOLS").map(PathBuf::from);
@@ -76,7 +77,10 @@ fn main() -> Result<()> {
     }
     let adapter_bundle = out.join("adapter.mjs");
     let mut adapter_js = fs::read_to_string(&adapter_bundle)?;
-    anyhow::ensure!(adapter_js.contains("__KONAE_BUILD_TIMESTAMP__"), "StarlingMonkey runtime adapter has no build clock");
+    anyhow::ensure!(
+        adapter_js.contains("__KONAE_BUILD_TIMESTAMP__"),
+        "StarlingMonkey runtime adapter has no build clock"
+    );
     adapter_js = adapter_js.replace("__KONAE_BUILD_TIMESTAMP__", "0");
     let web_bundle = out.join("web.mjs");
     let web_outfile = format!("--outfile={}", web_bundle.display());
@@ -94,16 +98,6 @@ fn main() -> Result<()> {
     if !web_status.success() {
         bail!("Could not bundle the pinned Web API adapter");
     }
-    let instrumentation = "const __konaePreparationEffects = [];\nfor (const name of ['fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask']) Object.defineProperty(globalThis, name, { configurable: false, value: (...args) => { __konaePreparationEffects.push(name); throw new Error('KONAE_INIT_EFFECT:' + name); } });\nfor (const name of ['crypto', 'performance', 'WebAssembly']) delete globalThis[name];\nexport function __konaePreparationEffectsSeen() { return __konaePreparationEffects.length > 0; }";
-    let start = adapter_js
-        .find("for (const name of [")
-        .context("StarlingMonkey runtime adapter has no global API policy")?;
-    let tail = &adapter_js[start..];
-    let end = tail
-        .find("]) delete globalThis[name];")
-        .context("StarlingMonkey runtime adapter global API policy changed")?
-        + "]) delete globalThis[name];".len();
-    adapter_js.replace_range(start..start + end, &instrumentation);
     adapter_js.insert_str(0, "import * as web from './web.mjs';\n");
     adapter_js.push_str("\nObject.assign(globalThis, { AbortController: web.AbortController, AbortSignal: web.AbortSignal, Blob: web.Blob, DOMException: web.DOMException, File: web.File, FormData: web.FormData, Headers: web.Headers, ReadableStream: web.ReadableStream, Request: web.Request, Response: web.Response });\n");
     fs::write(&adapter_bundle, adapter_js)?;
@@ -128,6 +122,9 @@ fn main() -> Result<()> {
         "cargo:rustc-env=KONAE_BUILDER_FINGERPRINT={}",
         fingerprint(&root, &guest, &engine)?
     );
+    println!("cargo:rerun-if-changed=src/main.rs");
+    println!("cargo:rerun-if-changed=src/streaming.rs");
+    println!("cargo:rerun-if-changed={}", adapter.display());
     Ok(())
 }
 
@@ -199,6 +196,7 @@ fn fingerprint(
         guest.join("text.js"),
         guest.join("abort.js"),
         root.join("src/main.rs"),
+        root.join("src/streaming.rs"),
         root.join("build.rs"),
         root.join("Cargo.toml"),
         root.join("Cargo.lock"),

@@ -1,4 +1,9 @@
+mod streaming;
+
 use anyhow::{Context, Result, bail, ensure};
+use oxc_allocator::Allocator;
+use oxc_parser::Parser;
+use oxc_span::SourceType;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use spidermonkey_embedding_splicer::{
@@ -144,7 +149,9 @@ fn prepare_bundle(
         .prefix("konae-prepare-")
         .tempdir()?;
     let dir = scratch.path();
-    let source = String::from_utf8(bytes).context("bundle is not UTF-8")?;
+    let Some(source) = std::str::from_utf8(&bytes).ok().and_then(guard_imports) else {
+        return Ok(("bundle_contract", None, None));
+    };
     let app = dir.join("app.mjs");
     let adapter_file = dir.join("adapter.mjs");
     let entry = dir.join("source.js");
@@ -165,7 +172,7 @@ fn prepare_bundle(
     write_scratch!(
         dir,
         &entry,
-        b"import { hostRuntime, initializationFailed, __konaePreparationEffectsSeen } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (initializationFailed()) throw new Error('KONAE_INIT_EFFECT');\nif (__konaePreparationEffectsSeen()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
+        b"import { hostRuntime, initializationFailed } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (initializationFailed()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
     );
 
     let spliced = splice_bindings(
@@ -345,6 +352,7 @@ fn prepare_bundle(
     }
     let core = stub_wasi(snapshot_bytes, vec![], Some(WIT.to_owned()), None, None)
         .map_err(|error| anyhow::anyhow!("WASI adapter failed: {error}"))?;
+    let core = streaming::bound_allocations(&core)?;
     let component = ComponentEncoder::default()
         .merge_imports_based_on_semver(false)
         .validate(true)
@@ -365,6 +373,31 @@ fn prepare_bundle(
         component_sha256: hex(Sha256::digest(&component).as_slice()),
     };
     Ok(("ok", Some(manifest), None))
+}
+
+fn guard_imports(source: &str) -> Option<String> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::mjs()).parse();
+    if !parsed.errors.is_empty() || !parsed.module_record.requested_modules.is_empty() {
+        return None;
+    }
+
+    // Preserve evaluation of the specifier while refusing to load a module.
+    let mut offsets = parsed
+        .module_record
+        .dynamic_imports
+        .iter()
+        .map(|import| import.span.start as usize)
+        .collect::<Vec<_>>();
+    offsets.sort_unstable();
+    let mut guarded = source.to_owned();
+    for offset in offsets.into_iter().rev() {
+        guarded.replace_range(
+            offset..offset + "import".len(),
+            "((..._) => Promise.reject(new TypeError('function_import_forbidden')))",
+        );
+    }
+    Some(guarded)
 }
 
 fn read_bounded(mut reader: impl Read, limit: usize) -> Result<(Vec<u8>, bool)> {
