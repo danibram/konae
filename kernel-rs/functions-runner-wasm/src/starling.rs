@@ -95,7 +95,13 @@ impl Invocation {
         _limits: &WorkerLimits,
         source: &str,
     ) -> Result<InstancePre<Bridge>> {
-        let (cache, _) = cached_component(source, true)?;
+        let cache = Cache::new(source)?;
+        let meta = fs::symlink_metadata(&cache.compiled)
+            .context("Prepared StarlingMonkey component is missing")?;
+        ensure!(
+            meta.is_file() && trusted(&meta),
+            "Unsafe component cache entry"
+        );
         // Only accept native code from the operator-owned cache.
         let component = unsafe { Component::deserialize_file(&compiler.engine, &cache.compiled) }
             .context("Load the approved StarlingMonkey component")?;
@@ -148,13 +154,8 @@ impl Invocation {
         let mut response: Output =
             serde_json::from_str(&output).map_err(|_| WorkerError::new("invalid_response"))?;
         let body = self.store.data_mut().take_response();
-        response.body =
-            String::from_utf8(body).map_err(|_| WorkerError::new("invalid_response"))?;
-        // StarlingMonkey inserts a length for buffered bodies. The executor owns framing.
-        let length = response.body.len().to_string();
-        response.headers.retain(|(name, value)| {
-            !(name.eq_ignore_ascii_case("content-length") && *value == length)
-        });
+        let body = std::str::from_utf8(&body).map_err(|_| WorkerError::new("invalid_response"))?;
+        response.body = body.strip_prefix('\u{feff}').unwrap_or(body).to_owned();
         self.store.data_mut().request = None;
         Ok(response)
     }
@@ -273,6 +274,7 @@ fn cached_component(source: &str, worker: bool) -> Result<(Cache, Option<Duratio
         );
         return Ok((cache, None));
     }
+    ensure!(!worker, "Prepared StarlingMonkey component is missing");
     let builder = PathBuf::from(
         std::env::var_os("KONAE_STARLING_BUILDER")
             .context("Component cache miss. Prepare this bundle with the configured builder")?,

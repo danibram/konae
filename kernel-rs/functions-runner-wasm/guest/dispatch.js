@@ -51,10 +51,14 @@ export function dispatch(call, read, writeResponse, failure) {
     let total = 0;
     if (response.body) {
       const reader = response.body.getReader();
+      let complete = false;
       try {
         for (;;) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            complete = true;
+            break;
+          }
           if (!(value instanceof Uint8Array)) reject('invalid_response');
           total += value.length;
           if (total > responseLimit) reject('response_too_large');
@@ -65,6 +69,7 @@ export function dispatch(call, read, writeResponse, failure) {
           }
         }
       } finally {
+        if (!complete) await reader.cancel().catch(() => {});
         reader.releaseLock();
       }
     }
