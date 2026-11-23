@@ -40,6 +40,8 @@ for (const entry of imports.toReversed()) {
 const [bundled] = (await build({
   entryPoints: [resolve(guest, 'starling-entry.js')], bundle: true, format: 'esm',
   platform: 'neutral', write: false, external: ['konae:worker/host'],
+  mainFields: ['module', 'main'],
+  define: { __KONAE_BUILD_TIMESTAMP__: String(Date.now()) },
   plugins: [{
     name: 'app-source',
     setup(builder) {

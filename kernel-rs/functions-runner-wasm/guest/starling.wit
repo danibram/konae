@@ -6,6 +6,7 @@ interface host {
     op-worker-response-chunk: func(bytes: list<u8>) -> bool;
     op-worker-failure: func(code: string, detail: option<string>);
     now-ms: func() -> f64;
+    random-seed: func() -> u64;
 }
 
 world ipc {

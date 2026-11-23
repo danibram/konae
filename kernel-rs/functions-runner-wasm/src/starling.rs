@@ -13,6 +13,7 @@ use std::{
     os::unix::{fs::MetadataExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -25,6 +26,7 @@ const TARGET: &str = env!("KONAE_STARLING_TARGET");
 const STARLING: &str = "0.21.0:b45eb4dda2fed0eaecd4e5581fb26a99e642d001dbf82f3698aba27564a78ea1";
 const WASMTIME: &str = "38.0.4";
 const BUILD_LIMIT: Duration = Duration::from_secs(60);
+static TEST_RANDOM_SEED_INDEX: AtomicU64 = AtomicU64::new(0);
 
 pub struct Compiler {
     pub engine: Engine,
@@ -62,6 +64,9 @@ impl Compiler {
             |mut store, (code, detail): (String, Option<String>)| -> Result<()> {
                 let code = match code.as_str() {
                     "unsupported_runtime_api" => "unsupported_runtime_api",
+                    "function.initialization-cannot-snapshot" => {
+                        "function.initialization-cannot-snapshot"
+                    }
                     "response_too_large" => "response_too_large",
                     "function_handle_missing" => "function_handle_missing",
                     "handler_error" => "handler_error",
@@ -78,6 +83,20 @@ impl Compiler {
         host.func_wrap("now-ms", |store, ()| -> Result<(f64,)> {
             store.data().check()?;
             Ok((SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as f64,))
+        })?;
+        host.func_wrap("random-seed", |_store, ()| -> Result<(u64,)> {
+            if let Some(seed) = std::env::var_os("KONAE_STARLING_TEST_SEED") {
+                let seed = seed.to_string_lossy().parse::<u64>()?;
+                return Ok((
+                    seed.wrapping_add(TEST_RANDOM_SEED_INDEX.fetch_add(1, Ordering::Relaxed)),
+                ));
+            }
+            let mut bytes = [0u8; 8];
+            let result = unsafe { libc::getentropy(bytes.as_mut_ptr().cast(), bytes.len()) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            Ok((u64::from_le_bytes(bytes),))
         })?;
         Ok(Self { linker, engine })
     }
