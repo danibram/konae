@@ -192,7 +192,7 @@ fn host_interface_matches(types: TypesRef<'_>) -> bool {
         return false;
     };
     let exports = &types[instance].exports;
-    exports.len() == 4
+    exports.len() == 5
         && function_matches(
             types,
             exports.get("op-worker-call"),
@@ -204,6 +204,12 @@ fn host_interface_matches(types: TypesRef<'_>) -> bool {
             exports.get("op-worker-body-read"),
             &[],
             Some("bytes"),
+        )
+        && function_matches(
+            types,
+            exports.get("op-worker-response-chunk"),
+            &[(&["bytes"], "bytes")],
+            Some("bool"),
         )
         && function_matches(
             types,
@@ -417,17 +423,22 @@ mod tests {
         host.export("op-worker-body-read", ComponentTypeRef::Func(3));
         host.ty()
             .function()
+            .params([("bytes", EncodedValType::Type(0))])
+            .result(Some(EncodedPrimitive::Bool.into()));
+        host.export("op-worker-response-chunk", ComponentTypeRef::Func(4));
+        host.ty()
+            .function()
             .params([
                 ("code", EncodedValType::Primitive(EncodedPrimitive::String)),
                 ("detail", EncodedValType::Type(1)),
             ])
             .result(None);
-        host.export("op-worker-failure", ComponentTypeRef::Func(4));
+        host.export("op-worker-failure", ComponentTypeRef::Func(5));
         host.ty()
             .function()
             .params(std::iter::empty::<(&str, EncodedValType)>())
             .result(Some(EncodedPrimitive::F64.into()));
-        host.export("now-ms", ComponentTypeRef::Func(5));
+        host.export("now-ms", ComponentTypeRef::Func(6));
 
         let mut types = ComponentTypeSection::new();
         types.ty().instance(&host);
