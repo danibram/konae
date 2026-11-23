@@ -29,19 +29,24 @@ impl Bundle {
 }
 
 fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
-    let bundles = fs::read_dir(bundle.path())
-        .unwrap()
-        .map(|entry| {
-            let path = entry.unwrap().path();
-            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-            (name, fs::read_to_string(path).unwrap())
-        })
-        .collect();
     let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
     #[cfg(feature = "starling-runner")]
     let launcher = starling_launcher(bundle, runner);
     #[cfg(feature = "starling-runner")]
     let runner = launcher.as_path();
+    spawn_worker(bundle, runner, timeout).unwrap()
+}
+
+fn spawn_worker(bundle: &Bundle, runner: &Path, timeout: Duration) -> anyhow::Result<Worker> {
+    let bundles = fs::read_dir(bundle.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "mjs"))
+        .map(|path| {
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            (name, fs::read_to_string(path).unwrap())
+        })
+        .collect();
     Worker::spawn_with_policy(
         runner,
         &bundles,
@@ -49,7 +54,54 @@ fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
         WorkerLimits::default(),
         MemoryPolicy::DevelopmentPolling,
     )
-    .unwrap()
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn runtime_cache_miss_does_not_run_the_builder() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let bundle = Bundle::new("export function handle() { return new Response('ok'); }");
+    let cache = bundle.path().join("empty");
+    fs::create_dir(&cache).unwrap();
+    let builder = bundle.path().join("builder");
+    let marker = bundle.path().join("build-started");
+    symlink(
+        env!("CARGO_BIN_EXE_konae-functions-runner-wasm"),
+        bundle.path().join("runner"),
+    )
+    .unwrap();
+    fs::write(
+        &builder,
+        "#!/bin/sh\n: > \"$(dirname \"$0\")/build-started\"\nexec /bin/sleep 30\n",
+    )
+    .unwrap();
+    let launcher = bundle.path().join("launch");
+    fs::write(
+        &launcher,
+        r#"#!/bin/sh
+cd "$(dirname "$0")" || exit 1
+export KONAE_STARLING_CACHE="$PWD/empty"
+export KONAE_STARLING_BUILDER="$PWD/builder"
+exec ./runner "$@"
+"#,
+    )
+    .unwrap();
+    for script in [&launcher, &builder] {
+        fs::set_permissions(script, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let deadline = Duration::from_secs(2);
+    let outcome = spawn_worker(&bundle, &launcher, deadline)
+        .and_then(|mut worker| invoke(&mut worker, input("/", ""), deadline));
+    assert!(
+        !marker.exists(),
+        "Worker invoked the builder on a cache miss: {outcome:?}"
+    );
+    let error = outcome.unwrap_err();
+    assert_ne!(
+        konae_functions_executor::error_code(&error),
+        "deadline_exceeded"
+    );
 }
 
 #[cfg(feature = "starling-runner")]
@@ -391,6 +443,104 @@ fn response_limit_refuses_an_oversized_body() {
     assert_eq!(
         konae_functions_executor::error_code(&error),
         "response_too_large"
+    );
+}
+
+#[test]
+fn reply_chunks_fit_guest_memory_and_preserve_limits() {
+    let bundle = Bundle::new(
+        r#"
+        export function handle(request) {
+          let left = Number(new URL(request.url).searchParams.get('size'));
+          let sent = 0;
+          return new Response(new ReadableStream({
+            pull(controller) {
+              if (!left) return controller.close();
+              const size = Math.min(65536, left);
+              const bytes = new Uint8Array(size);
+              bytes.fill(97 + sent++ % 26);
+              controller.enqueue(bytes);
+              left -= size;
+            },
+          }));
+        }
+    "#,
+    );
+    let timeout = Duration::from_secs(10);
+    let mut worker = worker(&bundle, timeout);
+    for size in [256 * 1024, 1024 * 1024, 2 * 1024 * 1024] {
+        let result = invoke(&mut worker, input(&format!("/?size={size}"), ""), timeout).unwrap();
+        assert_eq!(result.body.len(), size);
+        for (index, chunk) in result.body.as_bytes().chunks(65536).enumerate() {
+            assert!(chunk.iter().all(|&byte| byte == b'a' + (index % 26) as u8));
+        }
+    }
+    let error = invoke(&mut worker, input("/?size=2097153", ""), timeout).unwrap_err();
+    assert_eq!(
+        konae_functions_executor::error_code(&error),
+        "response_too_large"
+    );
+}
+
+#[test]
+fn body_chunks_keep_their_bytes_under_the_default_heap() {
+    use konae_functions_executor::{RequestBody, RequestBodyChunk};
+    use std::sync::{Arc, Mutex};
+
+    struct Upload(Mutex<usize>);
+    const LENGTH: usize = 100_000_000;
+
+    impl RequestBody for Upload {
+        fn read_chunk(&self, maximum: usize) -> Result<RequestBodyChunk, String> {
+            let mut sent = self.0.lock().unwrap();
+            let len = maximum.min(LENGTH - *sent);
+            let byte = (*sent / 65536 % 256) as u8;
+            *sent += len;
+            Ok(RequestBodyChunk::new(vec![byte; len], *sent == LENGTH))
+        }
+
+        fn complete(&self) -> bool {
+            *self.0.lock().unwrap() == LENGTH
+        }
+    }
+
+    let bundle = Bundle::new(
+        r#"
+        export async function handle(request) {
+          const reader = request.body.getReader();
+          let first;
+          let last;
+          let total = 0;
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            first ??= value;
+            last = value[0];
+            total += value.byteLength;
+          }
+          return Response.json({ total, first: first[0], last });
+        }
+    "#,
+    );
+    let timeout = Duration::from_secs(10);
+    let mut worker = worker(&bundle, timeout);
+    let body = Arc::new(Upload(Mutex::new(0)));
+    let request = Input {
+        method: "POST".into(),
+        ..input("/", "")
+    };
+    let result = worker
+        .invoke_with_body(
+            "orders",
+            request,
+            body.clone(),
+            &Budget::new(timeout),
+            &mut |_, _| Err("forbidden".into()),
+        )
+        .unwrap_or_else(|error| panic!("After {} bytes: {error:#}", body.0.lock().unwrap()));
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.body).unwrap(),
+        json!({"total": LENGTH, "first": 0, "last": (LENGTH - 1) / 65536 % 256})
     );
 }
 
