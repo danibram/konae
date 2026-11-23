@@ -30,21 +30,21 @@ Time ordinary Server Actions with the same action and statement fields. Start at
 
 ## Fields and privacy
 
-Use the following field allowlist at collection time. `error.type` is a canonical refusal code when the Kernel has one, or a fixed error class such as `timeout`. Omit it on success. Use HTTP server/client status semantics for HTTP spans and mark failed internal work as an error. Use `_OTHER` for unrecognized methods and omit the original method text. A Server Action can fail even if a handler catches its Promise rejection.
+Use the following field allowlist at collection time. Record canonical codes in `konae.refusal.code`. For failed spans, set `error.type` to that code when it applies or use a fixed error class such as `timeout`. Apply HTTP server/client status semantics, including unset server status on 4xx. Use `_OTHER` for unrecognized methods and omit the original method text. A Server Action can fail even if a handler catches its Promise rejection.
 
 | Span or record | Fields |
 | --- | --- |
-| HTTP server | `http.request.method`, `http.route` as the declared mount or route template, `http.response.status_code`, `http.request.body.size`, `http.response.body.size`, `error.type` |
+| HTTP server | `http.request.method`, `http.route` as the declared mount or route template, `url.scheme` as `http` or `https`, `http.response.status_code`, `http.request.body.size`, `http.response.body.size`, `konae.refusal.code`, `error.type` |
 | Function | `konae.function.name`, `konae.artifact.version`, `konae.runner.kind` (`deno` or `wasm`), `konae.worker.reused`, `konae.outcome`, `konae.trace.truncated` on the root when true |
 | Action | `konae.action.name`, `konae.action.kind`, `konae.action.origin`, `konae.action.sequence` within the invocation, `konae.action.rows_read`, `konae.action.rows_written`, `konae.action.reply_bytes`, `konae.action.sqlite.duration_us`, `error.type` |
-| SQLite | `db.system.name=sqlite`, `db.operation.name` when the parsed statement supplies a known verb, `db.response.returned_rows` for a successful query, `error.type` |
+| SQLite | `db.system.name=sqlite`, `db.operation.name` when the parsed statement supplies a known verb, `db.response.returned_rows` for a successful query, `db.response.status_code` as the numeric SQLite code in a string on failure when available, `error.type` |
 | Transaction | `konae.transaction.outcome` (`committed`, `rolled_back`, `unknown`), `error.type` |
 | Kernel API | `konae.api.operation` from a fixed list of permitted operations or existing tool names, `error.type` |
 | Outbox HTTP client | `http.request.method`, `http.response.status_code`, `http.request.body.size`, `http.response.body.size`, `konae.action.name`, `konae.call.attempt`, `error.type` |
 
 Body sizes count observed bytes before transfer framing. Omit a size if the Kernel never saw the complete body. Count action reply bytes from the encoded reply before the IPC length prefix. For a direct Server Action, use the encoded HTTP body size and keep its origin distinct. Reuse existing serialization. Rows read means query rows produced for the caller. Rows written means direct SQLite changes reported by the statement. A later rollback can discard those changes. Use zero when there was no statement and omit the count when a failed statement left it unknown. SQLite time brackets the shared statement executor, including statement preparation, stepping and bounded row conversion. It excludes slot wait, connection setup and IPC. Use the existing database result for row counts.
 
-Allow deployment ID as `konae.deployment.id` on the trace root and use `service.name=konae-kernel`. Capture no row values, inputs, SQL text, paths with parameter values, query strings, raw hostnames or URLs, headers, cookies, actor IDs, tokens, or exception text. Exclude `url.full` and `server.address` on the client span because a call action can derive the target from app data. These are deliberate omissions from the HTTP conventions. Use codes and fixed labels for new Usage records. Stop writing and exposing raw function error detail there. Old stores can retain the column for compatibility. Suppress old details on read and clear stored values through the existing writer, so a later Usage export omits those values. Existing copies have their own retention. HTTP responses and error rules keep their existing behavior.
+Allow deployment ID as `konae.deployment.id` on the trace root and use `service.name=konae-kernel`. Capture no row values, inputs, SQL text, paths with parameter values, query strings, raw hostnames or URLs, headers, cookies, actor IDs, tokens, or exception text. Exclude `url.full`, `url.path` and `server.address` because request paths and call targets can contain app data. These are deliberate omissions from the HTTP conventions. Use codes and fixed labels for new Usage records. Stop writing and exposing raw function error detail there. Old stores can retain the column for compatibility. Suppress old details on read and clear stored values through the existing writer, so a later Usage export omits those values. Existing copies have their own retention. HTTP responses and error rules keep their existing behavior.
 
 Reference the [OpenTelemetry HTTP conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/) and [database conventions](https://opentelemetry.io/docs/specs/semconv/db/database-spans/).
 
@@ -90,7 +90,7 @@ Measured November 23, 2026 on an Apple M3 Pro with macOS 26.6.1. The Kernel used
 | Metrics | 6,121.708 µs | 8,633.125 µs | +22.874 µs | 5,616.875 µs |
 | Full capture | 6,148.750 µs | 8,553.875 µs | +49.916 µs | 5,639.000 µs |
 
-The loopback budget was 121.977 µs, 2% of baseline p50. Full capture added 0.82%. The median within-group loopback deltas were +54.104 µs for metrics and +65.958 µs for full capture. A 60-per-mode smoke run exceeded the gate. Use the fixed 1,200-per-mode run for the comparison. The p95 spread and shared host load make this a local estimate.
+The loopback budget was 121.977 µs, 2% of baseline p50. Full capture added 0.82%. The median within-group loopback deltas were +54.104 µs for metrics and +65.958 µs for full capture. A second 1,200-per-mode run used worker PID 80997 and measured 6,027.375 µs baseline p50, +28.834 µs for metrics and +33.334 µs for full capture against a 120.548 µs budget. A 60-per-mode smoke run exceeded the gate. The sample counts and shared host load matter when comparing these results.
 
 Reproduce from a clean checkout with dependencies installed. Apply the probe in a disposable copy of the checkout and use its built binary.
 
