@@ -44,6 +44,14 @@ fn main() -> Result<()> {
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("expected a bundle path"))?,
         )),
+        #[cfg(feature = "starling-runner")]
+        Some("--native-target") => native_target(),
+        #[cfg(feature = "starling-runner")]
+        Some("--compile-component") => compile_component(std::path::Path::new(
+            &args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("expected output path"))?,
+        )),
         #[cfg(feature = "quickjs-runner")]
         Some("--engine-size") => {
             println!("{}", runtime::COMPILED_ENGINE.len());
@@ -51,6 +59,49 @@ fn main() -> Result<()> {
         }
         _ => bail!("expected --function-worker"),
     }
+}
+
+#[cfg(feature = "starling-runner")]
+fn native_target() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"epoch-interruption;pooling;256MiB-memory;component-model");
+    digest.update(std::env::consts::ARCH.as_bytes());
+    digest.update(std::env::consts::OS.as_bytes());
+    digest.update(env!("CARGO_PKG_VERSION").as_bytes());
+    println!(
+        "{}",
+        serde_json::json!({
+            "wasmtime": "38.0.4",
+            "targetFingerprint": format!("{:x}", digest.finalize()),
+        })
+    );
+    Ok(())
+}
+
+#[cfg(feature = "starling-runner")]
+fn compile_component(output: &std::path::Path) -> Result<()> {
+    use std::io::Read;
+    anyhow::ensure!(output.is_absolute(), "output path must be absolute");
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take(64 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        bytes.len() <= 64 * 1024 * 1024,
+        "portable component exceeds 64 MiB"
+    );
+    let engine = wasmtime::Engine::new(&engine_config::starling())?;
+    let component = wasmtime::component::Component::new(&engine, &bytes)?;
+    let native = component.serialize()?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)?;
+    use std::io::Write;
+    file.write_all(&native)?;
+    file.sync_all()?;
+    Ok(())
 }
 
 enum Command {
@@ -225,12 +276,13 @@ fn worker() -> Result<()> {
         );
         let result = match input {
             Some((function, input)) => match prepared.get(&function) {
-                Some(component) => Invocation::new(&compiler, bridge, &limits, component)
-                    .and_then(|mut guest| {
+                Some(component) => {
+                    Invocation::new(&compiler, bridge, &limits, component).and_then(|mut guest| {
                         let output = guest.invoke(input, limits.response_bytes)?;
                         last = Some(guest);
                         Ok(output)
-                    }),
+                    })
+                }
                 None => Err(WorkerError::new("invalid_function_name").into()),
             },
             None => match prepared.iter().next() {
