@@ -40,12 +40,6 @@ fn main() -> Result<()> {
     match args.next().as_deref() {
         Some("--function-worker") => worker(),
         #[cfg(feature = "starling-runner")]
-        Some("--prepare") => starling::prepare(std::path::Path::new(
-            &args
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("expected a bundle path"))?,
-        )),
-        #[cfg(feature = "starling-runner")]
         Some("--native-target") => native_target(),
         #[cfg(feature = "starling-runner")]
         Some("--compile-component") => compile_component(std::path::Path::new(

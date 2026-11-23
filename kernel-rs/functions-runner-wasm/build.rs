@@ -10,13 +10,7 @@ use std::{fs, path::Path};
 use wasmtime::{Caller, Linker, Module, Store};
 
 #[cfg(feature = "starling-runner")]
-fn main() -> anyhow::Result<()> {
-    println!(
-        "cargo:rustc-env=KONAE_STARLING_TARGET={}",
-        std::env::var("TARGET")?
-    );
-    Ok(())
-}
+fn main() {}
 
 #[cfg(feature = "quickjs-runner")]
 fn main() -> Result<()> {

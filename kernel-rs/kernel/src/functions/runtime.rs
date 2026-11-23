@@ -988,6 +988,9 @@ export function handle(request, context) {
         ))
     }
     fn prepare_fixture(fixture: &Fixture) {
+        if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() != Ok("wasm") {
+            return;
+        }
         let source = std::fs::read_to_string(fixture.0.join("example.mjs")).unwrap();
         crate::functions::prepare_bundles(&BTreeMap::from([("example".into(), source)])).unwrap();
     }
