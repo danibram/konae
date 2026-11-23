@@ -1,4 +1,4 @@
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 pub fn config() -> wasmtime::Config {
     let mut config = wasmtime::Config::new();
     config

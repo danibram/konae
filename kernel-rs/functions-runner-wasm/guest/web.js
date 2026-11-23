@@ -1,7 +1,5 @@
-import { TextDecoder, TextEncoder } from './text.js';
-import { AbortSignal } from './abort.js';
+import { AbortController, AbortSignal, DOMException } from './abort.js';
 import { ReadableStream } from 'web-streams-polyfill';
-import { URL, URLSearchParams } from 'whatwg-url-without-unicode';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -252,3 +250,5 @@ export class Response extends Body {
     return new Response(null, { status, headers: { location: new URL(url).href } });
   }
 }
+
+export { AbortController, AbortSignal, DOMException, ReadableStream };

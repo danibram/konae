@@ -1,6 +1,11 @@
 mod bridge;
 mod engine_config;
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(any(
+    all(feature = "quickjs-runner", feature = "starling-runner"),
+    not(any(feature = "quickjs-runner", feature = "starling-runner"))
+))]
+compile_error!("select exactly one runner feature");
+#[cfg(feature = "quickjs-runner")]
 mod runtime;
 #[cfg(feature = "starling-runner")]
 mod starling;
@@ -8,12 +13,11 @@ mod starling;
 use anyhow::{Result, bail};
 use bridge::{Bridge, Request};
 use konae_functions_executor::{
-    WorkerError,
+    self as executor, WorkerError,
     protocol::{self, ChildMessage, ParentMessage},
 };
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 use runtime::{Compiler, Invocation};
-use sha2::{Digest, Sha256};
 #[cfg(feature = "starling-runner")]
 use starling::{Compiler, Invocation};
 use std::{
@@ -27,7 +31,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-// IPC v2 has no deadline field. The executor sends Cancel at its deadline.
+// IPC v3 has no deadline field. The executor sends Cancel at its deadline.
 const PARENT_FAILURE_LIMIT: Duration = Duration::from_secs(65);
 
 fn main() -> Result<()> {
@@ -40,7 +44,7 @@ fn main() -> Result<()> {
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("expected a bundle path"))?,
         )),
-        #[cfg(not(feature = "starling-runner"))]
+        #[cfg(feature = "quickjs-runner")]
         Some("--engine-size") => {
             println!("{}", runtime::COMPILED_ENGINE.len());
             Ok(())
@@ -50,7 +54,7 @@ fn main() -> Result<()> {
 }
 
 enum Command {
-    Invoke(Arc<Request>, protocol::Input),
+    Invoke(Arc<Request>, String, protocol::Input),
     Spin(Arc<Request>),
     Shutdown(u64),
 }
@@ -62,17 +66,16 @@ fn worker() -> Result<()> {
     let mut input = io::stdin();
     let ParentMessage::Init {
         abi,
-        source,
+        bundles,
         generation,
         limits,
-        ..
     } = protocol::read_parent(&mut input)?
     else {
         bail!("init_required")
     };
     let validation = if abi != protocol::ABI {
         Some("worker_protocol_mismatch")
-    } else if !limits.validate() || source.len() > protocol::MAX_SOURCE_BYTES {
+    } else if !valid_bundles(&bundles) || !limits.validate() {
         Some("invalid_init")
     } else {
         None
@@ -81,6 +84,7 @@ fn worker() -> Result<()> {
         send(&ChildMessage::Failure {
             capability: None,
             code: code.into(),
+            detail: None,
         })?;
         bail!("{code}");
     }
@@ -96,6 +100,24 @@ fn worker() -> Result<()> {
     thread::spawn(move || {
         while let Ok(message) = protocol::read_parent(&mut input) {
             match message {
+                ParentMessage::OperationResult {
+                    ref result,
+                    ref capability,
+                    ..
+                } if matches!(result, Err(code) if code == "cancelled" || code == "deadline_exceeded") =>
+                {
+                    let active = waiting.lock().unwrap();
+                    if let Some(request) = active
+                        .as_ref()
+                        .filter(|request| request.capability == *capability)
+                    {
+                        request.cancelled.store(true, Ordering::Release);
+                        interrupt.increment_epoch();
+                    }
+                    if replies_tx.try_send(message).is_err() {
+                        break;
+                    }
+                }
                 ParentMessage::OperationResult { .. } | ParentMessage::BodyChunk { .. } => {
                     if replies_tx.try_send(message).is_err() {
                         break;
@@ -122,7 +144,9 @@ fn worker() -> Result<()> {
                     });
                     *waiting.lock().unwrap() = Some(request.clone());
                     let command = match message {
-                        ParentMessage::Invoke { input, .. } => Command::Invoke(request, input),
+                        ParentMessage::Invoke {
+                            function, input, ..
+                        } => Command::Invoke(request, function, input),
                         _ => Command::Spin(request),
                     };
                     if command_tx.try_send(command).is_err() {
@@ -149,29 +173,30 @@ fn worker() -> Result<()> {
             engine.increment_epoch();
         }
     });
-    let bundle_hash = Sha256::digest(source.as_bytes());
-    let compile_bridge = Bridge::new(
-        store_limits(limits.heap_bytes),
-        Instant::now() + PARENT_FAILURE_LIMIT,
-        None,
-        replies.clone(),
-        0,
-    );
-    // IPC v2 pins one bundle per process, so this cache has a single slot.
-    let bytecode = Invocation::pack(&compiler, compile_bridge, &limits, &source).map_err(|error| {
-        let code = worker_error_code(&error);
-        if code == "worker_execution_failed" {
-            eprintln!("bundle {bundle_hash:x}: {error:#}");
-        }
-        code.to_owned()
-    });
-    drop(source);
+    let mut prepared = std::collections::BTreeMap::new();
+    for (name, source) in &bundles {
+        let compile_bridge = Bridge::new(
+            store_limits(limits.heap_bytes),
+            Instant::now() + PARENT_FAILURE_LIMIT,
+            None,
+            replies.clone(),
+            0,
+        );
+        let result =
+            Invocation::pack(&compiler, compile_bridge, &limits, source).map_err(|error| {
+                (
+                    worker_error_code(&error).to_owned(),
+                    Some(error.to_string()),
+                )
+            });
+        prepared.insert(name.clone(), result);
+    }
     send(&ChildMessage::Ready { abi, generation })?;
 
     let mut last = None;
     while let Ok(command) = command_rx.recv() {
         let (request, input) = match command {
-            Command::Invoke(request, input) => (request, Some(input)),
+            Command::Invoke(request, function, input) => (request, Some((function, input))),
             Command::Spin(request) => (request, None),
             Command::Shutdown(grace) => {
                 let (invoked, error) = last
@@ -191,37 +216,61 @@ fn worker() -> Result<()> {
             replies.clone(),
             limits.operation_limit,
         );
-        let result = bytecode
-            .as_ref()
-            .map_err(|code| WorkerError::new(code.as_str()).into())
-            .and_then(|bytecode| Invocation::new(&compiler, bridge, &limits, bytecode))
-            .and_then(|mut guest| {
-                if let Some(input) = input {
-                    let output = guest.invoke(input, limits.response_bytes)?;
-                    last = Some(guest);
-                    Ok(output)
-                } else {
-                    guest.spin()?;
-                    bail!("unexpected_spin_result");
+        let result = match input {
+            Some((function, input)) => match prepared.get(&function) {
+                Some(Ok(component)) => Invocation::new(&compiler, bridge, &limits, component)
+                    .and_then(|mut guest| {
+                        let output = guest.invoke(input, limits.response_bytes)?;
+                        last = Some(guest);
+                        Ok(output)
+                    }),
+                Some(Err((code, detail))) => {
+                    Err(WorkerError::with_detail(code.clone(), detail.clone()).into())
                 }
-            });
+                None => Err(WorkerError::new("invalid_function_name").into()),
+            },
+            None => match prepared.iter().next() {
+                Some((_, Ok(component))) => Invocation::new(&compiler, bridge, &limits, component)
+                    .and_then(|mut guest| {
+                        guest.spin()?;
+                        bail!("unexpected_spin_result");
+                    }),
+                Some((_, Err((code, detail)))) => {
+                    Err(WorkerError::with_detail(code.clone(), detail.clone()).into())
+                }
+                None => Err(WorkerError::new("invalid_init").into()),
+            },
+        };
         let capability = request.capability.clone();
         let response = match result {
             Ok(output) => ChildMessage::Reply { capability, output },
             Err(error) => {
                 let code = worker_error_code(&error);
-                if code == "worker_execution_failed" {
-                    eprintln!("bundle {bundle_hash:x}: {error:#}");
-                }
                 ChildMessage::Failure {
                     capability: Some(capability),
                     code: code.into(),
+                    detail: executor::error_detail(&error).map(str::to_owned),
                 }
             }
         };
         send(&response)?;
     }
     Ok(())
+}
+
+fn valid_bundles(bundles: &std::collections::BTreeMap<String, String>) -> bool {
+    let total = bundles.values().map(String::len).sum::<usize>();
+    !bundles.is_empty()
+        && total <= protocol::MAX_SOURCE_BYTES
+        && bundles.iter().all(|(name, source)| {
+            !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && !source.is_empty()
+                && source.len() <= 1024 * 1024
+        })
 }
 
 fn send(message: &ChildMessage) -> io::Result<()> {
@@ -235,7 +284,7 @@ fn worker_error_code(error: &anyhow::Error) -> &str {
         .unwrap_or("worker_execution_failed")
 }
 
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 use runtime::store_limits;
 
 #[cfg(feature = "starling-runner")]

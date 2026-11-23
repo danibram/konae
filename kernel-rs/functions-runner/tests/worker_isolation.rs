@@ -7,6 +7,9 @@ use serde_json::{Value, json};
 use std::thread;
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
+#[path = "fixtures/worker.rs"]
+mod fixtures;
+
 type Bundle = BTreeMap<String, String>;
 
 fn bundle(source: &str) -> Bundle {
@@ -56,9 +59,7 @@ fn invoke_function(
 
 #[test]
 fn handler_throw_reports_text_and_reuses_worker() {
-    let bundles = bundle(
-        "export function handle(request) { if (new URL(request.url).pathname === '/throw') throw new Error('handler exploded'); return new Response('warm'); }",
-    );
+    let bundles = bundle(fixtures::HANDLER_THROW);
     let mut worker = worker(&bundles, Duration::from_secs(2));
     let pid = worker.pid().unwrap();
 
@@ -87,16 +88,10 @@ fn handler_throw_reports_text_and_reuses_worker() {
 
 #[test]
 fn invoke_selects_the_named_bundle() {
-    let bundles = BTreeMap::from([
-        (
-            "orders".into(),
-            "export function handle() { return new Response('orders'); }".into(),
-        ),
-        (
-            "users".into(),
-            "export function handle() { return new Response('users'); }".into(),
-        ),
-    ]);
+    let bundles = fixtures::NAMED_BUNDLES
+        .iter()
+        .map(|(name, source)| ((*name).into(), (*source).into()))
+        .collect();
     let mut worker = worker(&bundles, Duration::from_secs(2));
     let pid = worker.pid().unwrap();
     for (function, expected) in [("orders", "orders"), ("users", "users")] {

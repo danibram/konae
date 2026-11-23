@@ -8,7 +8,7 @@ export function dispatch(call, read, failure) {
   const decode = decoder.decode.bind(decoder);
 
   function reject(code) {
-    failure(code);
+    failure(code, null);
     throw new Error(code);
   }
 
@@ -17,12 +17,13 @@ export function dispatch(call, read, failure) {
   });
 
   async function invoke(handler, encodedInput, responseLimit) {
+    responseLimit = Math.min(responseLimit, 256 * 1024);
     const input = parse(encodedInput);
     const body = input.method === 'POST' ? new ReadableStream({
       pull(controller) {
         const chunk = read();
         if (chunk === null) controller.close();
-        else controller.enqueue(new Uint8Array(chunk));
+        else controller.enqueue(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
       },
     }, { highWaterMark: 0 }) : null;
     const request = new Request(input.url, { method: input.method, headers: input.headers, body, duplex: 'half' });
@@ -36,14 +37,22 @@ export function dispatch(call, read, failure) {
         },
       }),
     };
-    const response = await handler(request, context);
+    let response;
+    try {
+      response = await handler(request, context);
+    } catch (error) {
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      failure('handler_error', detail.slice(0, 4096));
+      throw error;
+    }
     if (!(response instanceof Response)) reject('invalid_response');
     const headers = [...response.headers];
     let headerBytes = 0;
     for (const [name, value] of headers) headerBytes += encode(name).length + encode(value).length;
     if (headers.length > 128 || headerBytes > 16384) reject('response_too_large');
 
-    const chunks = [];
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    let bodyText = '';
     let total = 0;
     if (response.body) {
       const reader = response.body.getReader();
@@ -54,21 +63,14 @@ export function dispatch(call, read, failure) {
           if (!(value instanceof Uint8Array)) reject('invalid_response');
           total += value.length;
           if (total > responseLimit) reject('response_too_large');
-          chunks.push(value);
+          bodyText += decoder.decode(value, { stream: true });
         }
       } finally {
         reader.releaseLock();
       }
     }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    let decoded;
-    try { decoded = decode(bytes); } catch { reject('invalid_response'); }
-    return stringify({ status: response.status, headers, body: decoded });
+    try { bodyText += decoder.decode(); } catch { reject('invalid_response'); }
+    return stringify({ status: response.status, headers, body: bodyText });
   }
 
   async function shutdown(handler) {

@@ -53,13 +53,19 @@ impl Compiler {
         })?;
         host.func_wrap(
             "op-worker-failure",
-            |mut store, (code,): (String,)| -> Result<()> {
-                store.data_mut().failure(match code.as_str() {
+            |mut store, (code, detail): (String, Option<String>)| -> Result<()> {
+                let code = match code.as_str() {
                     "unsupported_runtime_api" => "unsupported_runtime_api",
                     "response_too_large" => "response_too_large",
                     "function_handle_missing" => "function_handle_missing",
+                    "handler_error" => "handler_error",
                     _ => "invalid_response",
-                });
+                };
+                if code == "handler_error" {
+                    store.data_mut().failure_with_detail(code, detail);
+                } else {
+                    store.data_mut().failure(code);
+                }
                 Ok(())
             },
         )?;
@@ -114,9 +120,19 @@ impl Invocation {
             self.instance.get_typed_func(&mut self.store, "handle")?;
         let result = function.call(&mut self.store, (&input, limit as u32));
         if let Some(code) = self.store.data().failure.as_ref() {
-            return Err(WorkerError::new(code).into());
+            return Err(WorkerError::with_detail(
+                code.clone(),
+                self.store.data().failure_detail.clone(),
+            )
+            .into());
         }
-        let (output,) = result.map_err(memory_error)?;
+        let (output,) = result.map_err(|error| {
+            if is_memory_error(&error) {
+                memory_error(error)
+            } else {
+                WorkerError::with_detail("handler_error", Some(format!("{error:#}"))).into()
+            }
+        })?;
         function.post_return(&mut self.store)?;
         self.store.data().check()?;
         ensure!(
@@ -170,16 +186,20 @@ impl Invocation {
 }
 
 fn memory_error(error: anyhow::Error) -> anyhow::Error {
-    if error.chain().any(|cause| {
-        let message = cause.to_string();
-        message.starts_with("forcing trap when growing memory")
-            || message.starts_with("forcing a memory growth failure")
-            || message.starts_with("resource limit exceeded")
-    }) {
+    if is_memory_error(&error) {
         WorkerError::new("worker_memory_limit").into()
     } else {
         error
     }
+}
+
+fn is_memory_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.starts_with("forcing trap when growing memory")
+            || message.starts_with("forcing a memory growth failure")
+            || message.starts_with("resource limit exceeded")
+    })
 }
 
 struct Cache {
@@ -212,6 +232,10 @@ impl Cache {
             include_bytes!("../guest/starling-runtime.js"),
             include_bytes!("../guest/starling-entry.js"),
             include_bytes!("../guest/starling.wit"),
+            include_bytes!("../guest/web.js"),
+            include_bytes!("../guest/text.js"),
+            include_bytes!("../guest/abort.js"),
+            include_bytes!("../package-lock.json"),
             include_bytes!("../measure/starling-component.mjs"),
             include_bytes!("../measure/starling-component.sh"),
         ] {
