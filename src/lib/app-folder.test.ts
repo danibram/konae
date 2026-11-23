@@ -62,9 +62,10 @@ test("the generated compose configures the packaged runner and delegated cgroup 
   expect(compose).toContain('KONAE_FUNCTIONS_UID: ${KONAE_FUNCTIONS_UID:-10002}');
   expect(compose).toContain('KONAE_FUNCTIONS_GID: ${KONAE_FUNCTIONS_GID:-10002}');
   expect(compose).toContain("cgroup: private");
-  expect(compose).toContain("cgroup_parent: konae-notes-1");
-  expect(compose).toContain("- SETUID\n      - SETGID");
-  expect(compose).toContain("/sys/fs/cgroup/konae-notes-1:/sys/fs/cgroup:rw");
+  expect(compose).toContain("- SYS_ADMIN\n      - SETUID\n      - SETGID");
+  expect(compose).toContain("apparmor=unconfined");
+  expect(compose).not.toContain("cgroup_parent");
+  expect(compose).not.toContain("/sys/fs/cgroup");
   expect(compose.match(/volumes:/g)).toHaveLength(2);
   expect(env).toContain("KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner");
   expect(env).toContain("KONAE_FUNCTIONS_CGROUP=auto");

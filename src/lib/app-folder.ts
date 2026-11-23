@@ -174,19 +174,20 @@ ${hasFunctions ? `      # The image includes the runner built with this Kernel.
       KONAE_FUNCTIONS_GID: \${KONAE_FUNCTIONS_GID:-10002}
 ` : ""}    ports:
       - "127.0.0.1:\${KONAE_PORT:-8787}:8787"
-${hasFunctions ? `    # A private cgroup namespace gives the entrypoint a container-local cgroup root.
+${hasFunctions ? `    # A private cgroup namespace gives the entrypoint a container-local cgroup v2 root.
     cgroup: private
-    # The unique parent keeps this app's writable cgroup subtree separate from other containers.
-    cgroup_parent: konae-${settings.id}
-    # SETUID and SETGID let the Kernel start each worker with its separate identity.
+    # The entrypoint remounts that root writable, prepares the workers' subtree, then drops
+    # SYS_ADMIN. The Kernel keeps SETUID and SETGID to start each worker with its own identity.
     cap_add:
+      - SYS_ADMIN
       - SETUID
       - SETGID
-    # Docker mounts this app-specific cgroup parent writable inside the service.
+    # Docker's default AppArmor profile denies mounts inside containers; the remount needs this.
+    security_opt:
+      - apparmor=unconfined
     volumes:
       - ./:/kernel/apps/${settings.id}
       - kernel:/kernel
-      - /sys/fs/cgroup/konae-${settings.id}:/sys/fs/cgroup:rw
 ` : `    volumes:
       - ./:/kernel/apps/${settings.id}
       - kernel:/kernel
