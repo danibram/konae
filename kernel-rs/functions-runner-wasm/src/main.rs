@@ -183,14 +183,19 @@ fn worker() -> Result<()> {
             0,
             limits.response_bytes,
         );
-        let result =
-            Invocation::pack(&compiler, compile_bridge, &limits, source).map_err(|error| {
-                (
-                    worker_error_code(&error).to_owned(),
-                    Some(error.to_string()),
-                )
-            });
-        prepared.insert(name.clone(), result);
+        let component = match Invocation::pack(&compiler, compile_bridge, &limits, source) {
+            Ok(component) => component,
+            Err(error) => {
+                let code = worker_error_code(&error);
+                send(&ChildMessage::Failure {
+                    capability: None,
+                    code: code.into(),
+                    detail: Some(error.to_string()),
+                })?;
+                bail!("{code}");
+            }
+        };
+        prepared.insert(name.clone(), component);
     }
     send(&ChildMessage::Ready { abi, generation })?;
 
@@ -220,26 +225,20 @@ fn worker() -> Result<()> {
         );
         let result = match input {
             Some((function, input)) => match prepared.get(&function) {
-                Some(Ok(component)) => Invocation::new(&compiler, bridge, &limits, component)
+                Some(component) => Invocation::new(&compiler, bridge, &limits, component)
                     .and_then(|mut guest| {
                         let output = guest.invoke(input, limits.response_bytes)?;
                         last = Some(guest);
                         Ok(output)
                     }),
-                Some(Err((code, detail))) => {
-                    Err(WorkerError::with_detail(code.clone(), detail.clone()).into())
-                }
                 None => Err(WorkerError::new("invalid_function_name").into()),
             },
             None => match prepared.iter().next() {
-                Some((_, Ok(component))) => Invocation::new(&compiler, bridge, &limits, component)
+                Some((_, component)) => Invocation::new(&compiler, bridge, &limits, component)
                     .and_then(|mut guest| {
                         guest.spin()?;
                         bail!("unexpected_spin_result");
                     }),
-                Some((_, Err((code, detail)))) => {
-                    Err(WorkerError::with_detail(code.clone(), detail.clone()).into())
-                }
                 None => Err(WorkerError::new("invalid_init").into()),
             },
         };

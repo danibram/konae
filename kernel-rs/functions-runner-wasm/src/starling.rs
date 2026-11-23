@@ -248,6 +248,7 @@ impl Cache {
             include_bytes!("../package-lock.json"),
             include_bytes!("../measure/starling-component.mjs"),
             include_bytes!("../measure/starling-component.sh"),
+            include_bytes!("../measure/starling-wat.py"),
         ] {
             version.update(Sha256::digest(bytes));
         }
@@ -265,7 +266,7 @@ fn trusted(meta: &fs::Metadata) -> bool {
     (meta.uid() == uid || meta.uid() == 0) && meta.mode() & 0o022 == 0
 }
 
-fn cached_component(source: &str, worker: bool) -> Result<(Cache, Option<Duration>)> {
+fn cached_component(source: &str, build_limit: Duration) -> Result<(Cache, Option<Duration>)> {
     let cache = Cache::new(source)?;
     if let Ok(meta) = fs::symlink_metadata(&cache.compiled) {
         ensure!(
@@ -274,7 +275,6 @@ fn cached_component(source: &str, worker: bool) -> Result<(Cache, Option<Duratio
         );
         return Ok((cache, None));
     }
-    ensure!(!worker, "Prepared StarlingMonkey component is missing");
     let builder = PathBuf::from(
         std::env::var_os("KONAE_STARLING_BUILDER")
             .context("Component cache miss. Prepare this bundle with the configured builder")?,
@@ -297,9 +297,7 @@ fn cached_component(source: &str, worker: bool) -> Result<(Cache, Option<Duratio
         fs::copy(&cache.portable, &portable)?;
     }
     let mut command = Command::new(builder);
-    if !worker {
-        command.process_group(0);
-    }
+    command.process_group(0);
     let mut child = command
         .args([
             input.as_os_str(),
@@ -315,13 +313,9 @@ fn cached_component(source: &str, worker: bool) -> Result<(Cache, Option<Duratio
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if start.elapsed() >= BUILD_LIMIT {
+        if start.elapsed() >= build_limit {
             unsafe {
-                if worker {
-                    libc::kill(-libc::getpgrp(), libc::SIGKILL);
-                } else {
-                    libc::kill(-(child.id() as i32), libc::SIGKILL);
-                }
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
             }
             child.wait()?;
             bail!("StarlingMonkey component build timed out");
@@ -341,13 +335,17 @@ fn cached_component(source: &str, worker: bool) -> Result<(Cache, Option<Duratio
 }
 
 pub fn prepare(path: &Path) -> Result<()> {
+    prepare_with_limit(path, BUILD_LIMIT)
+}
+
+fn prepare_with_limit(path: &Path, build_limit: Duration) -> Result<()> {
     ensure!(
         path.metadata()?.len() <= MAX_SOURCE_BYTES as u64,
         "Bundle is too large"
     );
     let source = fs::read_to_string(path)?;
     ensure!(source.len() <= MAX_SOURCE_BYTES, "Bundle is too large");
-    let (cache, built) = cached_component(&source, false)?;
+    let (cache, built) = cached_component(&source, build_limit)?;
     println!(
         "{}",
         json!({
@@ -360,4 +358,32 @@ pub fn prepare(path: &Path) -> Result<()> {
         })
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonterminating_module_is_stopped_during_preparation() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache = bundle.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let previous_cache = std::env::var_os("KONAE_STARLING_CACHE");
+        unsafe { std::env::set_var("KONAE_STARLING_CACHE", &cache) };
+        let source = bundle.path().join("loop.mjs");
+        fs::write(
+            &source,
+            "while (true) {} export function handle() { return new Response('unreachable'); }",
+        )
+        .unwrap();
+        let result = prepare_with_limit(&source, Duration::from_secs(15));
+        assert!(result.is_err());
+        assert!(fs::read_dir(cache).unwrap().next().is_none());
+        if let Some(previous_cache) = previous_cache {
+            unsafe { std::env::set_var("KONAE_STARLING_CACHE", previous_cache) };
+        } else {
+            unsafe { std::env::remove_var("KONAE_STARLING_CACHE") };
+        }
+    }
 }

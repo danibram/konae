@@ -43,8 +43,11 @@ export async function handle(request, context) {
 "#;
 const STREAM_HANDLER: &str = r#"
 export async function handle(request) {
+  const path=new URL(request.url).pathname;
+  if(path.endsWith('/envelope')) return new Response('x'.repeat(1024*1024));
+  if(path.endsWith('/framing')) return new Response('x',{headers:{'content-length':'1'}});
   const reader=request.body.getReader(); let count=0; let checksum=0;
-  for(;;) { const {done,value}=await reader.read(); if(done) break; count+=value.byteLength; for(const byte of value) checksum=(checksum+byte)>>>0; }
+  for(;;) { const {done,value}=await reader.read(); if(done) break; count+=value.byteLength; for(let i=0;i<value.length;i++) checksum=(checksum+value[i])>>>0; }
   return Response.json({count,checksum});
 }
 "#;
@@ -500,6 +503,35 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
             .body(Body::from_stream(synthetic_body(length)))
             .unwrap()
     };
+    for (path, expected_status, expected_error) in [
+        (
+            "/api/orders/envelope",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The function response exceeds its size limit.",
+        ),
+        (
+            "/api/orders/framing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The function returned an invalid HTTP response.",
+        ),
+    ] {
+        let response = crate::stack(state.clone(), axum::Router::new())
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .header("host", &deployed.hostname)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(status, expected_status, "{}", String::from_utf8_lossy(&bytes));
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"], expected_error);
+    }
     let utf8 = Request::builder()
         .method("POST")
         .uri("/api/orders")
@@ -1319,7 +1351,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     assert_eq!(method.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(method.headers()[header::ALLOW], "GET, POST");
     payload["serverArtifact"]["bundles"]["orders"] =
-        json!("while (true) {} export function handle() {}");
+        json!("export function handle() { while (true) {} }");
     let c = publish(&state, &payload).await;
     let cold_timeout = get("", &accounts[0].0).send().await.unwrap();
     assert_eq!(cold_timeout.status(), StatusCode::GATEWAY_TIMEOUT);

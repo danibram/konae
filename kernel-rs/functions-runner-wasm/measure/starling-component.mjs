@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -50,4 +52,19 @@ const witWorld = await readFile(resolve(guest, 'starling.wit'), 'utf8');
 const { component } = await componentize(bundled.text, {
   engine, witWorld, disableFeatures: ['stdio', 'random', 'clocks', 'http', 'fetch-event'],
 });
-await writeFile(outputPath, component);
+const work = await mkdtemp(resolve(tmpdir(), 'konae-starling-component-'));
+try {
+  const raw = resolve(work, 'raw.wasm');
+  const baseWat = resolve(work, 'base.wat');
+  const patchedWat = resolve(work, 'patched.wat');
+  await writeFile(raw, component);
+  const jco = resolve(process.env.KONAE_STARLING_TOOLS, 'node_modules/.bin/jco');
+  const python = process.env.KONAE_STARLING_PYTHON || 'python3';
+  execFileSync(jco, ['print', raw, '-o', baseWat], { stdio: 'inherit' });
+  execFileSync(python, [resolve(guest, '../measure/starling-wat.py'), baseWat, patchedWat], {
+    stdio: 'inherit',
+  });
+  execFileSync(jco, ['parse', patchedWat, '-o', outputPath], { stdio: 'inherit' });
+} finally {
+  await rm(work, { recursive: true, force: true });
+}
