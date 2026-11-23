@@ -1025,11 +1025,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 let mut failure_code = None;
                 let mut failure_detail = None;
                 let (response, result_outcome) = match run.output {
-                    Ok(mut output) => {
-                        output.headers.retain(|(name, _)| {
-                            ["content-type", "location", "retry-after"]
-                                .contains(&name.to_ascii_lowercase().as_str())
-                        });
+                    Ok(output) => {
                         match invocation.finish(output) {
                             Ok(output) => {
                                 let outcome = if output.status >= 500 {

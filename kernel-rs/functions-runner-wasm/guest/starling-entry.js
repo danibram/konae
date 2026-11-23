@@ -12,6 +12,7 @@ Object.assign(globalThis, {
   Headers: web.Headers,
   ReadableStream: web.ReadableStream,
   Request: web.Request,
+  Response: web.Response,
 });
 
 export const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);

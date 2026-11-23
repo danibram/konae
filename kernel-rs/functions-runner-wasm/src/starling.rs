@@ -52,6 +52,12 @@ impl Compiler {
             Ok((store.data_mut().body(BODY_CHUNK_BYTES)?,))
         })?;
         host.func_wrap(
+            "op-worker-response-chunk",
+            |mut store, (bytes,): (Vec<u8>,)| -> Result<(bool,)> {
+                Ok((store.data_mut().response_chunk(bytes)?,))
+            },
+        )?;
+        host.func_wrap(
             "op-worker-failure",
             |mut store, (code, detail): (String, Option<String>)| -> Result<()> {
                 let code = match code.as_str() {
@@ -89,7 +95,13 @@ impl Invocation {
         _limits: &WorkerLimits,
         source: &str,
     ) -> Result<InstancePre<Bridge>> {
-        let (cache, _) = cached_component(source)?;
+        let cache = Cache::new(source)?;
+        let meta = fs::symlink_metadata(&cache.compiled)
+            .context("Prepared StarlingMonkey component is missing")?;
+        ensure!(
+            meta.is_file() && trusted(&meta),
+            "Unsafe component cache entry"
+        );
         // Only accept native code from the operator-owned cache.
         let component = unsafe { Component::deserialize_file(&compiler.engine, &cache.compiled) }
             .context("Load the approved StarlingMonkey component")?;
@@ -130,7 +142,9 @@ impl Invocation {
             if is_memory_error(&error) {
                 memory_error(error)
             } else {
-                WorkerError::with_detail("handler_error", Some(format!("{error:#}"))).into()
+                self.store.data().check().err().unwrap_or_else(|| {
+                    WorkerError::with_detail("handler_error", Some(format!("{error:#}"))).into()
+                })
             }
         })?;
         function.post_return(&mut self.store)?;
@@ -141,11 +155,9 @@ impl Invocation {
         );
         let mut response: Output =
             serde_json::from_str(&output).map_err(|_| WorkerError::new("invalid_response"))?;
-        // StarlingMonkey inserts a length for buffered bodies. The executor owns framing.
-        let length = response.body.len().to_string();
-        response.headers.retain(|(name, value)| {
-            !(name.eq_ignore_ascii_case("content-length") && *value == length)
-        });
+        let body = self.store.data_mut().take_response();
+        let body = std::str::from_utf8(&body).map_err(|_| WorkerError::new("invalid_response"))?;
+        response.body = body.strip_prefix('\u{feff}').unwrap_or(body).to_owned();
         self.store.data_mut().request = None;
         Ok(response)
     }
@@ -238,6 +250,7 @@ impl Cache {
             include_bytes!("../package-lock.json"),
             include_bytes!("../measure/starling-component.mjs"),
             include_bytes!("../measure/starling-component.sh"),
+            include_bytes!("../measure/starling-wat.py"),
         ] {
             version.update(Sha256::digest(bytes));
         }
@@ -255,7 +268,7 @@ fn trusted(meta: &fs::Metadata) -> bool {
     (meta.uid() == uid || meta.uid() == 0) && meta.mode() & 0o022 == 0
 }
 
-fn cached_component(source: &str) -> Result<(Cache, Option<Duration>)> {
+fn cached_component(source: &str, build_limit: Duration) -> Result<(Cache, Option<Duration>)> {
     let cache = Cache::new(source)?;
     if let Ok(meta) = fs::symlink_metadata(&cache.compiled) {
         ensure!(
@@ -285,14 +298,15 @@ fn cached_component(source: &str) -> Result<(Cache, Option<Duration>)> {
         );
         fs::copy(&cache.portable, &portable)?;
     }
-    let mut child = Command::new(builder)
+    let mut command = Command::new(builder);
+    command.process_group(0);
+    let mut child = command
         .args([
             input.as_os_str(),
             portable.as_os_str(),
             compiled.as_os_str(),
         ])
         .args([STARLING, TARGET])
-        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -301,8 +315,10 @@ fn cached_component(source: &str) -> Result<(Cache, Option<Duration>)> {
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if start.elapsed() >= BUILD_LIMIT {
-            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+        if start.elapsed() >= build_limit {
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
             child.wait()?;
             bail!("StarlingMonkey component build timed out");
         }
@@ -321,13 +337,17 @@ fn cached_component(source: &str) -> Result<(Cache, Option<Duration>)> {
 }
 
 pub fn prepare(path: &Path) -> Result<()> {
+    prepare_with_limit(path, BUILD_LIMIT)
+}
+
+fn prepare_with_limit(path: &Path, build_limit: Duration) -> Result<()> {
     ensure!(
         path.metadata()?.len() <= MAX_SOURCE_BYTES as u64,
         "Bundle is too large"
     );
     let source = fs::read_to_string(path)?;
     ensure!(source.len() <= MAX_SOURCE_BYTES, "Bundle is too large");
-    let (cache, built) = cached_component(&source)?;
+    let (cache, built) = cached_component(&source, build_limit)?;
     println!(
         "{}",
         json!({
@@ -340,4 +360,32 @@ pub fn prepare(path: &Path) -> Result<()> {
         })
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonterminating_module_is_stopped_during_preparation() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache = bundle.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let previous_cache = std::env::var_os("KONAE_STARLING_CACHE");
+        unsafe { std::env::set_var("KONAE_STARLING_CACHE", &cache) };
+        let source = bundle.path().join("loop.mjs");
+        fs::write(
+            &source,
+            "while (true) {} export function handle() { return new Response('unreachable'); }",
+        )
+        .unwrap();
+        let result = prepare_with_limit(&source, Duration::from_secs(15));
+        assert!(result.is_err());
+        assert!(fs::read_dir(cache).unwrap().next().is_none());
+        if let Some(previous_cache) = previous_cache {
+            unsafe { std::env::set_var("KONAE_STARLING_CACHE", previous_cache) };
+        } else {
+            unsafe { std::env::remove_var("KONAE_STARLING_CACHE") };
+        }
+    }
 }
