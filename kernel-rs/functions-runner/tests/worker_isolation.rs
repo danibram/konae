@@ -189,6 +189,103 @@ fn globals_and_context_capabilities_do_not_cross_requests() {
 }
 
 #[test]
+fn request_timers_can_be_cancelled_and_idle_intervals_are_cleared() {
+    let bundles = bundle(
+        "export async function handle(request) { const path = new URL(request.url).pathname; if (path === '/cancel') { const result = await new Promise(resolve => { const late = setTimeout(() => resolve('late'), 25); setTimeout(() => { clearTimeout(late); resolve('cleared'); }, 0); }); return new Response(result); } setInterval(() => {}, 1); return new Response('done'); }",
+    );
+    let mut worker = worker(&bundles, Duration::from_secs(2));
+    let cancelled = invoke(
+        &mut worker,
+        input("/cancel", "alice"),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert_eq!(cancelled.body, "cleared");
+    let completed = invoke(&mut worker, input("/idle", "alice"), Duration::from_secs(2))
+        .unwrap_or_else(|error| panic!("idle interval survived response: {error}"));
+    assert_eq!(completed.body, "done");
+    let next = invoke(&mut worker, input("/next", "bob"), Duration::from_secs(2)).unwrap();
+    assert_eq!(next.body, "done");
+}
+
+#[test]
+fn request_web_apis_are_scoped_and_clone_transfers_detach() {
+    let bundles = bundle(
+        "export async function handle() { const first = performance.now(); await new Promise(resolve => setTimeout(resolve, 2)); const second = performance.now(); const buffer = new ArrayBuffer(4); const map = new Map(); map.set('self', map); const copy = structuredClone({ map, buffer }, { transfer: [buffer] }); let callableRejected = false; try { structuredClone(() => {}); } catch (error) { callableRejected = error.name === 'DataCloneError'; } return Response.json({ monotonic: second >= first, cycle: copy.map.get('self') === copy.map, detached: buffer.byteLength === 0, transferred: copy.buffer.byteLength === 4, callableRejected }); }",
+    );
+    let mut worker = worker(&bundles, Duration::from_secs(2));
+    for actor in ["alice", "bob"] {
+        let output = invoke(&mut worker, input("/", actor), Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&output.body).unwrap(),
+            json!({"monotonic": true, "cycle": true, "detached": true, "transferred": true, "callableRejected": true})
+        );
+    }
+}
+
+#[test]
+fn request_microtasks_run_before_the_handler_returns() {
+    let bundles = bundle(
+        "export async function handle() { const order = []; queueMicrotask(() => order.push('microtask')); Promise.resolve().then(() => order.push('promise')); await new Promise(resolve => queueMicrotask(() => resolve(7))); return Response.json({ order, value: 7 }); }",
+    );
+    let mut worker = worker(&bundles, Duration::from_secs(2));
+    let output = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2))
+        .unwrap_or_else(|error| panic!("{error}; detail={:?}", konae_functions_executor::error_detail(&error)));
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.body).unwrap(),
+        json!({"order": ["microtask", "promise"], "value": 7})
+    );
+}
+
+#[test]
+fn web_crypto_entropy_changes_across_requests() {
+    let bundles = bundle(
+        "export function handle() { const bytes = new Uint8Array(32); crypto.getRandomValues(bytes); return Response.json({ uuid: crypto.randomUUID(), bytes: Array.from(bytes) }); }",
+    );
+    let mut worker = worker(&bundles, Duration::from_secs(2));
+    let one = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2)).unwrap();
+    let two = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2)).unwrap();
+    assert_ne!(one.body, two.body);
+}
+
+#[test]
+fn top_level_timer_and_crypto_effects_fail_initialization() {
+    for source in [
+        "setTimeout(() => {}, 0); export function handle() { return new Response('bad'); }",
+        "try { crypto.randomUUID(); } catch {} export function handle() { return new Response('bad'); }",
+    ] {
+        let bundles = bundle(source);
+        let mut worker = Worker::spawn_with_policy(
+            Path::new(env!("CARGO_BIN_EXE_konae-functions-runner")),
+            &bundles,
+            &Budget::new(Duration::from_secs(2)),
+            WorkerLimits::default(),
+            MemoryPolicy::DevelopmentPolling,
+        )
+        .unwrap();
+        let error = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2))
+            .expect_err("top-level effect must fail function initialization");
+        assert_eq!(
+            konae_functions_executor::error_code(&error),
+            "unsupported_runtime_api"
+        );
+    }
+}
+
+#[test]
+fn timer_string_callbacks_are_refused() {
+    let bundles = bundle(
+        "export function handle() { try { setTimeout('globalThis.executed = true', 0); } catch (error) { return new Response(JSON.stringify({ name: error.name, executed: globalThis.executed === true })); } return new Response('bad'); }",
+    );
+    let mut worker = worker(&bundles, Duration::from_secs(2));
+    let output = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.body).unwrap(),
+        json!({"name": "TypeError", "executed": false})
+    );
+}
+
+#[test]
 fn v8_watchdog_reuses_a_synchronized_worker_after_a_loop() {
     let bundle = bundle(
         "export function handle(request) { if (new URL(request.url).pathname === '/spin') { while (true) {} } return Response.json({ alive: true }); }",

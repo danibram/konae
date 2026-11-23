@@ -44,6 +44,7 @@ fn main() {
             false,
             Default::default(),
         ),
+        deno_crypto::deno_crypto::init(None),
         deno_net::deno_net::init(None, None),
         deno_fetch::deno_fetch::init(Default::default()),
         functions_bridge::init(),
