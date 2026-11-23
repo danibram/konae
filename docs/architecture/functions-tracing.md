@@ -22,7 +22,7 @@ GET /api/orders                         SERVER, matched function mount
   konae.transaction.commit | rollback    actual transaction end, when attempted
 ```
 
-Wait spans can occur at more than one point in the request. Count resource acquisition separately from SQL. Init on a warm worker is absent. The handler duration includes isolate or realm setup and IPC. IPC/3 has no timestamp for entry into JavaScript. Time release or startup preparation at its entry and report it separately when it happens before any request. The warm handler span includes its action children, so the waterfall uses offsets from the request and never sums nested durations. Late rollback can end after the HTTP span. Replay has an HTTP span and its actual receipt work, with no handler span.
+Wait spans can occur at more than one point in the request. Count resource acquisition separately from SQL. Init on a warm worker is absent. The handler duration includes isolate or realm setup and IPC. IPC/3 has no timestamp for entry into JavaScript. Time release or startup preparation at `prepare_artifact` as a separate trace when it runs before any request. The warm handler span includes its action children, so the waterfall uses offsets from the request and never sums nested durations. Late rollback can end after the HTTP span. Replay has an HTTP span and its actual receipt work, with no handler span.
 
 The supervisor checks capabilities and sequence numbers before recording an action attempt. An operation that reaches the supervisor after an invocation has a native error still gets the existing refusal code and a count, with no SQLite child. Count actions by the resolved declaration. Group unknown names under a fixed sentinel and never store the worker's proposed name for a missing declaration. Protocol-invalid requests use a fixed executor failure on the handler span. Cap the request at 160 records, with room reserved for the HTTP result and final transaction. Mark truncation on the root. Capture matching function refusals even when a worker never starts. Carry codes from the existing refusal constructors. Never parse response text for a code.
 
@@ -30,7 +30,7 @@ Time ordinary Server Actions with the same action and statement fields. Start at
 
 ## Fields and privacy
 
-Use the following field allowlist at collection time. `error.type` is a canonical refusal code when the Kernel has one, or a fixed error class such as `timeout`. Omit it on success. Use HTTP server/client status semantics for HTTP spans and mark failed internal work as an error. A Server Action can fail even if a handler catches its Promise rejection.
+Use the following field allowlist at collection time. `error.type` is a canonical refusal code when the Kernel has one, or a fixed error class such as `timeout`. Omit it on success. Use HTTP server/client status semantics for HTTP spans and mark failed internal work as an error. Use `_OTHER` for unrecognized methods and omit the original method text. A Server Action can fail even if a handler catches its Promise rejection.
 
 | Span or record | Fields |
 | --- | --- |
@@ -104,12 +104,12 @@ python3 spikes/functions-tracing/measure.py kernel-rs/target/debug/kernel \
 git apply -R spikes/functions-tracing/instrumentation.patch
 ```
 
-Kernel time comes from a header stamped after Usage enqueue and probe handoff. Loopback time includes HTTP handling and receipt of the full response. The probe appends bounded typed timing records and hands the buffer to a background sink. Full capture also generates a root trace and span ID. Parent graph assembly, propagation of inbound context, OTLP serialization and transport, persistent per-action writes and POST finalization remain implementation checks. Repeat on both runners after B2c merges.
+Kernel time comes from a header stamped after Usage enqueue and probe handoff. Loopback time includes HTTP handling and receipt of the full response. The probe appends bounded typed timing records and hands the buffer to a background sink. Full capture also generates a trace ID and a root span ID. The off mode uses the same patched binary and checks the probe header. Parent graph assembly, propagation of inbound context, OTLP serialization and transport, persistent per-action writes and POST finalization remain implementation checks. Repeat on both runners after B2c merges.
 
 | Slice | Files |
 | --- | --- |
-| T1, record and read | `kernel-rs/kernel/src/functions/{http,runtime,invocation,trace}.rs`, module declaration, executor `supervisor.rs` for phase and operation observations, `actions/{http,execution}.rs`, `integrations/http.rs`, runtime dispatch where needed, `usage.rs` and `usage/function_latency.rs`, `app_folders/layout.rs` and `server/operator.rs` for local reads, `scripts/events.ts`, `src/lib/usage.ts`, `src/components/UsagePage.tsx` and focused tests |
-| T2, send | `kernel-rs/kernel/src/functions/otlp.rs`, module declaration, startup and shared state wiring, `integrations/calls.rs` for outbox trace context and headers, `docs/operate.md` and focused tests |
+| T1, record and read | `kernel-rs/kernel/src/functions/{http,runtime,invocation,preparation,trace}.rs`, module declaration, executor `supervisor.rs` for phase and operation observations, `actions/{http,execution}.rs`, `integrations/http.rs`, runtime dispatch where needed, `usage.rs` and `usage/function_latency.rs`, `app_folders/layout.rs` and `server/operator.rs` for local reads, `scripts/events.ts`, `src/lib/usage.ts`, `src/components/UsagePage.tsx` and focused tests |
+| T2, send | `kernel-rs/kernel/src/functions/otlp.rs`, module declaration, startup and shared state wiring, `integrations/calls.rs` for outbox trace context and headers, `scripts/konae.ts` for the dev environment, `docs/operate.md` and focused tests |
 | T3, generate | `src/sdk/functions.ts`, `src/lib/{action-types,action-contract,app-folder,export-project}.ts`, `src/lib/local-builder.js`, CLI embedded resources, `src/runtime/browser-build.ts`, `scripts/konae.ts`, `src/agent/system-prompt.ts`, `docs/functions.md` and focused tests |
 
 All three start after B2c merges. T2 integrates on top of T1's recorder and context. T3 can proceed from B2c independently. Both runners keep IPC/3 unchanged.
