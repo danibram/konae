@@ -43,7 +43,7 @@ export const providers = {
   "stream/web": `export const { ReadableStream, WritableStream, TransformStream } = globalThis;
     export default { ReadableStream, WritableStream, TransformStream };
   `,
-  crypto: 'export * from "./crypto.mjs"; export { default } from "./crypto.mjs";',
+  crypto: 'export * from "./node-compat-crypto.mjs"; export { default } from "./node-compat-crypto.mjs";',
   process: `export const env = Object.freeze(Object.create(null));
     export const nextTick = (callback, ...args) => queueMicrotask(() => callback(...args));
     export default { env, nextTick };

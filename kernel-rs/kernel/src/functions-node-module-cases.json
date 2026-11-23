@@ -1,0 +1,14 @@
+[
+  {"name":"bare fs","source":"import fs from 'fs'; export const handle = () => fs;","module":"fs"},
+  {"name":"prefixed subpath","source":"import fs from 'node:fs/promises'; export const handle = () => fs;","module":"fs/promises"},
+  {"name":"relative helper","source":"import './helper.js'; export const handle = () => null;","helper":"import 'node:child_process';","module":"child_process"},
+  {"name":"re-export","source":"export { readFile } from 'node:fs'; export const handle = () => null;","module":"fs"},
+  {"name":"literal dynamic import","source":"export const handle = () => import('node:net');","module":"net"},
+  {"name":"CommonJS require","source":"const fs = require('fs'); export const handle = () => fs;","module":"fs"},
+  {"name":"type-only import","source":"import type { Stats } from 'node:fs'; export const handle = () => null;"},
+  {"name":"allowed built-in","source":"import { EventEmitter } from 'node:events'; export const handle = () => new EventEmitter();"},
+  {"name":"unreferenced source","source":"export const value = require('fs'); export const handle = () => null;","unreferenced":true},
+  {"name":"string and comment decoys","source":"const text = 'node:fs'; // node:child_process\nexport const handle = () => text;"},
+  {"name":"shadowed require","source":"export const handle = (require) => require('node:fs');"},
+  {"name":"refusal precedence","source":"import fs from 'node:fs'; export const invalid = 1;","module":"fs"}
+]

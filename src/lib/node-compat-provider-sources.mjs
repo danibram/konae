@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
-import { providers } from "./policy.mjs";
+import { providers } from "./node-compat-provider-definitions.mjs";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
 

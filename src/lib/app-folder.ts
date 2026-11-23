@@ -102,7 +102,7 @@ export function secretNames(actionsSource: string): string[] {
  * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
  * both local build doors run.
  */
-export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string; hasFunctions?: boolean }): FolderEntry[] {
+export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string; nodeCompat: string; nodeCompatProviders: string; parserSource: string; parserLicense: string; hasFunctions?: boolean }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
   return [
@@ -117,6 +117,8 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
     { path: "scripts/local-builder.mjs", contents: input.localBuilder },
+    { path: "scripts/node-compat.js", contents: input.nodeCompat },
+    { path: "scripts/node-compat-providers.js", contents: input.nodeCompatProviders },
     { path: "scripts/babel-parser.cjs", contents: input.parserSource },
     { path: "scripts/BABEL-PARSER-LICENSE", contents: input.parserLicense },
     { path: "scripts/runtime.js", contents: input.runtime },
@@ -325,6 +327,7 @@ const functionSource = Object.fromEntries(sources)['functions.json'];
 const functions = functionSource === undefined ? undefined : parseFunctions(functionSource);
 const functionContext = { files: paths, modules: settings.modules, actions: JSON.parse(actionsSource || '{"actions":{}}').actions ?? {} };
 if (functions) validateFunctions(functions, functionContext);
+if (functions) validateFunctionSources(functions, Object.fromEntries(sources));
 if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,

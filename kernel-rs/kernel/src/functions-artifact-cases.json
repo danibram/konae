@@ -8285,5 +8285,13 @@
     "code": "function.artifact-digest",
     "message": "Server Artifact hashes do not match its bundles.",
     "hint": {"fix":"capsule","remedy":"Restore each server bundle from the published Server Artifact, then check its hashes again."}
+  },
+  {
+    "name": "unsupported Node module import uses shared refusal",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"import fs from 'node:fs'; export const handle = () => fs;"}},
+    "code": "function.node-module-unsupported",
+    "message": "Server functions cannot import the Node.js module node:fs.",
+    "hint": {"fix":"capsule","remedy":"Remove the unsupported Node.js module import from the server function."}
   }
 ]

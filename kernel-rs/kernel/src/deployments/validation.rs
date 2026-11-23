@@ -117,6 +117,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     if uses_actions { crate::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
     let functions = input.project.files.get("functions.json").map(|source| crate::functions::read(source)).transpose()?;
     if let Some(manifest) = &functions {
+        crate::functions::validate_function_sources(manifest, &input.project.files).map_err(anyhow::Error::new)?;
         let files = input.project.files.keys().cloned().collect();
         let actions: Value = serde_json::from_str(actions_source)?;
         let paths = input.artifact.files.keys().cloned().collect::<Vec<_>>();
