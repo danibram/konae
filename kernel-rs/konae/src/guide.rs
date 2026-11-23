@@ -127,6 +127,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Work when nobody is looking", "use": "schedule on a no-input mutation", "not": "External cron unless asked"},
                 {"need": "Owner-facing occurrence", "use": "signal on a mutation, or kind: signal", "not": "A side table only the agent reads"},
                 {"need": "Another service calls this app", "use": "Turn on http with module_set, then declare it on an anonymous action with callers / signature / key", "not": "A call action (that is outbound)"},
+                {"need": "Code between an HTTP request and the rows", "use": "A server function in functions.json, with its actions allowlist", "not": "A Server Action with string-built SQL, or a call action"},
                 {"need": "This app calls another host", "use": "Turn on calls with module_set, then declare kind: call", "not": "fetch of a secret from the browser"},
                 {"need": "Uploaded files", "use": "miniapp.files", "not": "Large bytes in a SQLite column"},
                 {"need": "Every signed-in user reads every uploaded file", "use": "files.fileAccess set to app-users", "not": "Each upload as public"},

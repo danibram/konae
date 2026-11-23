@@ -31,6 +31,7 @@ After any write through MCP or the editor, observe the effect through the same d
 | Work when nobody is looking | `schedule` on a no-input mutation | External cron unless asked |
 | Owner-facing occurrence | `signal` on a mutation, or `kind: signal` | A side table only the agent reads |
 | Another service calls this app | Turn on `http` with `module_set`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| Code between an HTTP request and the rows | A server function in `functions.json`, with its actions allowlist | A Server Action with string-built SQL, or a call action |
 | This app calls another host | Turn on `calls` with `module_set`, then declare `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` | Each upload as public |
