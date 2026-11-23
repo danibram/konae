@@ -216,6 +216,42 @@ describe("write", () => {
 });
 
 describe("validate_capsule", () => {
+  test("renders the shared function refusal returned by owner MCP", async () => {
+    const files = {
+      ...starterProject.files,
+      "functions.json": JSON.stringify({ version: 1, functions: { main: { entry: "functions/main.ts", mount: "/api", methods: ["GET"], access: "anonymous", actions: [] } } }),
+      "functions/main.ts": "export const handle = () => new Response('ok');",
+    };
+    const workspace = createCapsuleWorkspace(files);
+    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), {
+      releaseFacts: async () => ({ modules: { functions: { on: true }, auth: { on: true } } }),
+      functionPreparation: async () => { throw { refusal: { code: "function.wasm-init-pending", message: "A function must finish its top-level initialization before it can run.", hint: { fix: "capsule", remedy: "Make top-level initialization finish before the function handles requests." } } }; },
+    });
+    const result = await call(tools, "validate_capsule", {});
+    expect(result.details).toMatchObject({ ok: false, errors: [{
+      code: "function.wasm-init-pending",
+      message: "A function must finish its top-level initialization before it can run.",
+      hint: { fix: "capsule", remedy: "Make top-level initialization finish before the function handles requests." },
+    }] });
+    expect(textOf(result)).toContain("Make top-level initialization finish before the function handles requests.");
+  });
+
+  test("keeps a disconnected function preparation pending", async () => {
+    const files = {
+      ...starterProject.files,
+      "functions.json": JSON.stringify({ version: 1, functions: { main: { entry: "functions/main.ts", mount: "/api", methods: ["GET"], access: "anonymous", actions: [] } } }),
+      "functions/main.ts": "export const handle = () => new Response('ok');",
+    };
+    const workspace = createCapsuleWorkspace(files);
+    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), {
+      releaseFacts: async () => ({ modules: { functions: { on: true }, auth: { on: true } } }),
+      functionPreparation: async () => { throw new Error("connection lost"); },
+    });
+    const result = await call(tools, "validate_capsule", {});
+    expect(result.details).toMatchObject({ ok: true, functionPreparation: { status: "pending" } });
+    expect(textOf(result)).toContain("preparation is pending");
+  });
+
   test("reports a passing capsule", async () => {
     const { tools } = setup();
     const result = await call(tools, "validate_capsule", {});

@@ -43,6 +43,7 @@ export type DurableEngineOptions = {
   previewErrors?: CapsuleToolHooks["previewErrors"];
   releaseFacts?: CapsuleToolHooks["releaseFacts"];
   sourceFiles?: CapsuleToolHooks["sourceFiles"];
+  functionPreparation?: CapsuleToolHooks["functionPreparation"];
   onModelEvent?: (event: any) => void;
   onValidation?: (result: ValidationResult, files: CapsuleFiles) => void;
   onCheckpointStatus?: (status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) => void;
@@ -121,6 +122,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     liveDatabase: options.liveDatabase,
     previewErrors: options.previewErrors,
     releaseFacts: options.releaseFacts,
+    functionPreparation: options.functionPreparation,
       onValidated: (files, result) => options.onValidation?.(result, withCandidateBinaries(files)),
   });
   const projectId = currentProject.id;
@@ -321,7 +323,7 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
     const current = proposal();
     if (!current) return { state: "empty" };
     if (!current.validation) return { state: "unvalidated", changedFiles: current.changedFiles };
-    return current.validation.ok
+    return current.validation.ok && current.validation.functionPreparation?.status !== "pending"
       ? { state: "ready", changedFiles: current.changedFiles, result: current.validation }
       : { state: "blocked", changedFiles: current.changedFiles, result: current.validation };
   };

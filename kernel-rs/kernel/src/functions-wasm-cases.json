@@ -1,0 +1,109 @@
+{
+  "cases": [
+    {
+      "case": "bundle contract status maps to the shared contract refusal",
+      "status": "bundle_contract",
+      "code": "function.bundle-contract",
+      "error": "Function orders bundle must be a self-contained ESM module exporting handle.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Rebuild the Server Artifact so each bundle exports handle and has no module imports."
+      }
+    },
+    {
+      "case": "wrong component ABI",
+      "code": "function.wasm-abi",
+      "error": "The function component requires ABI konae-functions-wasm/1.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer and runner that support konae-functions-wasm/1."
+      }
+    },
+    {
+      "case": "component digest mismatch",
+      "code": "function.wasm-digest",
+      "error": "The function component SHA-256 does not match its manifest.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Check the preparer output and its manifest, then prepare the function again."
+      }
+    },
+    {
+      "case": "component import outside WIT",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      }
+    },
+    {
+      "case": "component export outside WIT",
+      "code": "function.wasm-export",
+      "error": "The function component must export the required runner interface with matching types.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits the runner exports in the runner WIT."
+      }
+    },
+    {
+      "case": "malformed component bytes",
+      "code": "function.wasm-invalid",
+      "error": "The function component is not valid WebAssembly.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Check the preparer and component packaging, then prepare the function again."
+      }
+    },
+    {
+      "case": "unsupported_api",
+      "status": "unsupported_api",
+      "code": "function.wasm-api",
+      "error": "A function uses an API that StarlingMonkey does not support.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Remove the unsupported API from the function bundle."
+      }
+    },
+    {
+      "case": "init_pending",
+      "status": "init_pending",
+      "code": "function.wasm-init-pending",
+      "error": "A function must finish its top-level initialization before it can run.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Make top-level initialization finish before the function handles requests."
+      }
+    },
+    {
+      "case": "init_effect",
+      "status": "init_effect",
+      "code": "function.wasm-init-effect",
+      "error": "A function cannot start timers or fetch during top-level initialization.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Move timers and fetch calls out of top-level initialization."
+      }
+    },
+    {
+      "case": "init_failed",
+      "status": "init_failed",
+      "code": "function.wasm-init",
+      "error": "A function failed during top-level initialization.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Fix the function's top-level initialization error."
+      }
+    },
+    {
+      "case": "build_limit",
+      "status": "build_limit",
+      "code": "function.wasm-build-limit",
+      "error": "Function component preparation exceeded its build limits.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Reduce work and memory use during function initialization."
+      }
+    }
+  ]
+}

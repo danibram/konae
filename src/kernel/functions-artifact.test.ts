@@ -21,6 +21,13 @@ for (const fixture of cases) test(`server artifact parity: ${fixture.name}`, asy
       expect(files["manifest.json"].length).toBe(fixture.metadataBytes);
       expect(serverArtifactFromFolder(files)).toEqual(artifact);
       await verifyServerFolder(files);
+      if (fixture.folderDigestMismatch) {
+        const changed = { ...files, "orders.mjs": new TextEncoder().encode("export const handle=()=>new Response('changed');") };
+        await expect(verifyServerFolder(changed)).rejects.toMatchObject({
+          code: "function.artifact-digest",
+          message: "Server Artifact hashes do not match its bundles.",
+        });
+      }
     }
   } else {
     try { run(); throw Error("Expected a refusal"); }
