@@ -5,6 +5,7 @@ function replace(source, before, after) {
 
 export function patchLocal(source, providerModule) {
   source = `import { globals, nodeCompat } from '../../spikes/node-compat/policy.mjs';
+    import { npmMode } from '../../spikes/node-compat/npm-mode.mjs';
     import { providers } from ${JSON.stringify(providerModule)};\n` + source;
   source = replace(source,
     'minify: !development, logOverride:',
@@ -12,7 +13,7 @@ export function patchLocal(source, providerModule) {
   );
   return replace(source,
     'plugins: [{ name: "declared-server-packages", setup(build) {',
-    'inject: [globals], plugins: [nodeCompat((name) => providers.get(name)), { name: "declared-server-packages", setup(build) {',
+    'inject: [globals], plugins: [nodeCompat((name) => providers.get(name)), npmMode, { name: "declared-server-packages", setup(build) {',
   );
 }
 

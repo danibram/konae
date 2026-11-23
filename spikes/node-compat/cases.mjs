@@ -85,6 +85,14 @@ export const cases = {
       hmac: "9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab",
     },
   },
+  dependencyMode: {
+    source: `import invariant from "tiny-invariant";
+      export const handle = () => {
+        try { invariant(false, "only in development"); }
+        catch (error) { return Response.json({ error: error.message, env: Object.keys(process.env) }); }
+      };`,
+    expected: { error: "Invariant failed", env: [] },
+  },
   fs: {
     source: `import fs from "graceful-fs";
       export const handle = () => new Response(typeof fs.readFile);`,
