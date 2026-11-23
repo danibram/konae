@@ -240,7 +240,7 @@ fn cooperative_cancellation_reuses_the_runner_worker() {
         .unwrap_err();
     assert!(callback_entered);
     assert_eq!(konae_functions_executor::error_code(&error), "cancelled");
-    assert_eq!(worker.pid(), Some(pid));
+    assert_eq!(worker.pid(), Some(pid), "{}", worker.diagnostics());
 
     let output = invoke(&mut worker, input("/ok", "bob"), Duration::from_secs(2)).unwrap();
     assert_eq!(

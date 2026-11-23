@@ -104,6 +104,7 @@ pub struct ChildBridge {
     active: Mutex<Option<ActiveInvocation>>,
     sequence: AtomicU64,
     cancelled: AtomicBool,
+    operation_cancelled: AtomicBool,
     error: Mutex<Option<String>>,
     output: Mutex<io::Stdout>,
     replies: Mutex<mpsc::Receiver<ParentMessage>>,
@@ -118,6 +119,7 @@ impl ChildBridge {
         self.sequence.store(0, Ordering::SeqCst);
         self.body_sequence.store(0, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
+        self.operation_cancelled.store(false, Ordering::SeqCst);
         self.clear_error();
         *active = Some(ActiveInvocation {
             capability,
@@ -171,15 +173,17 @@ impl ChildBridge {
 
     fn cancel(&self, capability: &Capability) {
         let mut active = self.active.lock().unwrap();
-        let Some(invocation) = active
-            .as_mut()
-            .filter(|active| &active.capability == capability)
-        else {
+        if !active
+            .as_ref()
+            .is_some_and(|active| &active.capability == capability)
+        {
             return;
-        };
+        }
         self.cancelled.store(true, Ordering::SeqCst);
         self.record_error("cancelled");
-        invocation.watchdog.arm();
+        if !self.operation_cancelled.load(Ordering::SeqCst) {
+            active.as_mut().unwrap().watchdog.arm();
+        }
     }
 
     fn is_active(&self, capability: &Capability) -> bool {
@@ -388,6 +392,7 @@ pub fn worker_main() -> Result<()> {
         active: Mutex::new(None),
         sequence: AtomicU64::new(0),
         cancelled: AtomicBool::new(false),
+        operation_cancelled: AtomicBool::new(false),
         error: Mutex::new(None),
         output: Mutex::new(io::stdout()),
         replies: Mutex::new(reply_rx),
@@ -402,6 +407,19 @@ pub fn worker_main() -> Result<()> {
                 Err(_) => std::process::exit(70),
             };
             match message {
+                ParentMessage::OperationResult { ref result, .. }
+                    if matches!(
+                        result,
+                        Err(code) if code == "cancelled" || code == "deadline_exceeded"
+                    ) =>
+                {
+                    reader_bridge
+                        .operation_cancelled
+                        .store(true, Ordering::SeqCst);
+                    if reply_tx.try_send(message).is_err() {
+                        std::process::exit(70);
+                    }
+                }
                 ParentMessage::OperationResult { .. } | ParentMessage::BodyChunk { .. } => {
                     if reply_tx.try_send(message).is_err() {
                         std::process::exit(70);
