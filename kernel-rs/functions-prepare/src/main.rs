@@ -159,8 +159,13 @@ fn prepare_bundle(
     );
     write_scratch!(
         dir,
+        &dir.join("web.mjs"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/web.mjs"))
+    );
+    write_scratch!(
+        dir,
         &entry,
-        b"import { hostRuntime, __konaePreparationEffectsSeen } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (__konaePreparationEffectsSeen()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
+        b"import { hostRuntime, initializationFailed, __konaePreparationEffectsSeen } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (initializationFailed()) throw new Error('KONAE_INIT_EFFECT');\nif (__konaePreparationEffectsSeen()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
     );
 
     let spliced = splice_bindings(

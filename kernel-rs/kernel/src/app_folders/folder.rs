@@ -72,8 +72,9 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let dist_digest = version_of(&dist);
     let server_artifact = crate::functions::read_artifact(&layout::server(root, id))?;
     let server = crate::functions::validate_artifact(server_artifact.as_ref().map(|a| &a.manifest), server_artifact.as_ref())?;
-    crate::functions::prepare_artifact(server_artifact.as_ref()).await
+    let prepared = crate::functions::prepare_artifact(server_artifact.as_ref()).await
         .with_context(|| format!("Could not prepare published functions for app {id}"))?;
+    let _pending_pin = crate::functions::pin_prepared(&prepared);
     if server.as_ref().is_some_and(|published| !published.manifest.functions.is_empty())
         && std::env::var_os("KONAE_FUNCTIONS_RUNNER").is_none()
     {
@@ -221,6 +222,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     deployments.retain(|_, served| served.id != id);
     deployments.insert(deployment.hostname.clone(), deployment.clone());
     drop(deployments);
+    state.functions.retain_prepared(id, &prepared);
     crate::http::routes_published(&deployment);
     state.functions.release_changed(id, &deployment.artifact_version).await;
     Ok(deployment)

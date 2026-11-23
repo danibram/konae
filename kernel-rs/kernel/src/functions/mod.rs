@@ -7,7 +7,7 @@ pub mod runtime;
 mod wasm_validation;
 
 pub use manifest_artifact::*;
-pub use preparation::{check_preparation, prepare_artifact, prepare_bundles};
+pub use preparation::{check_preparation, pin_prepared, prepare_artifact, prepare_bundles, prepared_bundles, PreparedPin};
 
 #[cfg(test)]
 pub(crate) use manifest_artifact::tests;

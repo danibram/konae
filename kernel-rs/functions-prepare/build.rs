@@ -61,7 +61,7 @@ fn main() -> Result<()> {
     let adapter_source = guest.join("starling-runtime.js");
     let esbuild = tools.join("node_modules/.bin/esbuild");
     let outfile = format!("--outfile={}", out.join("adapter.mjs").display());
-    let status = Command::new(esbuild)
+    let status = Command::new(&esbuild)
         .args([
             adapter_source.to_str().unwrap(),
             "--bundle",
@@ -76,6 +76,24 @@ fn main() -> Result<()> {
     }
     let adapter_bundle = out.join("adapter.mjs");
     let mut adapter_js = fs::read_to_string(&adapter_bundle)?;
+    anyhow::ensure!(adapter_js.contains("__KONAE_BUILD_TIMESTAMP__"), "StarlingMonkey runtime adapter has no build clock");
+    adapter_js = adapter_js.replace("__KONAE_BUILD_TIMESTAMP__", "0");
+    let web_bundle = out.join("web.mjs");
+    let web_outfile = format!("--outfile={}", web_bundle.display());
+    let web_status = Command::new(&esbuild)
+        .env("NODE_PATH", tools.join("node_modules"))
+        .args([
+            guest.join("web.js").to_str().unwrap(),
+            "--bundle",
+            "--format=esm",
+            "--platform=neutral",
+            "--main-fields=module,main",
+            &web_outfile,
+        ])
+        .status()?;
+    if !web_status.success() {
+        bail!("Could not bundle the pinned Web API adapter");
+    }
     let instrumentation = "const __konaePreparationEffects = [];\nfor (const name of ['fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask']) Object.defineProperty(globalThis, name, { configurable: false, value: (...args) => { __konaePreparationEffects.push(name); throw new Error('KONAE_INIT_EFFECT:' + name); } });\nfor (const name of ['crypto', 'performance', 'WebAssembly']) delete globalThis[name];\nexport function __konaePreparationEffectsSeen() { return __konaePreparationEffects.length > 0; }";
     let start = adapter_js
         .find("for (const name of [")
@@ -86,6 +104,8 @@ fn main() -> Result<()> {
         .context("StarlingMonkey runtime adapter global API policy changed")?
         + "]) delete globalThis[name];".len();
     adapter_js.replace_range(start..start + end, &instrumentation);
+    adapter_js.insert_str(0, "import * as web from './web.mjs';\n");
+    adapter_js.push_str("\nObject.assign(globalThis, { AbortController: web.AbortController, AbortSignal: web.AbortSignal, Blob: web.Blob, DOMException: web.DOMException, File: web.File, FormData: web.FormData, Headers: web.Headers, ReadableStream: web.ReadableStream, Request: web.Request, Response: web.Response });\n");
     fs::write(&adapter_bundle, adapter_js)?;
     for name in [
         "starling-entry.js",
@@ -182,6 +202,7 @@ fn fingerprint(
         root.join("build.rs"),
         root.join("Cargo.toml"),
         root.join("Cargo.lock"),
+        root.join("../functions-runner-wasm/package-lock.json"),
         root.join("vendor/spidermonkey-embedding-splicer/src/splice.rs"),
         root.join("vendor/spidermonkey-embedding-splicer/src/stub_wasi.rs"),
         root.join("vendor/spidermonkey-embedding-splicer/src/bindgen.rs"),
