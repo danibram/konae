@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use konae_functions_executor::protocol::{self, Capability, ChildMessage, ParentMessage};
 use serde_json::Value;
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 use std::sync::OnceLock;
 use std::{
     io,
@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 use wasmtime::StoreLimits;
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 use wasmtime::{Caller, Linker, Memory};
 
 pub struct Request {
@@ -29,9 +29,10 @@ pub struct Bridge {
     max_operations: usize,
     operations: u64,
     body_reads: u64,
-    #[cfg(not(feature = "starling-runner"))]
+    #[cfg(feature = "quickjs-runner")]
     action_result: Option<Vec<u8>>,
     pub failure: Option<String>,
+    pub failure_detail: Option<String>,
 }
 
 impl Bridge {
@@ -50,9 +51,10 @@ impl Bridge {
             max_operations,
             operations: 0,
             body_reads: 0,
-            #[cfg(not(feature = "starling-runner"))]
+            #[cfg(feature = "quickjs-runner")]
             action_result: None,
             failure: None,
+            failure_detail: None,
         }
     }
 
@@ -72,6 +74,13 @@ impl Bridge {
 
     pub(crate) fn failure(&mut self, code: impl Into<String>) {
         self.failure.get_or_insert_with(|| code.into());
+    }
+
+    pub(crate) fn failure_with_detail(&mut self, code: impl Into<String>, detail: Option<String>) {
+        if self.failure.is_none() {
+            self.failure = Some(code.into());
+            self.failure_detail = detail;
+        }
     }
 
     fn capability(&self) -> Result<Capability> {
@@ -172,7 +181,7 @@ impl Bridge {
     }
 }
 
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 fn memory(caller: &mut Caller<'_, Bridge>) -> Result<Memory> {
     caller
         .get_export("memory")
@@ -180,7 +189,7 @@ fn memory(caller: &mut Caller<'_, Bridge>) -> Result<Memory> {
         .ok_or_else(|| anyhow::anyhow!("guest memory missing"))
 }
 
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 fn input<'a>(
     memory: Memory,
     caller: &'a Caller<'_, Bridge>,
@@ -194,7 +203,7 @@ fn input<'a>(
         .ok_or_else(|| anyhow::anyhow!("guest buffer out of bounds"))
 }
 
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 pub fn link(linker: &mut Linker<Bridge>) -> Result<()> {
     linker.func_wrap(
         "konae",
@@ -260,7 +269,7 @@ pub fn link(linker: &mut Linker<Bridge>) -> Result<()> {
 }
 
 // The SDK reactor imports a clock and libc stubs. The guest receives no descriptors.
-#[cfg(not(feature = "starling-runner"))]
+#[cfg(feature = "quickjs-runner")]
 fn link_libc(linker: &mut Linker<Bridge>) -> Result<()> {
     let wasi = "wasi_snapshot_preview1";
     linker.func_wrap(

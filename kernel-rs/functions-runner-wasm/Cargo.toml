@@ -26,6 +26,8 @@ wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "
 opt-level = 3
 
 [features]
+default = ["starling-runner"]
+quickjs-runner = ["dep:libc", "dep:tempfile"]
 starling-bench = ["wasmtime/component-model", "wasmtime/pooling-allocator"]
 starling-runner = ["starling-bench", "dep:libc", "dep:tempfile"]
 

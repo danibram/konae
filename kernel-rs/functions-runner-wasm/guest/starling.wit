@@ -3,7 +3,7 @@ package konae:worker;
 interface host {
     op-worker-call: func(args: string) -> string;
     op-worker-body-read: func() -> list<u8>;
-    op-worker-failure: func(code: string);
+    op-worker-failure: func(code: string, detail: option<string>);
     now-ms: func() -> f64;
 }
 

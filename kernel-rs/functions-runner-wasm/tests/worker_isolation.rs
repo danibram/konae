@@ -5,12 +5,21 @@ use konae_functions_executor::{
 use serde_json::{Value, json};
 use std::{fs, path::Path, time::Duration};
 
+#[path = "../../functions-runner/tests/fixtures/worker.rs"]
+mod fixtures;
+
 struct Bundle(tempfile::TempDir);
 
 impl Bundle {
     fn new(source: &str) -> Self {
+        Self::with_sources(&[("orders", source)])
+    }
+
+    fn with_sources(sources: &[(&str, &str)]) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("orders.mjs"), source).unwrap();
+        for (name, source) in sources {
+            fs::write(directory.path().join(format!("{name}.mjs")), source).unwrap();
+        }
         Self(directory)
     }
 
@@ -20,6 +29,14 @@ impl Bundle {
 }
 
 fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
+    let bundles = fs::read_dir(bundle.path())
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            (name, fs::read_to_string(path).unwrap())
+        })
+        .collect();
     let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
     #[cfg(feature = "starling-runner")]
     let launcher = starling_launcher(bundle, runner);
@@ -27,8 +44,7 @@ fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
     let runner = launcher.as_path();
     Worker::spawn_with_policy(
         runner,
-        "orders",
-        bundle.path(),
+        &bundles,
         &Budget::new(timeout),
         WorkerLimits::default(),
         MemoryPolicy::DevelopmentPolling,
@@ -50,18 +66,26 @@ fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
         "PATH",
     ];
     let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
-    let prepared = Command::new(runner)
-        .arg("--prepare")
-        .arg(bundle.path().join("orders.mjs"))
-        .output()
-        .unwrap();
-    let invalid_import = !prepared.status.success()
-        && String::from_utf8_lossy(&prepared.stderr).contains("function_import_forbidden");
-    assert!(
-        prepared.status.success() || invalid_import,
-        "{}",
-        String::from_utf8_lossy(&prepared.stderr)
-    );
+    let mut invalid_import = false;
+    for entry in fs::read_dir(bundle.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|extension| extension != "mjs") {
+            continue;
+        }
+        let prepared = Command::new(runner)
+            .arg("--prepare")
+            .arg(path)
+            .output()
+            .unwrap();
+        let rejected = !prepared.status.success()
+            && String::from_utf8_lossy(&prepared.stderr).contains("function_import_forbidden");
+        assert!(
+            prepared.status.success() || rejected,
+            "{}",
+            String::from_utf8_lossy(&prepared.stderr)
+        );
+        invalid_import |= rejected;
+    }
     let mut script = String::from("#!/bin/sh\n");
     for name in variable_names {
         if !invalid_import && name != "KONAE_STARLING_CACHE" {
@@ -98,9 +122,66 @@ fn invoke(
     request: Input,
     timeout: Duration,
 ) -> anyhow::Result<konae_functions_executor::Output> {
-    worker.invoke_with(request, &Budget::new(timeout), &mut |_, _| {
+    invoke_function(worker, "orders", request, timeout)
+}
+
+fn invoke_function(
+    worker: &mut Worker,
+    function: &str,
+    request: Input,
+    timeout: Duration,
+) -> anyhow::Result<konae_functions_executor::Output> {
+    worker.invoke_with(function, request, &Budget::new(timeout), &mut |_, _| {
         Err("forbidden".into())
     })
+}
+
+#[test]
+fn handler_throw_reports_text_and_reuses_worker() {
+    let bundle = Bundle::new(fixtures::HANDLER_THROW);
+    let mut worker = worker(&bundle, Duration::from_secs(2));
+    let pid = worker.pid().unwrap();
+    let error = invoke(
+        &mut worker,
+        input("/throw", "alice"),
+        Duration::from_secs(2),
+    )
+    .unwrap_err();
+    assert_eq!(
+        konae_functions_executor::error_code(&error),
+        "handler_error"
+    );
+    assert!(
+        konae_functions_executor::error_detail(&error)
+            .unwrap()
+            .contains("handler exploded")
+    );
+    assert_eq!(worker.pid(), Some(pid));
+    assert!(worker.is_synchronized());
+    assert_eq!(
+        invoke(&mut worker, input("/warm", "alice"), Duration::from_secs(2))
+            .unwrap()
+            .body,
+        "warm"
+    );
+}
+
+#[test]
+fn invoke_selects_the_named_bundle() {
+    let bundle = Bundle::with_sources(fixtures::NAMED_BUNDLES);
+    let mut worker = worker(&bundle, Duration::from_secs(2));
+    let pid = worker.pid().unwrap();
+    for (function, expected) in [("orders", "orders"), ("users", "users")] {
+        let output = invoke_function(
+            &mut worker,
+            function,
+            input("/", "alice"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(output.body, expected);
+        assert_eq!(worker.pid(), Some(pid));
+    }
 }
 
 #[test]
@@ -195,7 +276,7 @@ fn cooperative_cancellation_reuses_the_runner_worker() {
     };
 
     let error = worker
-        .invoke_with(input("/cancel", "alice"), &budget, &mut callback)
+        .invoke_with("orders", input("/cancel", "alice"), &budget, &mut callback)
         .unwrap_err();
     assert!(callback_entered);
     assert_eq!(konae_functions_executor::error_code(&error), "cancelled");
@@ -283,6 +364,73 @@ fn linear_memory_limit_refuses_a_large_allocation() {
     assert_eq!(
         konae_functions_executor::error_code(&error),
         "worker_memory_limit"
+    );
+}
+
+#[test]
+fn response_limit_refuses_an_oversized_body() {
+    let bundle = Bundle::new(
+        "export function handle(request) { if (new URL(request.url).pathname === '/large') return new Response('x'.repeat(2 * 1024 * 1024 + 1)); return new Response('warm'); }",
+    );
+    let mut worker = worker(&bundle, Duration::from_secs(4));
+    let error = invoke(
+        &mut worker,
+        input("/large", "alice"),
+        Duration::from_secs(4),
+    )
+    .unwrap_err();
+    assert_eq!(
+        konae_functions_executor::error_code(&error),
+        "response_too_large"
+    );
+}
+
+#[test]
+#[ignore = "run under /usr/bin/time to record peak RSS for a selected response size"]
+fn response_memory_probe() {
+    let size = std::env::var("KONAE_RESPONSE_PROBE_BYTES")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    let bundle = Bundle::new(&format!(
+        "export function handle() {{ return new Response('x'.repeat({size})); }}"
+    ));
+    let mut worker = worker(&bundle, Duration::from_secs(10));
+    let pid = worker.pid().unwrap();
+    let sampling = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let peak_kib = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sample = sampling.clone();
+    let peak = peak_kib.clone();
+    let sampler = std::thread::spawn(move || {
+        while sample.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Ok(output) = std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &pid.to_string()])
+                .output()
+            {
+                if let Ok(kib) = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .parse::<usize>()
+                {
+                    peak.fetch_max(kib, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let result = invoke(&mut worker, input("/", "alice"), Duration::from_secs(10));
+    sampling.store(false, std::sync::atomic::Ordering::Relaxed);
+    sampler.join().unwrap();
+    if size <= 256 * 1024 {
+        assert_eq!(result.unwrap().body.len(), size);
+    } else {
+        assert_eq!(
+            konae_functions_executor::error_code(&result.unwrap_err()),
+            "response_too_large"
+        );
+    }
+    eprintln!(
+        "response_probe_bytes={size} peak_worker_rss_kib={}",
+        peak_kib.load(std::sync::atomic::Ordering::Relaxed)
     );
 }
 
