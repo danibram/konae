@@ -8275,5 +8275,15 @@
     },
     "code": "function.artifact-size",
     "message": "Server Artifact exceeds 8388608 UTF-8 bytes."
+  },
+  {
+    "name": "published bundle bytes differ from their manifest hash",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"export const handle=()=>null;"}},
+    "ok": true,
+    "folderDigestMismatch": true,
+    "code": "function.artifact-digest",
+    "message": "Server Artifact hashes do not match its bundles.",
+    "hint": {"fix":"capsule","remedy":"Restore each server bundle from the published Server Artifact, then check its hashes again."}
   }
 ]

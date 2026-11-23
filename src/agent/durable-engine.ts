@@ -10,7 +10,7 @@ import { openDurableStorage, readDurableConversation, uploadDurableDetail, type 
 import { boundModelText, durableOwnerMessage, redactDurableValue } from "./durable-trace";
 import { createCapsuleWorkspace } from "./capsule-env";
 import { createCapsuleValidator, type SqlJsLoader } from "./gate";
-import { createCapsuleTools, readLiveDatabase, readValidationFacts, type CapsuleToolHooks } from "./tools";
+import { createCapsuleTools, validateCapsuleCandidate, type CapsuleToolHooks } from "./tools";
 import { createPlatformTools, type AgentPlatformBinding } from "./platform-tools";
 import { AgentSubmissionNotAdmitted, type AgentKeyStore, type AgentSessionConfig, type CapsuleFiles, type AgentUiEvent, type ApplyGateStatus, type KonaeAgent, type AgentProposal, type ValidationResult } from "./contracts";
 
@@ -43,6 +43,7 @@ export type DurableEngineOptions = {
   previewErrors?: CapsuleToolHooks["previewErrors"];
   releaseFacts?: CapsuleToolHooks["releaseFacts"];
   sourceFiles?: CapsuleToolHooks["sourceFiles"];
+  functionPreparation?: CapsuleToolHooks["functionPreparation"];
   onModelEvent?: (event: any) => void;
   onValidation?: (result: ValidationResult, files: CapsuleFiles) => void;
   onCheckpointStatus?: (status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) => void;
@@ -114,6 +115,12 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   const candidateSnapshot = () => withCandidateBinaries(workspace.serialize().files);
   const candidateChangedFiles = () => [...new Set([...workspace.changedFiles(), ...restoredBinaryChanges()])];
   const validator = createCapsuleValidator(options.loadSql);
+  const validateCandidate = (files: CapsuleFiles) => validateCapsuleCandidate(validator, files, {
+    liveDatabase: options.liveDatabase,
+    releaseFacts: options.releaseFacts,
+    sourceFiles: options.sourceFiles ?? (() => currentProject),
+    functionPreparation: options.functionPreparation,
+  });
   workspace.onMutation(() => options.onMutation?.(candidateSnapshot()));
   const platformBoundaries = new Map<string, unknown>();
   const tools = createCapsuleTools(workspace, validator, {
@@ -121,6 +128,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     liveDatabase: options.liveDatabase,
     previewErrors: options.previewErrors,
     releaseFacts: options.releaseFacts,
+    functionPreparation: options.functionPreparation,
       onValidated: (files, result) => options.onValidation?.(result, withCandidateBinaries(files)),
   });
   const projectId = currentProject.id;
@@ -188,11 +196,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   let pendingConfiguration = Promise.resolve();
   if (options.recoveredFiles) {
     const candidate = candidateSnapshot();
-    const result = await validator.validate(
-      candidate,
-      await readLiveDatabase({ liveDatabase: options.liveDatabase }),
-      await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
-    );
+    const result = await validateCandidate(candidate);
     options.onValidation?.(result, candidate);
   }
   return {
@@ -206,11 +210,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       const changedFiles = candidateChangedFiles();
       if (changedFiles.length) {
         const candidate = candidateSnapshot();
-        const result = await validator.validate(
-          candidate,
-          await readLiveDatabase({ liveDatabase: options.liveDatabase }),
-          await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
-        );
+        const result = await validateCandidate(candidate);
         options.onValidation?.(result, candidate);
       }
       if (options.storage || options.openStorage) await appendDurableEntry(conversation, { kind: "konae.checkpoint" });
@@ -321,7 +321,7 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
     const current = proposal();
     if (!current) return { state: "empty" };
     if (!current.validation) return { state: "unvalidated", changedFiles: current.changedFiles };
-    return current.validation.ok
+    return current.validation.ok && current.validation.functionPreparation?.status !== "pending"
       ? { state: "ready", changedFiles: current.changedFiles, result: current.validation }
       : { state: "blocked", changedFiles: current.changedFiles, result: current.validation };
   };

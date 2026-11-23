@@ -12,6 +12,10 @@ use super::ServerArtifact;
 
 const PREPARE_LIMIT: Duration = Duration::from_secs(90);
 
+pub async fn check_preparation(_state: &crate::AppState, artifact: &ServerArtifact) -> Result<()> {
+    prepare_artifact(Some(artifact)).await
+}
+
 /// Prepares every bundle through the configured Wasm runner before a release
 /// or an exported app folder can serve it. The runner owns the engine cache.
 pub async fn prepare_artifact(artifact: Option<&ServerArtifact>) -> Result<()> {

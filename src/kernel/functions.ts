@@ -217,10 +217,10 @@ export async function verifyServerFolder(files: Record<string, Uint8Array>): Pro
   const artifact = serverArtifactFromFolder(files);
   if (!artifact) return;
   const published: unknown = JSON.parse(new TextDecoder().decode(files["manifest.json"]));
-  if (!object(published) || !object(published.hashes)) throw Error("Server Artifact hashes do not match its bundles.");
+  if (!object(published) || !object(published.hashes)) throw refusal("function.artifact-digest", "Server Artifact hashes do not match its bundles.");
   const hashes = published.hashes;
-  if (Object.keys(hashes).length !== Object.keys(artifact.bundles).length) throw Error("Server Artifact hashes do not match its bundles.");
-  for (const name of Object.keys(artifact.bundles)) if (hashes[name] !== await checksum(files[`${name}.mjs`])) throw Error("Server Artifact hashes do not match its bundles.");
+  if (Object.keys(hashes).length !== Object.keys(artifact.bundles).length) throw refusal("function.artifact-digest", "Server Artifact hashes do not match its bundles.");
+  for (const name of Object.keys(artifact.bundles)) if (hashes[name] !== await checksum(files[`${name}.mjs`])) throw refusal("function.artifact-digest", "Server Artifact hashes do not match its bundles.");
 }
 
 export function functionsBuildSupport(): string {

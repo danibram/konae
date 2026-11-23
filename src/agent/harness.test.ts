@@ -215,6 +215,24 @@ describe("konae agent", () => {
     expect(gate.state === "blocked" && gate.result.errors[0].stage).toBe("schema");
   });
 
+  test("ordinary Apply stays blocked while Wasm preparation is pending", async () => {
+    const manifest = JSON.stringify({ version: 1, functions: { main: { entry: "functions/main.ts", mount: "/api", methods: ["GET"], access: "anonymous", actions: [] } } });
+    const { agent } = agentFor([
+      call(
+        { name: "write", arguments: { path: "/workspace/functions.json", content: manifest } },
+        { name: "write", arguments: { path: "/workspace/functions/main.ts", content: "export const handle = () => new Response('ok');" } },
+        { name: "validate_capsule", arguments: {} },
+      ),
+      say("Prepared locally."),
+    ], {
+      releaseFacts: async () => ({ modules: { functions: { on: true }, auth: { on: true }, files: { on: true } } }),
+      functionPreparation: async () => { throw new Error("owner MCP disconnected"); },
+    });
+    await agent.send("add a function");
+    expect(agent.applyGateStatus().state).toBe("blocked");
+    expect(agent.proposal()?.validation?.functionPreparation?.status).toBe("pending");
+  });
+
   test("an edit after the model's own validate_capsule makes that result stale", async () => {
     const secondEdit = {
       name: "edit",

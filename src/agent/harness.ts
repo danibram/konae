@@ -54,6 +54,7 @@ export type KonaeAgentOptions = {
   previewTest?: import("./tools").CapsuleToolHooks["previewTest"];
   releaseFacts?: () => Promise<ReleaseFacts>;
   sourceFiles?: () => MiniAppProject;
+  functionPreparation?: import("./tools").CapsuleToolHooks["functionPreparation"];
 };
 
 export function createKonaeAgent(
@@ -169,7 +170,7 @@ class KonaeAgentSession implements KonaeAgentHandle {
     if (changedFiles.length === 0) return { state: "empty" };
     const result = this.currentValidation();
     if (!result) return { state: "unvalidated", changedFiles };
-    return result.ok ? { state: "ready", changedFiles, result } : { state: "blocked", changedFiles, result };
+    return result.ok && result.functionPreparation?.status !== "pending" ? { state: "ready", changedFiles, result } : { state: "blocked", changedFiles, result };
   }
 
   configure(config: AgentSessionConfig) {
@@ -242,6 +243,7 @@ class KonaeAgentSession implements KonaeAgentHandle {
       previewTest: this.options.previewTest,
       releaseFacts: this.options.releaseFacts,
       sourceFiles: this.options.sourceFiles,
+      functionPreparation: this.options.functionPreparation,
     });
   }
 
