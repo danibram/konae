@@ -1,5 +1,7 @@
 (() => {
-  const { core } = __bootstrap;
+  const { core, primordials } = __bootstrap;
+  let timerApi;
+  let cloneApi;
   for (const [path, names] of [
     ['ext:deno_web/01_dom_exception.js', ['DOMException']],
     ['ext:deno_web/02_event.js', ['Event', 'EventTarget', 'CustomEvent']],
@@ -7,6 +9,7 @@
     ['ext:deno_web/08_text_encoding.js', ['TextEncoder', 'TextDecoder']],
     ['ext:deno_web/06_streams.js', ['ReadableStream', 'WritableStream', 'TransformStream']],
     ['ext:deno_web/03_abort_signal.js', ['AbortController', 'AbortSignal']],
+    ['ext:deno_web/15_performance.js', ['performance']],
     ['ext:deno_web/09_file.js', ['Blob', 'File']],
     ['ext:deno_fetch/20_headers.js', ['Headers']],
     ['ext:deno_fetch/21_formdata.js', ['FormData']],
@@ -16,6 +19,9 @@
     const exports = core.loadExtScript(path);
     for (const name of names) globalThis[name] = exports[name];
   }
+  timerApi = core.loadExtScript('ext:deno_web/02_timers.js');
+  cloneApi = core.loadExtScript('ext:deno_web/13_message_port.js');
+  const cryptoApi = core.loadExtScript('ext:deno_crypto/00_crypto.js');
   const requestClass = Request;
   const controllerClass = AbortController;
   const encode = new TextEncoder().encode.bind(new TextEncoder());
@@ -24,9 +30,123 @@
   const call = core.ops.op_worker_call;
   const bodyRead = core.ops.op_worker_body_read;
   const failure = core.ops.op_worker_failure;
+  const nativeQueueMicrotask = primordials.queueMicrotask
+    ?? ((callback) => Promise.resolve().then(callback));
+  const transferArrayBuffer = ArrayBuffer.prototype.transfer;
+  const timerIds = new Set();
   const stringify = JSON.stringify;
   let controller;
+  let requestActive = false;
   function reject(code) { failure(code); throw new Error(code); }
+  function requireRequestEffect() {
+    if (!requestActive) reject('unsupported_runtime_api');
+  }
+  function clearRequestTimers() {
+    for (const id of timerIds) {
+      Reflect.apply(timerApi.clearTimeout, globalThis, [id]);
+      Reflect.apply(timerApi.clearInterval, globalThis, [id]);
+    }
+    timerIds.clear();
+  }
+  function timer(setter, callback, delay, args) {
+    if (typeof callback !== 'function') throw new TypeError('Timer callback must be a function');
+    requireRequestEffect();
+    let id;
+    const wrapped = (...values) => {
+      if (!requestActive) return;
+      if (setter === timerApi.setTimeout) timerIds.delete(id);
+      return callback(...values);
+    };
+    id = setter(wrapped, delay, ...args);
+    timerIds.add(id);
+    return id;
+  }
+  function clearTimer(clearer, id) {
+    requireRequestEffect();
+    timerIds.delete(id);
+    return clearer(id);
+  }
+  function requestQueueMicrotask(callback) {
+    if (typeof callback !== 'function') throw new TypeError('Callback must be a function');
+    requireRequestEffect();
+    nativeQueueMicrotask(callback);
+  }
+  function cloneWithTransfers(value, options) {
+    const cloned = cloneApi.structuredClone(value, options);
+    for (const transferable of options?.transfer ?? []) {
+      if (transferArrayBuffer && transferable instanceof ArrayBuffer) {
+        Reflect.apply(transferArrayBuffer, transferable, [0]);
+      }
+    }
+    return cloned;
+  }
+  function algorithmName(value) {
+    return typeof value === 'string' ? value.toUpperCase() : value?.name?.toUpperCase();
+  }
+  function hashName(value) {
+    return algorithmName(typeof value === 'string' ? value : value?.hash);
+  }
+  function supportedAlgorithm(value) {
+    const name = algorithmName(value);
+    if (name === 'HMAC') return typeof value === 'string' || hashName(value) === 'SHA-256';
+    if (name === 'ECDSA') return hashName(value) === 'SHA-256';
+    if (name === 'RSASSA-PKCS1-V1_5') return true;
+    return ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512'].includes(name);
+  }
+  function makeSubtle() {
+    const getSubtle = () => {
+      requireRequestEffect();
+      return cryptoApi.crypto.subtle;
+    };
+    const facade = Object.create(null);
+    facade.digest = (algorithm, data) => {
+      if (!['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512'].includes(algorithmName(algorithm))) {
+        throw new DOMException('Unsupported digest algorithm', 'NotSupportedError');
+      }
+      return getSubtle().digest(algorithm, data);
+    };
+    facade.importKey = (format, keyData, algorithm, extractable, usages) => {
+      const name = algorithmName(algorithm);
+      const hash = hashName(algorithm);
+      const allowed = (name === 'HMAC' && hash === 'SHA-256' && ['RAW', 'JWK'].includes(String(format).toUpperCase()))
+        || (name === 'ECDSA' && algorithm?.namedCurve === 'P-256' && String(format).toUpperCase() === 'JWK')
+        || (name === 'RSASSA-PKCS1-V1_5' && hash === 'SHA-256' && String(format).toUpperCase() === 'JWK');
+      if (!allowed) throw new DOMException('Unsupported key algorithm', 'NotSupportedError');
+      return getSubtle().importKey(format, keyData, algorithm, extractable, usages);
+    };
+    facade.sign = (algorithm, key, data) => {
+      if (!supportedAlgorithm(algorithm) || !['HMAC', 'ECDSA', 'RSASSA-PKCS1-V1_5'].includes(algorithmName(algorithm))) {
+        throw new DOMException('Unsupported signing algorithm', 'NotSupportedError');
+      }
+      return getSubtle().sign(algorithm, key, data);
+    };
+    facade.verify = (algorithm, key, signature, data) => {
+      if (!supportedAlgorithm(algorithm) || !['HMAC', 'ECDSA', 'RSASSA-PKCS1-V1_5'].includes(algorithmName(algorithm))) {
+        throw new DOMException('Unsupported verification algorithm', 'NotSupportedError');
+      }
+      return getSubtle().verify(algorithm, key, signature, data);
+    };
+    return Object.freeze(facade);
+  }
+  let subtleFacade;
+  const requestCrypto = Object.freeze({
+    getRandomValues(value) { requireRequestEffect(); return cryptoApi.crypto.getRandomValues(value); },
+    randomUUID() { requireRequestEffect(); return cryptoApi.crypto.randomUUID(); },
+    get subtle() {
+      if (!subtleFacade) subtleFacade = makeSubtle();
+      return subtleFacade;
+    },
+  });
+  Object.defineProperties(globalThis, {
+    setTimeout: { value: (fn, ms, ...args) => timer(timerApi.setTimeout, fn, ms, args), configurable: false },
+    setInterval: { value: (fn, ms, ...args) => timer(timerApi.setInterval, fn, ms, args), configurable: false },
+    clearTimeout: { value: (id) => clearTimer(timerApi.clearTimeout, id), configurable: false },
+    clearInterval: { value: (id) => clearTimer(timerApi.clearInterval, id), configurable: false },
+    queueMicrotask: { value: requestQueueMicrotask, configurable: true },
+    structuredClone: { value: cloneWithTransfers, configurable: false },
+    crypto: { get() { return requestCrypto; }, configurable: false },
+    CryptoKey: { value: cryptoApi.CryptoKey, configurable: false },
+  });
   Object.defineProperty(AbortSignal, 'timeout', {
     value() { reject('unsupported_runtime_api'); }, writable: false, configurable: false,
   });
@@ -35,6 +155,7 @@
   return {
     async invoke(handler, input, capability, responseLimit) {
       controller = new controllerClass();
+      requestActive = true;
       let bodySequence = 0;
       const body = new ReadableStream({
         pull(stream) {
@@ -83,10 +204,20 @@
         let body;
         try { body = decode(bytes); } catch { reject('invalid_response'); }
         return stringify({ status: response.status, headers, body });
-      } finally { controller = undefined; }
+      } finally {
+        requestActive = false;
+        clearRequestTimers();
+        controller = undefined;
+      }
     },
-    cancel() { controller?.abort(new DOMException('Request cancelled', 'AbortError')); },
+    cancel() {
+      requestActive = false;
+      clearRequestTimers();
+      controller?.abort(new DOMException('Request cancelled', 'AbortError'));
+    },
     async shutdown(handler) {
+      requestActive = false;
+      clearRequestTimers();
       controller = new controllerClass();
       try { if (typeof handler === 'function') await handler(controller.signal); }
       finally { controller = undefined; }

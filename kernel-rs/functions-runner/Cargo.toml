@@ -10,6 +10,7 @@ konae-functions-executor = { path = "../functions-executor" }
 anyhow = "=1.0.104"
 deno_core = "=0.413.0"
 deno_web = "=0.291.0"
+deno_crypto = "=0.274.0"
 deno_webidl = "=0.260.0"
 deno_net = "=0.252.0"
 deno_fetch = "=0.284.0"
@@ -27,6 +28,7 @@ tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "sync", "ti
 konae-functions-executor = { path = "../functions-executor" }
 deno_core = "=0.413.0"
 deno_web = "=0.291.0"
+deno_crypto = "=0.274.0"
 deno_webidl = "=0.260.0"
 deno_net = "=0.252.0"
 deno_fetch = "=0.284.0"
@@ -43,3 +45,6 @@ debug = 0
 strip = "debuginfo"
 
 [workspace]
+
+[patch.crates-io]
+deno_crypto = { path = "vendor/deno_crypto" }

@@ -8,6 +8,7 @@ COPY kernel-rs/konae/Cargo.toml ./kernel-rs/konae/Cargo.toml
 COPY kernel-rs/functions-executor/Cargo.toml ./kernel-rs/functions-executor/Cargo.toml
 COPY kernel-rs/functions-executor/src/ ./kernel-rs/functions-executor/src/
 COPY kernel-rs/functions-runner/Cargo.toml kernel-rs/functions-runner/Cargo.lock kernel-rs/functions-runner/build.rs ./kernel-rs/functions-runner/
+COPY kernel-rs/functions-runner/vendor/deno_crypto/ ./kernel-rs/functions-runner/vendor/deno_crypto/
 COPY kernel-rs/functions-runner/src/main.rs kernel-rs/functions-runner/src/runtime.rs kernel-rs/functions-runner/src/worker.rs kernel-rs/functions-runner/src/bootstrap.js ./kernel-rs/functions-runner/src/
 RUN cargo build --release --locked \
     --manifest-path kernel-rs/functions-runner/Cargo.toml \

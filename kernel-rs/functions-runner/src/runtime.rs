@@ -46,6 +46,7 @@ mod startup_snapshot_tests {
                 false,
                 Default::default(),
             ),
+            deno_crypto::deno_crypto::init(None),
             deno_net::deno_net::init(None, None),
             deno_fetch::deno_fetch::init(Default::default()),
             functions_bridge::init(),
@@ -61,7 +62,7 @@ mod startup_snapshot_tests {
         let state = js
             .execute_script(
                 "worker:snapshot-test",
-                "(() => { const bootstrap = globalThis.__functions_bootstrap; delete globalThis.__functions_bootstrap; delete globalThis.Deno; delete globalThis.__bootstrap; return JSON.stringify({request: typeof Request, response: typeof Response, deno: typeof Deno, bootstrap: typeof __bootstrap, invoke: typeof bootstrap.invoke, timeout: typeof AbortSignal.timeout}); })()",
+                "(() => { const bootstrap = globalThis.__functions_bootstrap; delete globalThis.__functions_bootstrap; delete globalThis.Deno; delete globalThis.__bootstrap; return JSON.stringify({request: typeof Request, response: typeof Response, deno: typeof Deno, bootstrap: typeof __bootstrap, invoke: typeof bootstrap.invoke, timeout: typeof AbortSignal.timeout, timer: typeof setTimeout, queueMicrotask: typeof queueMicrotask, performance: typeof performance, structuredClone: typeof structuredClone, cryptoKey: typeof CryptoKey, cryptoGetter: typeof Object.getOwnPropertyDescriptor(globalThis, 'crypto').get}); })()",
             )
             .unwrap();
         deno_core::scope!(scope, js);
@@ -73,6 +74,12 @@ mod startup_snapshot_tests {
         assert!(text.contains("\"bootstrap\":\"undefined\""));
         assert!(text.contains("\"invoke\":\"function\""));
         assert!(text.contains("\"timeout\":\"function\""));
+        assert!(text.contains("\"timer\":\"function\""));
+        assert!(text.contains("\"queueMicrotask\":\"function\""));
+        assert!(text.contains("\"performance\":\"object\""));
+        assert!(text.contains("\"structuredClone\":\"function\""));
+        assert!(text.contains("\"cryptoKey\":\"function\""));
+        assert!(text.contains("\"cryptoGetter\":\"function\""));
     }
 }
 
@@ -170,6 +177,7 @@ impl Runtime {
                 false,
                 Default::default(),
             ),
+            deno_crypto::deno_crypto::init(None),
             deno_net::deno_net::init(None, None),
             deno_fetch::deno_fetch::init(Default::default()),
             functions_bridge::init(),
@@ -234,6 +242,9 @@ impl Runtime {
         let evaluation = js.mod_evaluate(id);
         js.run_event_loop(Default::default()).await?;
         evaluation.await?;
+        if bridge.error().as_deref() == Some("unsupported_runtime_api") {
+            return Err(WorkerError::new("unsupported_runtime_api").into());
+        }
         let namespace = js.get_module_namespace(id)?;
         let (handler, shutdown_handler, has_shutdown) = {
             deno_core::scope!(scope, js);
