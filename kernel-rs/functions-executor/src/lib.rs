@@ -7,7 +7,7 @@ mod supervisor;
 pub use budget::{Budget, BudgetError, MutationOutcomeState};
 pub use containment::MemoryPolicy;
 pub use protocol::{Input, Output, WorkerLimits};
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 pub use supervisor::{
     Worker, WorkerError, error_code, error_detail, validate_linux_worker_containment,
     validate_linux_worker_identity,
@@ -43,4 +43,5 @@ pub trait RequestBody: Send + Sync {
 pub trait ExecutionBudget {
     fn deadline(&self) -> Instant;
     fn is_cancelled(&self) -> bool;
+    fn register_abort_handler(&self, _handler: Arc<dyn Fn() + Send + Sync>) {}
 }

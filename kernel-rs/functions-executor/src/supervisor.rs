@@ -575,6 +575,18 @@ impl Worker {
         }
         self.busy = true;
         self.synchronized = false;
+        if let Some(pid) = self.pid() {
+            let kill_containment = self.containment.kill_handle();
+            budget.register_abort_handler(Arc::new(move || {
+                if !kill_containment() {
+                    return;
+                }
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }));
+        }
         let mut can_resynchronize = false;
         let result = (|| {
             self.send(&message, budget)?;

@@ -860,6 +860,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
             .header("host", &deployed.hostname)
             .header("cookie", cookie)
     };
+
     let first = get("", &accounts[0].0).send().await.unwrap();
     let status = first.status();
     let first: Value = first.json().await.unwrap();
@@ -869,6 +870,44 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     assert_eq!(first["rows"][0]["id"], 1);
     assert_eq!(first["cookie"], false);
     assert_eq!(first["authorization"], false);
+    if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
+        let previous_worker_pid = state
+            .functions
+            .debug_state()
+            .split("worker pid=Some(")
+            .nth(1)
+            .and_then(|worker| worker.split(')').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .expect("the app must have a worker before the memory pressure request");
+        let pressure = get("/pressure", &accounts[0].0).send().await.unwrap();
+        let status = pressure.status();
+        let failure: Value = pressure.json().await.unwrap();
+        let killed = status == StatusCode::BAD_GATEWAY && failure["code"] == "worker_memory_limit";
+        let deadline =
+            status == StatusCode::GATEWAY_TIMEOUT && failure["code"] == "deadline_exceeded";
+        assert!(killed || deadline, "{status} {failure}");
+        let recovery_started = Instant::now();
+        let body: Value = tokio::time::timeout(Duration::from_millis(DEADLINE_MS), async {
+            let recovered = get("", &accounts[0].0).send().await.unwrap();
+            assert_eq!(recovered.status(), StatusCode::OK);
+            recovered.json().await.unwrap()
+        })
+        .await
+        .expect("the next request must finish within one function deadline");
+        assert_eq!(body["calls"], 1);
+        assert_eq!(body["rows"], json!([{"id": 1, "quantity": 2}]));
+        assert!(
+            !PathBuf::from(format!("/proc/{previous_worker_pid}")).exists(),
+            "the worker must be killed and reaped before the next request returns"
+        );
+        let runtime = state.functions.debug_state();
+        assert!(!runtime.contains("worker mutex held"), "{runtime}");
+        println!(
+            "kernel_http_oom={} recovery=200 recovery_ms={}",
+            failure["code"],
+            recovery_started.elapsed().as_millis()
+        );
+    }
     let second: Value = get("", &accounts[1].0)
         .send()
         .await
@@ -876,7 +915,12 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .json()
         .await
         .unwrap();
-    assert_eq!(second["calls"], 1);
+    assert_eq!(
+        second["calls"],
+        1,
+        "{second} runtime={}",
+        state.functions.debug_state()
+    );
     assert_eq!(second["rows"][0]["id"], 2);
     let post = |key: &str, input: Value| {
         client
@@ -1163,7 +1207,13 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|_| {
+        panic!(
+            "disconnect never entered its transaction: task_finished={} {}",
+            disconnect.is_finished(),
+            state.functions.debug_state()
+        )
+    });
     disconnect.abort();
     assert!(disconnect.await.unwrap_err().is_cancelled());
     let guard = tokio::time::timeout(
@@ -1290,7 +1340,12 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .iter()
         .find(|row| row["version"] == c.artifact_version)
         .unwrap();
-    assert_eq!(a_series["samples"], 21, "{latency}");
+    let expected_samples = if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
+        23
+    } else {
+        21
+    };
+    assert_eq!(a_series["samples"], expected_samples, "{latency}");
     assert_eq!(a_series["timeouts"], 1, "{latency}");
     assert_eq!(a_series["replays"], 3, "{latency}");
     let handler_error = a_series["errors"]
@@ -1351,63 +1406,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         println!("FUNCTION_HTTP_TIMINGS {}", json!(rounds));
         crate::usage::flush();
     }
-    if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
-        // memory.max is an OS limit, not an instant kill. When the cgroup reaches it the kernel
-        // reclaims file pages first, so a host with a slow disk or a large page cache lets the
-        // worker crawl at the limit until the request deadline instead of killing it. Both outcomes
-        // keep the contract: the worker never holds more than the limit and the request ends at the
-        // deadline. A GitHub ubuntu-24.04 runner on Linux 7.0 reached the deadline on both
-        // architectures; Docker on macOS killed the worker.
-        let pressure = get("/pressure", &accounts[0].0).send().await.unwrap();
-        let status = pressure.status();
-        let failure: Value = pressure.json().await.unwrap();
-        let killed = status == StatusCode::BAD_GATEWAY && failure["code"] == "worker_memory_limit";
-        let throttled =
-            status == StatusCode::GATEWAY_TIMEOUT && failure["code"] == "deadline_exceeded";
-        assert!(killed || throttled, "{status} {failure}");
-        // A worker killed while it thrashes at memory.max can take seconds to leave its cgroup,
-        // and the next request on the same app waits for that teardown. Recovery must happen,
-        // and the log records how long it took.
-        let recovery_started = Instant::now();
-        let mut attempts = Vec::new();
-        loop {
-            let recovered = get("", &accounts[0].0).send().await.unwrap();
-            let status = recovered.status();
-            let body = recovered.text().await.unwrap();
-            attempts.push(format!("{status} {body}"));
-            if status == StatusCode::OK {
-                break;
-            }
-            println!("recovery_attempt status={status} runtime={}", state.functions.debug_state());
-            if let Some(root) = std::env::var_os("KONAE_TEST_FUNCTION_CGROUP") {
-                for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
-                    let path = entry.path();
-                    if !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("konae-worker-")) {
-                        continue;
-                    }
-                    let read = |name: &str| std::fs::read_to_string(path.join(name)).unwrap_or_else(|error| format!("<{error}>")).replace('\n', " ");
-                    println!("worker_cgroup {} procs=[{}] events=[{}] memory.current={} memory.events=[{}]", path.display(), read("cgroup.procs").trim(), read("cgroup.events").trim(), read("memory.current").trim(), read("memory.events").trim());
-                    for pid in read("cgroup.procs").split_whitespace() {
-                        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
-                        let fields = status.lines().filter(|line| line.starts_with("State:") || line.starts_with("SigPnd:") || line.starts_with("ShdPnd:") || line.starts_with("VmRSS:")).collect::<Vec<_>>();
-                        let wchan = std::fs::read_to_string(format!("/proc/{pid}/wchan")).unwrap_or_else(|error| format!("<{error}>"));
-                        println!("worker_process pid={pid} {fields:?} wchan={wchan}");
-                    }
-                }
-            }
-            assert!(
-                recovery_started.elapsed() < Duration::from_secs(20),
-                "no recovery after the memory limit: {attempts:?}"
-            );
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        println!(
-            "kernel_http_oom={} recovery=200 recovery_ms={} attempts={}",
-            failure["code"],
-            recovery_started.elapsed().as_millis(),
-            attempts.len()
-        );
-    }
+
     if let Some(destination) = std::env::var_os("KONAE_TEST_PRESERVE_APP_DIR") {
         let destination = PathBuf::from(destination);
         let source = crate::layout::folder(&root, id);

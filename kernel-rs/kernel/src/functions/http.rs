@@ -391,7 +391,12 @@ fn outcome(code: &str) -> FunctionOutcome {
 }
 
 fn interrupted(budget: &Budget, code: &str, started: Instant, progress: &RunProgress) -> Timed {
-    let code = if budget.cancel().may_have_committed() {
+    let mutation = if code == "deadline_exceeded" {
+        budget.abort()
+    } else {
+        budget.cancel()
+    };
+    let code = if mutation.may_have_committed() {
         "mutation_outcome_unknown"
     } else {
         code
