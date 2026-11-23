@@ -1,0 +1,16 @@
+package konae:worker;
+
+interface host {
+    op-worker-call: func(args: string) -> string;
+    op-worker-body-read: func() -> list<u8>;
+    op-worker-failure: func(code: string);
+    now-ms: func() -> f64;
+}
+
+world ipc {
+    import host;
+    export handle: func(input: string, limit: u32) -> string;
+    export has-shutdown: func() -> bool;
+    export shutdown: func();
+    export spin: func();
+}
