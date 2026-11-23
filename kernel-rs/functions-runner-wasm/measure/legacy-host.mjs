@@ -25,6 +25,7 @@ function bundle(name) {
 
 class Worker {
   constructor(name) {
+    this.name = name;
     this.child = spawn(process.env.KONAE_FUNCTIONS_RUNNER, ['--function-worker'], {
       stdio: ['pipe', 'pipe', 'inherit'],
     });
@@ -34,8 +35,8 @@ class Worker {
     this.number = 0;
     this.tail = Promise.resolve();
     this.send({
-      kind: 'Init', abi: 'konae-functions-ipc/2', generation: this.generation,
-      function: name, source: bundle(name),
+      kind: 'Init', abi: 'konae-functions-ipc/3', generation: this.generation,
+      bundles: { orders: bundle('orders'), preferences: bundle('preferences') },
       limits,
     });
   }
@@ -61,6 +62,7 @@ class Worker {
 
   async ready() {
     const message = await this.frame();
+    if (message.kind === 'Failure') throw Error(`Worker initialization failed: ${message.code}: ${message.detail ?? ''}`);
     if (message.kind !== 'Ready' || message.generation !== this.generation) throw Error('Expected Ready');
   }
 
@@ -75,7 +77,7 @@ class Worker {
     let offset = 0;
     const capability = { generation: this.generation, request: ++this.number, token: randomUUID() };
     this.send({
-      kind: 'Invoke', capability,
+      kind: 'Invoke', capability, function: this.name,
       input: { url: request.url, method: request.method, headers: [...request.headers],
         body_len: body.length, actor: context.actor.userId },
     });
@@ -87,7 +89,10 @@ class Worker {
       if (message.kind === 'BodyRead') {
         const bytes = body.subarray(offset, offset + message.maximum);
         offset += bytes.length;
-        this.send({ kind: 'BodyChunk', capability, sequence, body_len: bytes.length, bytes: [...bytes], done: !bytes.length });
+        this.send({
+          kind: 'BodyChunk', capability, sequence, body_len: bytes.length,
+          bytes: [...bytes], done: bytes.length === 0,
+        });
       } else if (message.kind === 'Operation') {
         let result;
         try {

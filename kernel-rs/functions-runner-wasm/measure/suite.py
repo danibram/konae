@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the existing verifier and rollback fixture against the IPC v2 adapter."""
+"""Run the existing verifier and rollback fixture against the IPC/3 adapter."""
 import argparse
 import collections
 from contextlib import contextmanager
@@ -94,6 +94,16 @@ def run(binary, node, directory, repeat_slowest=0):
     env = dict(KONAE_FUNCTIONS_RUNNER=str(binary))
     report = Report('wasm')
     repeated = []
+    with tempfile.TemporaryDirectory(prefix='konae-wasm-prepare-') as staging:
+        subprocess.run([node, str(HERE / 'legacy-host.mjs'), '--write-bundles', staging], check=True)
+        prepare_env = {**os.environ, **env}
+        for name in ('orders', 'preferences'):
+            prepared = subprocess.run(
+                [str(binary), '--prepare', str(Path(staging) / f'{name}.mjs')],
+                env=prepare_env, capture_output=True, text=True,
+            )
+            if prepared.returncode:
+                raise RuntimeError(prepared.stderr or prepared.stdout)
     with server(command, env, directory, 'wasm') as (base, data):
         verify = TimedVerify(base, data, report, track_slowest=bool(repeat_slowest))
         verify.run()

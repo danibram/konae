@@ -133,10 +133,10 @@ fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
         "KONAE_STARLING_TOOLS",
         "KONAE_STARLING_WASMTIME",
         "KONAE_STARLING_NODE",
+        "KONAE_STARLING_TEST_SEED",
         "PATH",
     ];
     let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
-    let mut invalid_import = false;
     for entry in fs::read_dir(bundle.path()).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_none_or(|extension| extension != "mjs") {
@@ -154,13 +154,9 @@ fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
             "{}",
             String::from_utf8_lossy(&prepared.stderr)
         );
-        invalid_import |= rejected;
     }
     let mut script = String::from("#!/bin/sh\n");
     for name in variable_names {
-        if !invalid_import && name != "KONAE_STARLING_CACHE" {
-            continue;
-        }
         if let Ok(value) = env::var(name) {
             script.push_str(&format!("export {name}={}\n", quote(&value)));
         }
@@ -206,6 +202,26 @@ fn invoke_function(
     })
 }
 
+#[cfg(feature = "starling-runner")]
+fn expected_random_pair(seed: u64) -> Value {
+    let mut state = (seed ^ (seed >> 32)) as u32;
+    if state == 0 {
+        state = 0x6d2b79f5;
+    }
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let high = state >> 5;
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let low = state >> 6;
+        (high as f64 * 67108864.0 + low as f64) / 9007199254740992.0
+    };
+    json!([next(), next()])
+}
+
 #[test]
 fn handler_throw_reports_text_and_reuses_worker() {
     let bundle = Bundle::new(fixtures::HANDLER_THROW);
@@ -234,6 +250,25 @@ fn handler_throw_reports_text_and_reuses_worker() {
             .body,
         "warm"
     );
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn handler_error_detail_is_bounded_and_uses_portable_frames() {
+    let bundle = Bundle::new(
+        "export async function handle() { return fail(); } async function fail() { throw new TypeError('🦊'.repeat(3000)); }",
+    );
+    let mut worker = worker(&bundle, Duration::from_secs(5));
+    let error = invoke(&mut worker, input("/", "alice"), Duration::from_secs(5)).unwrap_err();
+    assert_eq!(
+        konae_functions_executor::error_code(&error),
+        "handler_error"
+    );
+    let detail = konae_functions_executor::error_detail(&error).unwrap();
+    assert!(detail.len() <= 4096, "detail was {} bytes", detail.len());
+    assert!(detail.starts_with("TypeError:"));
+    assert!(detail.contains(".js:"), "{detail}");
+    assert!(!detail.contains("/Users/"), "{detail}");
 }
 
 #[test]
@@ -274,9 +309,13 @@ fn dynamic_import_is_refused_before_loading_the_dependency() {
     let bundle = Bundle::new(
         "export async function handle() { try { await import('./unused.mjs'); return new Response('loaded'); } catch { return new Response('blocked'); } }",
     );
-    let mut worker = worker(&bundle, Duration::from_secs(2));
-    let output = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2))
-        .unwrap_or_else(|error| panic!("{error}; {}", worker.diagnostics()));
+    let mut local_worker = worker(&bundle, Duration::from_secs(2));
+    let output = invoke(
+        &mut local_worker,
+        input("/", "alice"),
+        Duration::from_secs(2),
+    )
+    .unwrap_or_else(|error| panic!("{error}; {}", local_worker.diagnostics()));
     assert_eq!(output.body, "blocked");
 }
 
@@ -303,6 +342,172 @@ fn globals_and_context_capabilities_do_not_cross_requests() {
         );
         assert_eq!(worker.pid(), Some(pid));
     }
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn snapshot_clock_uses_one_build_time_and_live_handler_time() {
+    let bundle = Bundle::new(
+        r#"
+        let counter = 0;
+        const buildNow = Date.now();
+        const buildDate = +new Date();
+        const buildCall = Date();
+        export function handle() {
+          return Response.json({
+            counter: ++counter, buildNow, buildDate, buildCall,
+            handlerNow: Date.now(), handlerDate: +new Date(),
+            handlerCall: Date(), explicit: +new Date(0),
+          });
+        }
+    "#,
+    );
+    let mut worker = worker(&bundle, Duration::from_secs(5));
+    let first: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/", "alice"), Duration::from_secs(5))
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    let second: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/", "alice"), Duration::from_secs(5))
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(first["counter"], 1);
+    assert_eq!(second["counter"], 1);
+    for value in [&first, &second] {
+        assert_eq!(value["buildNow"], value["buildDate"]);
+        assert_eq!(value["explicit"], 0);
+        assert!(value["handlerNow"].as_i64().unwrap() >= value["buildNow"].as_i64().unwrap());
+        assert!(
+            value["handlerNow"]
+                .as_i64()
+                .unwrap()
+                .abs_diff(value["handlerDate"].as_i64().unwrap())
+                <= 5
+        );
+    }
+    assert_eq!(first["buildNow"], second["buildNow"]);
+    assert_eq!(first["buildCall"], second["buildCall"]);
+    assert!(second["handlerNow"].as_i64().unwrap() > first["handlerNow"].as_i64().unwrap());
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn random_seed_resets_each_invocation_and_worker() {
+    unsafe { std::env::set_var("KONAE_STARLING_TEST_SEED", "305419896") };
+    let bundle = Bundle::new(
+        "export function handle() { return Response.json([Math.random(), Math.random()]); }",
+    );
+    let timeout = Duration::from_secs(5);
+    let mut first_worker = worker(&bundle, timeout);
+    let first: Value = serde_json::from_str(
+        &invoke(&mut first_worker, input("/", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    let second: Value = serde_json::from_str(
+        &invoke(&mut first_worker, input("/", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    let mut second_worker = worker(&bundle, timeout);
+    let first_in_second_worker: Value = serde_json::from_str(
+        &invoke(&mut second_worker, input("/", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    unsafe { std::env::remove_var("KONAE_STARLING_TEST_SEED") };
+
+    let seed = 305419896;
+    assert_eq!(first, expected_random_pair(seed));
+    assert_eq!(second, expected_random_pair(seed + 1));
+    assert_eq!(first_in_second_worker, expected_random_pair(seed));
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn web_api_clones_and_microtasks_match_the_contract() {
+    let bundle = Bundle::new(
+        r#"
+        export async function handle(request) {
+          const path = new URL(request.url).pathname;
+          if (path === '/buffered') {
+            const original = new Response('é', { status: 201, statusText: 'Created' });
+            const copy = original.clone();
+            copy.headers.set('x-copy', 'yes');
+            return Response.json({
+              original: await original.text(), copy: await copy.text(),
+              originalStatus: original.status, copyStatus: copy.status,
+              originalHeader: original.headers.get('x-copy'), copyHeader: copy.headers.get('x-copy'),
+            });
+          }
+          if (path === '/stream') {
+            const original = new Response(new ReadableStream({ start(c) {
+              c.enqueue(new TextEncoder().encode('A'));
+              c.enqueue(new TextEncoder().encode('B'));
+              c.close();
+            } }));
+            const copy = original.clone();
+            const [left, right] = await Promise.all([original.text(), copy.text()]);
+            return Response.json({ left, right });
+          }
+          if (path === '/used') {
+            const response = new Response('done');
+            await response.text();
+            try { response.clone(); return new Response('clone accepted'); }
+            catch (error) { return new Response(error.name); }
+          }
+          const order = [];
+          queueMicrotask(() => order.push('micro'));
+          order.push('sync');
+          await Promise.resolve();
+          return Response.json({ order, structuredClone: typeof structuredClone });
+        }
+    "#,
+    );
+    let mut worker = worker(&bundle, Duration::from_secs(5));
+    let timeout = Duration::from_secs(5);
+    let buffered: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/buffered", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(buffered["original"], "é");
+    assert_eq!(buffered["copy"], "é");
+    assert_eq!(buffered["originalStatus"], 201);
+    assert_eq!(buffered["copyStatus"], 201);
+    assert_eq!(buffered["originalHeader"], Value::Null);
+    assert_eq!(buffered["copyHeader"], "yes");
+
+    let streamed: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/stream", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(streamed, json!({"left": "AB", "right": "AB"}));
+    assert_eq!(
+        invoke(&mut worker, input("/used", "alice"), timeout)
+            .unwrap()
+            .body,
+        "TypeError"
+    );
+    let globals: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/globals", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(globals["order"], json!(["sync", "micro"]));
+    assert_eq!(globals["structuredClone"], "function");
 }
 
 #[test]
@@ -414,9 +619,13 @@ fn no_host_apis_or_raw_ipc_imports_are_visible_to_javascript() {
         }
     "#,
     );
-    let mut worker = worker(&bundle, Duration::from_secs(2));
-    let output = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2))
-        .unwrap_or_else(|error| panic!("{error}; {}", worker.diagnostics()));
+    let mut local_worker = worker(&bundle, Duration::from_secs(2));
+    let output = invoke(
+        &mut local_worker,
+        input("/", "alice"),
+        Duration::from_secs(2),
+    )
+    .unwrap_or_else(|error| panic!("{error}; {}", local_worker.diagnostics()));
     assert_eq!(output.body, "[]");
 }
 
@@ -527,7 +736,8 @@ fn reply_chunks_fit_guest_memory_and_preserve_limits() {
             ("content-type".into(), "text/plain;charset=UTF-8".into()),
         ]
     );
-    let malformed_bundle = Bundle::new(&fs::read_to_string(bundle.path().join("orders.mjs")).unwrap());
+    let malformed_bundle =
+        Bundle::new(&fs::read_to_string(bundle.path().join("orders.mjs")).unwrap());
     let mut malformed_worker =
         worker_with_limits(&malformed_bundle, timeout, WorkerLimits::default());
     let malformed = invoke(&mut malformed_worker, input("/malformed", ""), timeout).unwrap_err();
@@ -721,29 +931,58 @@ fn response_memory_probe() {
 fn web_apis_preserve_utf8_and_form_data_files() {
     let bundle = Bundle::new(
         r#"
-        export async function handle() {
+        export async function handle(request) {
+            if (new URL(request.url).pathname === '/raw') {
+                const boundary = 'konae-raw-boundary';
+                const raw = new Blob([
+                    `--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\nMadrid 🦊\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="binary.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+                    new Uint8Array([0, 255]), `\r\n--${boundary}--\r\n`,
+                ]);
+                const rawRequest = new Request('https://example.test/raw', {
+                    method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body: raw,
+                });
+                const form = await rawRequest.formData();
+                const file = form.get('file');
+                return Response.json({name: form.get('name'), filename: file.name, type: file.type,
+                    binary: [...new Uint8Array(await file.arrayBuffer())]});
+            }
             const form = new FormData();
             form.append('name', 'Madrid 🦊');
-            form.append('file', new Blob([new Uint8Array([0, 255])]), 'binary.bin');
+            form.append('file', new Blob([new Uint8Array([0, 255])], {type: 'application/octet-stream'}), 'binary.bin');
             const parsed = await new Request('https://example.test', { method: 'POST', body: form }).formData();
             const file = parsed.get('file');
             const controller = new AbortController();
             controller.abort('cancelled');
             return Response.json({
-                name: parsed.get('name'), filename: file.name,
+                name: parsed.get('name'), filename: file.name, type: file.type,
                 binary: [...new Uint8Array(await file.arrayBuffer())], aborted: controller.signal.aborted,
                 utf8: new TextDecoder().decode(new TextEncoder().encode('🇪🇸'))
             });
         }
     "#,
     );
-    let mut worker = worker(&bundle, Duration::from_secs(2));
-    let output = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2))
-        .unwrap_or_else(|error| panic!("{error}; {}", worker.diagnostics()));
+    let mut local_worker = worker(&bundle, Duration::from_secs(2));
+    let output = invoke(
+        &mut local_worker,
+        input("/", "alice"),
+        Duration::from_secs(2),
+    )
+    .unwrap_or_else(|error| panic!("{error}; {}", local_worker.diagnostics()));
     assert_eq!(
         serde_json::from_str::<Value>(&output.body).unwrap(),
         json!({
-            "name": "Madrid 🦊", "filename": "binary.bin", "binary": [0, 255], "aborted": true, "utf8": "🇪🇸"
+            "name": "Madrid 🦊", "filename": "binary.bin", "type": "application/octet-stream",
+            "binary": [0, 255], "aborted": true, "utf8": "🇪🇸"
         })
+    );
+    let output = invoke(
+        &mut local_worker,
+        input("/raw", "alice"),
+        Duration::from_secs(2),
+    )
+    .unwrap_or_else(|error| panic!("{error}; {}", local_worker.diagnostics()));
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.body).unwrap(),
+        json!({"name": "Madrid 🦊", "filename": "binary.bin", "type": "application/octet-stream", "binary": [0, 255]})
     );
 }

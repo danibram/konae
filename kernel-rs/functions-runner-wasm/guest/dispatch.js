@@ -10,6 +10,30 @@ export function dispatch(call, read, writeResponse, failure) {
     throw new Error(code);
   }
 
+  function handlerDetail(error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const frames = String(error?.stack ?? '').split('\n')
+      .map(line => line.replace(/(?:file:\/\/)?[^\s()]*(?:\/|)([^/\s()]+\.(?:mjs|js):\d+:\d+)/g, '$1'))
+      .filter(line => /\.(?:mjs|js):\d+:\d+/.test(line))
+      .slice(0, 8);
+    const prefix = (text, limit) => {
+      let bounded = '';
+      let size = 0;
+      for (const character of text) {
+        const bytes = encode(character).length;
+        if (size + bytes > limit) break;
+        bounded += character;
+        size += bytes;
+      }
+      return bounded;
+    };
+    const messageLimit = frames.length ? 3584 : 4096;
+    const boundedMessage = prefix(message, messageLimit);
+    if (!frames.length) return boundedMessage;
+    const remaining = 4096 - encode(boundedMessage).length - 1;
+    return `${boundedMessage}\n${prefix(frames.join('\n'), remaining)}`;
+  }
+
   Object.defineProperty(AbortSignal, 'timeout', {
     value() { reject('unsupported_runtime_api'); }, writable: false, configurable: false,
   });
@@ -38,8 +62,7 @@ export function dispatch(call, read, writeResponse, failure) {
     try {
       response = await handler(request, context);
     } catch (error) {
-      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      failure('handler_error', detail.slice(0, 4096));
+      failure('handler_error', handlerDetail(error));
       throw error;
     }
     if (!(response instanceof Response)) reject('invalid_response');
