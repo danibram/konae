@@ -102,6 +102,10 @@ fn initialization_refusals_have_typed_statuses() {
     let cases = [
         ("export const handle = 1;", "bundle_contract"),
         (
+            "setTimeout(() => {}, 1); export function handle() {}",
+            "init_effect",
+        ),
+        (
             "const timer = setTimeout; try { timer(() => {}, 1); } catch {} export function handle() {}",
             "init_effect",
         ),

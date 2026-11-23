@@ -120,7 +120,7 @@ fn main() -> Result<()> {
     println!("cargo:rustc-env=KONAE_ENGINE_SHA256={}", digest(&engine)?);
     println!(
         "cargo:rustc-env=KONAE_BUILDER_FINGERPRINT={}",
-        fingerprint(&root, &guest, &engine)?
+        fingerprint(&root, &guest, &engine, &adapter_bundle, &web_bundle)?
     );
     println!("cargo:rerun-if-changed=src/main.rs");
     println!("cargo:rerun-if-changed=src/streaming.rs");
@@ -161,6 +161,8 @@ fn fingerprint(
     root: &std::path::Path,
     guest: &std::path::Path,
     engine: &std::path::Path,
+    adapter_bundle: &std::path::Path,
+    web_bundle: &std::path::Path,
 ) -> Result<String> {
     let mut hash = Sha256::new();
     let target = env::var("TARGET").unwrap_or_default();
@@ -186,6 +188,8 @@ fn fingerprint(
         .join("node_modules/@bytecodealliance/jco/lib/wasi_snapshot_preview1.reactor.wasm");
     for path in [
         engine.to_path_buf(),
+        adapter_bundle.to_path_buf(),
+        web_bundle.to_path_buf(),
         wizer,
         adapter,
         guest.join("starling.wit"),

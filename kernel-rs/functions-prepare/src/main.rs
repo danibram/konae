@@ -312,7 +312,19 @@ fn prepare_bundle(
                     .chars()
                     .take(1024)
                     .collect::<String>();
-                let refusal = if detail.contains("KONAE_INIT_EFFECT") {
+                let refusal = if detail.contains("KONAE_INIT_EFFECT")
+                    || detail.contains("function.initialization-cannot-snapshot:")
+                    || [
+                        "fetch",
+                        "setTimeout",
+                        "clearTimeout",
+                        "setInterval",
+                        "clearInterval",
+                    ]
+                    .iter()
+                    .any(|name| {
+                        detail.contains(&format!("{name} is not available in function handlers"))
+                    }) {
                     "init_effect"
                 } else if detail.contains("WebAssembly is not defined")
                     || detail.contains("KONAE_UNSUPPORTED_API")
