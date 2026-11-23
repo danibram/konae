@@ -52,6 +52,12 @@ impl Compiler {
             Ok((store.data_mut().body(BODY_CHUNK_BYTES)?,))
         })?;
         host.func_wrap(
+            "op-worker-response-chunk",
+            |mut store, (bytes,): (Vec<u8>,)| -> Result<(bool,)> {
+                Ok((store.data_mut().response_chunk(bytes)?,))
+            },
+        )?;
+        host.func_wrap(
             "op-worker-failure",
             |mut store, (code, detail): (String, Option<String>)| -> Result<()> {
                 let code = match code.as_str() {
@@ -89,7 +95,7 @@ impl Invocation {
         _limits: &WorkerLimits,
         source: &str,
     ) -> Result<InstancePre<Bridge>> {
-        let (cache, _) = cached_component(source)?;
+        let (cache, _) = cached_component(source, true)?;
         // Only accept native code from the operator-owned cache.
         let component = unsafe { Component::deserialize_file(&compiler.engine, &cache.compiled) }
             .context("Load the approved StarlingMonkey component")?;
@@ -141,6 +147,9 @@ impl Invocation {
         );
         let mut response: Output =
             serde_json::from_str(&output).map_err(|_| WorkerError::new("invalid_response"))?;
+        let body = self.store.data_mut().take_response();
+        response.body =
+            String::from_utf8(body).map_err(|_| WorkerError::new("invalid_response"))?;
         // StarlingMonkey inserts a length for buffered bodies. The executor owns framing.
         let length = response.body.len().to_string();
         response.headers.retain(|(name, value)| {
@@ -255,7 +264,7 @@ fn trusted(meta: &fs::Metadata) -> bool {
     (meta.uid() == uid || meta.uid() == 0) && meta.mode() & 0o022 == 0
 }
 
-fn cached_component(source: &str) -> Result<(Cache, Option<Duration>)> {
+fn cached_component(source: &str, worker: bool) -> Result<(Cache, Option<Duration>)> {
     let cache = Cache::new(source)?;
     if let Ok(meta) = fs::symlink_metadata(&cache.compiled) {
         ensure!(
@@ -285,14 +294,17 @@ fn cached_component(source: &str) -> Result<(Cache, Option<Duration>)> {
         );
         fs::copy(&cache.portable, &portable)?;
     }
-    let mut child = Command::new(builder)
+    let mut command = Command::new(builder);
+    if !worker {
+        command.process_group(0);
+    }
+    let mut child = command
         .args([
             input.as_os_str(),
             portable.as_os_str(),
             compiled.as_os_str(),
         ])
         .args([STARLING, TARGET])
-        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -302,7 +314,13 @@ fn cached_component(source: &str) -> Result<(Cache, Option<Duration>)> {
             break status;
         }
         if start.elapsed() >= BUILD_LIMIT {
-            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+            unsafe {
+                if worker {
+                    libc::kill(-libc::getpgrp(), libc::SIGKILL);
+                } else {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
+            }
             child.wait()?;
             bail!("StarlingMonkey component build timed out");
         }
@@ -327,7 +345,7 @@ pub fn prepare(path: &Path) -> Result<()> {
     );
     let source = fs::read_to_string(path)?;
     ensure!(source.len() <= MAX_SOURCE_BYTES, "Bundle is too large");
-    let (cache, built) = cached_component(&source)?;
+    let (cache, built) = cached_component(&source, false)?;
     println!(
         "{}",
         json!({

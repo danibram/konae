@@ -1,11 +1,9 @@
-export function dispatch(call, read, failure) {
+export function dispatch(call, read, writeResponse, failure) {
   const parse = JSON.parse;
   const stringify = JSON.stringify;
   const freeze = Object.freeze;
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
   const encode = encoder.encode.bind(encoder);
-  const decode = decoder.decode.bind(decoder);
 
   function reject(code) {
     failure(code, null);
@@ -17,7 +15,6 @@ export function dispatch(call, read, failure) {
   });
 
   async function invoke(handler, encodedInput, responseLimit) {
-    responseLimit = Math.min(responseLimit, 256 * 1024);
     const input = parse(encodedInput);
     const body = input.method === 'POST' ? new ReadableStream({
       pull(controller) {
@@ -51,8 +48,6 @@ export function dispatch(call, read, failure) {
     for (const [name, value] of headers) headerBytes += encode(name).length + encode(value).length;
     if (headers.length > 128 || headerBytes > 16384) reject('response_too_large');
 
-    const decoder = new TextDecoder('utf-8', { fatal: true });
-    let bodyText = '';
     let total = 0;
     if (response.body) {
       const reader = response.body.getReader();
@@ -63,14 +58,17 @@ export function dispatch(call, read, failure) {
           if (!(value instanceof Uint8Array)) reject('invalid_response');
           total += value.length;
           if (total > responseLimit) reject('response_too_large');
-          bodyText += decoder.decode(value, { stream: true });
+          for (let offset = 0; offset < value.length; offset += 64 * 1024) {
+            if (!writeResponse(value.subarray(offset, Math.min(offset + 64 * 1024, value.length)))) {
+              reject('response_too_large');
+            }
+          }
         }
       } finally {
         reader.releaseLock();
       }
     }
-    try { bodyText += decoder.decode(); } catch { reject('invalid_response'); }
-    return stringify({ status: response.status, headers, body: bodyText });
+    return stringify({ status: response.status, headers, body: '' });
   }
 
   async function shutdown(handler) {

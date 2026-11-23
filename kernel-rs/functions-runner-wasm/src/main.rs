@@ -181,6 +181,7 @@ fn worker() -> Result<()> {
             None,
             replies.clone(),
             0,
+            limits.response_bytes,
         );
         let result =
             Invocation::pack(&compiler, compile_bridge, &limits, source).map_err(|error| {
@@ -215,6 +216,7 @@ fn worker() -> Result<()> {
             Some(request.clone()),
             replies.clone(),
             limits.operation_limit,
+            limits.response_bytes,
         );
         let result = match input {
             Some((function, input)) => match prepared.get(&function) {

@@ -1,5 +1,7 @@
 use anyhow::{Result, bail};
-use konae_functions_executor::protocol::{self, Capability, ChildMessage, ParentMessage};
+use konae_functions_executor::protocol::{
+    self, BODY_CHUNK_BYTES, Capability, ChildMessage, ParentMessage,
+};
 use serde_json::Value;
 #[cfg(feature = "quickjs-runner")]
 use std::sync::OnceLock;
@@ -29,6 +31,8 @@ pub struct Bridge {
     max_operations: usize,
     operations: u64,
     body_reads: u64,
+    response_limit: usize,
+    response_bytes: Vec<u8>,
     #[cfg(feature = "quickjs-runner")]
     action_result: Option<Vec<u8>>,
     pub failure: Option<String>,
@@ -42,6 +46,7 @@ impl Bridge {
         request: Option<Arc<Request>>,
         replies: Arc<Receiver<ParentMessage>>,
         max_operations: usize,
+        response_limit: usize,
     ) -> Self {
         Self {
             limits,
@@ -51,6 +56,8 @@ impl Bridge {
             max_operations,
             operations: 0,
             body_reads: 0,
+            response_limit,
+            response_bytes: Vec::new(),
             #[cfg(feature = "quickjs-runner")]
             action_result: None,
             failure: None,
@@ -178,6 +185,22 @@ impl Bridge {
             }
             _ => bail!("worker_protocol_error"),
         }
+    }
+
+    pub(crate) fn response_chunk(&mut self, bytes: Vec<u8>) -> Result<bool> {
+        self.check()?;
+        if bytes.len() > BODY_CHUNK_BYTES
+            || self.response_bytes.len().saturating_add(bytes.len()) > self.response_limit
+        {
+            self.failure("response_too_large");
+            return Ok(false);
+        }
+        self.response_bytes.extend_from_slice(&bytes);
+        Ok(true)
+    }
+
+    pub(crate) fn take_response(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.response_bytes)
     }
 }
 
