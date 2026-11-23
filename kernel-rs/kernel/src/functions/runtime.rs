@@ -455,13 +455,30 @@ impl Lease {
                     progress.cold = true;
                     progress.initialization_started = Some(started);
                 }
-                let spawned = Worker::spawn_with_policy(
-                    &self.config.executable,
-                    bundles,
-                    budget,
-                    WorkerLimits::default(),
-                    self.config.policy.clone(),
-                );
+                let spawned = if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref()
+                    == Ok("wasm")
+                {
+                    let prepared = crate::functions::prepare_bundles(bundles)?;
+                    let descriptors = prepared
+                        .into_iter()
+                        .map(|(name, path)| Ok((name, std::fs::File::open(path)?)))
+                        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+                    Worker::spawn_prepared_with_policy(
+                        &self.config.executable,
+                        descriptors,
+                        budget,
+                        WorkerLimits::default(),
+                        self.config.policy.clone(),
+                    )
+                } else {
+                    Worker::spawn_with_policy(
+                        &self.config.executable,
+                        bundles,
+                        budget,
+                        WorkerLimits::default(),
+                        self.config.policy.clone(),
+                    )
+                };
                 initialization = started.elapsed();
                 match spawned {
                     Ok(worker) => *self.worker = Some(worker),

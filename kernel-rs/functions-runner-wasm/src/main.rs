@@ -21,7 +21,8 @@ use runtime::{Compiler, Invocation};
 #[cfg(feature = "starling-runner")]
 use starling::{Compiler, Invocation};
 use std::{
-    io,
+    io::{self, Read},
+    os::fd::FromRawFd,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -115,18 +116,26 @@ fn worker() -> Result<()> {
         bail!("the Wasm spike requires the executor development policy");
     }
     let mut input = io::stdin();
-    let ParentMessage::Init {
-        abi,
-        bundles,
-        generation,
-        limits,
-    } = protocol::read_parent(&mut input)?
-    else {
-        bail!("init_required")
+    #[cfg(feature = "starling-runner")]
+    let (abi, generation, limits, components) = match protocol::read_parent(&mut input)? {
+        ParentMessage::InitPrepared { abi, generation, limits, components } => (abi, generation, limits, components),
+        _ => bail!("init_prepared_required"),
+    };
+    #[cfg(feature = "quickjs-runner")]
+    let (abi, generation, limits, bundles) = match protocol::read_parent(&mut input)? {
+        ParentMessage::Init { abi, generation, limits, bundles } => (abi, generation, limits, bundles),
+        _ => bail!("init_required"),
     };
     let validation = if abi != protocol::ABI {
         Some("worker_protocol_mismatch")
-    } else if !valid_bundles(&bundles) || !limits.validate() {
+    } else if !limits.validate()
+        || {
+            #[cfg(feature = "starling-runner")]
+            { !valid_components(&components) }
+            #[cfg(feature = "quickjs-runner")]
+            { !valid_bundles(&bundles) }
+        }
+    {
         Some("invalid_init")
     } else {
         None
@@ -208,7 +217,7 @@ fn worker() -> Result<()> {
                     let _ = command_tx.try_send(Command::Shutdown(grace_ms));
                     return;
                 }
-                ParentMessage::Init { .. } => break,
+                ParentMessage::Init { .. } | ParentMessage::InitPrepared { .. } => break,
             }
         }
         if let Some(request) = waiting.lock().unwrap().as_ref() {
@@ -225,16 +234,10 @@ fn worker() -> Result<()> {
         }
     });
     let mut prepared = std::collections::BTreeMap::new();
-    for (name, source) in &bundles {
-        let compile_bridge = Bridge::new(
-            store_limits(limits.heap_bytes),
-            Instant::now() + PARENT_FAILURE_LIMIT,
-            None,
-            replies.clone(),
-            0,
-            limits.response_bytes,
-        );
-        let component = match Invocation::pack(&compiler, compile_bridge, &limits, source) {
+    #[cfg(feature = "starling-runner")]
+    for (name, descriptor) in &components {
+        let bytes = read_component_descriptor(*descriptor)?;
+        let component = match Invocation::pack_prepared(&compiler, &bytes) {
             Ok(component) => component,
             Err(error) => {
                 let code = worker_error_code(&error);
@@ -248,7 +251,21 @@ fn worker() -> Result<()> {
         };
         prepared.insert(name.clone(), component);
     }
-    send(&ChildMessage::Ready { abi, generation })?;
+    #[cfg(feature = "quickjs-runner")]
+    for (name, source) in &bundles {
+        let compile_bridge = Bridge::new(store_limits(limits.heap_bytes), Instant::now() + PARENT_FAILURE_LIMIT, None, replies.clone(), 0, limits.response_bytes);
+        let component = Invocation::pack(&compiler, compile_bridge, &limits, source)?;
+        prepared.insert(name.clone(), component);
+    }
+    #[cfg(feature = "starling-runner")]
+    let engine_kind = protocol::EngineKind::Starlingmonkey;
+    #[cfg(feature = "quickjs-runner")]
+    let engine_kind = protocol::EngineKind::Quickjs;
+    send(&ChildMessage::Ready {
+        abi,
+        generation,
+        engine: Some(engine_kind),
+    })?;
 
     let mut last = None;
     while let Ok(command) = command_rx.recv() {
@@ -311,6 +328,7 @@ fn worker() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "quickjs-runner")]
 fn valid_bundles(bundles: &std::collections::BTreeMap<String, String>) -> bool {
     let total = bundles.values().map(String::len).sum::<usize>();
     !bundles.is_empty()
@@ -324,6 +342,32 @@ fn valid_bundles(bundles: &std::collections::BTreeMap<String, String>) -> bool {
                 && !source.is_empty()
                 && source.len() <= 1024 * 1024
         })
+}
+
+#[cfg(feature = "starling-runner")]
+fn valid_components(components: &std::collections::BTreeMap<String, u32>) -> bool {
+    !components.is_empty()
+        && components.len() <= 32
+        && components.iter().all(|(name, fd)| {
+            !name.is_empty()
+                && name.len() <= 64
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && *fd > 2
+        })
+}
+
+#[cfg(feature = "starling-runner")]
+fn read_component_descriptor(fd: u32) -> Result<Vec<u8>> {
+    let raw = i32::try_from(fd)?;
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+    anyhow::ensure!(flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY, "component descriptor is not read-only");
+    let file = unsafe { std::fs::File::from_raw_fd(raw) };
+    let metadata = file.metadata()?;
+    anyhow::ensure!(metadata.is_file() && metadata.len() > 0 && metadata.len() <= 512 * 1024 * 1024, "invalid prepared component descriptor");
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(512 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() as u64 == metadata.len(), "prepared component size changed");
+    Ok(bytes)
 }
 
 fn send(message: &ChildMessage) -> io::Result<()> {

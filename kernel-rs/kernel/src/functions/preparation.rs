@@ -55,22 +55,29 @@ pub async fn prepare_artifact(artifact: Option<&ServerArtifact>) -> Result<()> {
     };
     super::validate_artifact(Some(&artifact.manifest), Some(artifact))?;
 
+    let bundles = artifact.bundles.clone();
+    tokio::task::spawn_blocking(move || prepare_bundles_blocking(&bundles))
+        .await
+        .context("Wasm preparation task stopped")??;
+    Ok(())
+}
+
+/// Prepares the exact source map passed to a Wasm worker and returns pinned cache paths.
+pub fn prepare_bundles(bundles: &std::collections::BTreeMap<String, String>) -> Result<std::collections::BTreeMap<String, PathBuf>> {
+    ensure!(std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm"), "Wasm runner kind is required for prepared bundles");
+    prepare_bundles_blocking(bundles)
+}
+
+fn prepare_bundles_blocking(bundles: &std::collections::BTreeMap<String, String>) -> Result<std::collections::BTreeMap<String, PathBuf>> {
     let runner = required_executable("KONAE_FUNCTIONS_RUNNER")?;
     let helper = required_executable("KONAE_FUNCTIONS_PREPARER")?;
     let cache = PathBuf::from(
         std::env::var_os("KONAE_FUNCTIONS_WASM_CACHE")
             .context("KONAE_FUNCTIONS_WASM_CACHE must name the operator-owned Wasm cache")?,
     );
-    ensure!(
-        cache.is_absolute(),
-        "KONAE_FUNCTIONS_WASM_CACHE must be absolute"
-    );
+    ensure!(cache.is_absolute(), "KONAE_FUNCTIONS_WASM_CACHE must be absolute");
     fs::create_dir_all(&cache).context("Create the operator-owned Wasm cache")?;
-
-    let artifact = artifact.clone();
-    tokio::task::spawn_blocking(move || prepare_blocking(&runner, &helper, &cache, &artifact))
-        .await
-        .context("Wasm preparation task stopped")?
+    prepare_blocking(&runner, &helper, &cache, bundles)
 }
 
 fn required_executable(name: &str) -> Result<PathBuf> {
@@ -89,8 +96,8 @@ fn prepare_blocking(
     runner: &Path,
     helper: &Path,
     cache: &Path,
-    artifact: &ServerArtifact,
-) -> Result<()> {
+    bundles: &std::collections::BTreeMap<String, String>,
+) -> Result<std::collections::BTreeMap<String, PathBuf>> {
     let identity: HelperIdentity = json_command(helper, &["identity"], PREPARE_LIMIT)?;
     ensure!(
         identity.abi == "konae-functions-wasm/1",
@@ -102,7 +109,8 @@ fn prepare_blocking(
         "The configured runner uses an unsupported Wasmtime version"
     );
 
-    for (name, source) in &artifact.bundles {
+    let mut prepared = std::collections::BTreeMap::new();
+    for (name, source) in bundles {
         let staging = Staging::new(cache)?;
         let input = staging.write(name, source.as_bytes())?;
         let output = staging.path.join("component.wasm");
@@ -148,6 +156,7 @@ fn prepare_blocking(
         let key = format!("{:x}", key_hash.finalize());
         let installed = cache.join(format!("{key}.cwasm"));
         if installed.is_file() {
+            prepared.insert(name.clone(), installed);
             continue;
         }
         let native = staging.path.join("component.cwasm");
@@ -162,8 +171,9 @@ fn prepare_blocking(
             Err(error) => return Err(error.into()),
         }
         let _ = error_if_empty(&installed)?;
+        prepared.insert(name.clone(), installed);
     }
-    Ok(())
+    Ok(prepared)
 }
 
 fn error_if_empty(path: &Path) -> Result<()> {

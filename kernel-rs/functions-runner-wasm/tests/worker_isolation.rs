@@ -56,6 +56,21 @@ fn spawn_worker_with_limits(
     timeout: Duration,
     limits: WorkerLimits,
 ) -> anyhow::Result<Worker> {
+    #[cfg(feature = "starling-runner")]
+    if let Ok(paths) = fs::read(bundle.path().join(".prepared-components.json")) {
+        let paths: std::collections::BTreeMap<String, String> = serde_json::from_slice(&paths)?;
+        let components = paths
+            .into_iter()
+            .map(|(name, path)| Ok((name, fs::File::open(path)?)))
+            .collect::<anyhow::Result<std::collections::BTreeMap<_, _>>>()?;
+        return Worker::spawn_prepared_with_policy(
+            runner,
+            components,
+            &Budget::new(timeout),
+            limits,
+            MemoryPolicy::DevelopmentPolling,
+        );
+    }
     let bundles = fs::read_dir(bundle.path())
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -137,6 +152,7 @@ fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
         "PATH",
     ];
     let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+    let mut prepared_components = std::collections::BTreeMap::new();
     for entry in fs::read_dir(bundle.path()).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_none_or(|extension| extension != "mjs") {
@@ -144,7 +160,7 @@ fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
         }
         let prepared = Command::new(runner)
             .arg("--prepare")
-            .arg(path)
+            .arg(&path)
             .output()
             .unwrap();
         let rejected = !prepared.status.success()
@@ -154,7 +170,19 @@ fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
             "{}",
             String::from_utf8_lossy(&prepared.stderr)
         );
+        if prepared.status.success() {
+            let report: Value = serde_json::from_slice(&prepared.stdout).unwrap();
+            prepared_components.insert(
+                path.file_stem().unwrap().to_string_lossy().into_owned(),
+                report["compiled"].as_str().unwrap().to_owned(),
+            );
+        }
     }
+    fs::write(
+        bundle.path().join(".prepared-components.json"),
+        serde_json::to_vec(&prepared_components).unwrap(),
+    )
+    .unwrap();
     let mut script = String::from("#!/bin/sh\n");
     for name in variable_names {
         if let Ok(value) = env::var(name) {

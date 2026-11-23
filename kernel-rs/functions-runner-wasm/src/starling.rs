@@ -108,22 +108,10 @@ pub struct Invocation {
 }
 
 impl Invocation {
-    pub fn pack(
-        compiler: &Compiler,
-        _bridge: Bridge,
-        _limits: &WorkerLimits,
-        source: &str,
-    ) -> Result<InstancePre<Bridge>> {
-        let cache = Cache::new(source)?;
-        let meta = fs::symlink_metadata(&cache.compiled)
-            .context("Prepared StarlingMonkey component is missing")?;
-        ensure!(
-            meta.is_file() && trusted(&meta),
-            "Unsafe component cache entry"
-        );
-        // Only accept native code from the operator-owned cache.
-        let component = unsafe { Component::deserialize_file(&compiler.engine, &cache.compiled) }
-            .context("Load the approved StarlingMonkey component")?;
+    pub fn pack_prepared(compiler: &Compiler, bytes: &[u8]) -> Result<InstancePre<Bridge>> {
+        ensure!(!bytes.is_empty() && bytes.len() <= 512 * 1024 * 1024, "Invalid prepared component size");
+        let component = unsafe { Component::deserialize(&compiler.engine, bytes) }
+            .context("Load the prepared StarlingMonkey component")?;
         compiler.linker.instantiate_pre(&component)
     }
 

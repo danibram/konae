@@ -9,7 +9,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::process::CommandExt},
+    os::{fd::{AsRawFd, RawFd}, unix::{fs::MetadataExt, process::CommandExt}},
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -22,6 +22,11 @@ use std::{
 };
 
 const CANCEL_GRACE: Duration = Duration::from_millis(100);
+
+enum WorkerInit {
+    Sources(BTreeMap<String, String>),
+    Prepared(BTreeMap<String, std::fs::File>),
+}
 
 struct BufferedBody {
     bytes: Vec<u8>,
@@ -199,11 +204,68 @@ impl Worker {
         limits: WorkerLimits,
         policy: MemoryPolicy,
     ) -> Result<Self> {
+        Self::spawn_initialized(
+            executable,
+            WorkerInit::Sources(bundles.clone()),
+            budget,
+            limits,
+            policy,
+            None,
+        )
+    }
+
+    pub fn spawn_prepared_with_policy(
+        executable: &Path,
+        components: BTreeMap<String, std::fs::File>,
+        budget: &impl ExecutionBudget,
+        limits: WorkerLimits,
+        policy: MemoryPolicy,
+    ) -> Result<Self> {
+        Self::spawn_initialized(
+            executable,
+            WorkerInit::Prepared(components),
+            budget,
+            limits,
+            policy,
+            Some(crate::protocol::EngineKind::Starlingmonkey),
+        )
+    }
+
+    fn spawn_initialized(
+        executable: &Path,
+        init: WorkerInit,
+        budget: &impl ExecutionBudget,
+        limits: WorkerLimits,
+        policy: MemoryPolicy,
+        expected_engine: Option<crate::protocol::EngineKind>,
+    ) -> Result<Self> {
         remaining(budget)?;
         if !limits.validate() {
             return Err(fail("invalid_worker_limits"));
         }
-        validate_bundles(bundles)?;
+        let functions: BTreeSet<String> = match &init {
+            WorkerInit::Sources(bundles) => {
+                validate_bundles(bundles)?;
+                bundles.keys().cloned().collect()
+            }
+            WorkerInit::Prepared(components) => {
+                anyhow::ensure!(!components.is_empty(), fail("invalid_init"));
+                let mut fds = BTreeSet::new();
+                for (name, file) in components {
+                    anyhow::ensure!(
+                        !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+                        fail("invalid_init")
+                    );
+                    let fd = file.as_raw_fd();
+                    anyhow::ensure!(fd > 2 && fds.insert(fd), fail("invalid_init"));
+                    let metadata = file.metadata()?;
+                    anyhow::ensure!(metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() }, fail("invalid_init"));
+                    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                    anyhow::ensure!(flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY, fail("invalid_init"));
+                }
+                components.keys().cloned().collect()
+            }
+        };
         remaining(budget)?;
         let generation = nonce()?;
         let strict_linux = matches!(policy, MemoryPolicy::LinuxCgroup { .. });
@@ -229,6 +291,20 @@ impl Worker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        if let WorkerInit::Prepared(components) = &init {
+            let inherited: Vec<RawFd> = components.values().map(AsRawFd::as_raw_fd).collect();
+            unsafe {
+                child_command.pre_exec(move || {
+                    for fd in &inherited {
+                        let flags = libc::fcntl(*fd, libc::F_GETFD);
+                        if flags < 0 || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
         #[cfg(target_os = "linux")]
         if let Some((uid, gid)) = worker_identity {
             child_command
@@ -330,7 +406,7 @@ impl Worker {
             stderr,
             limits: limits.clone(),
             generation: generation.clone(),
-            functions: bundles.keys().cloned().collect(),
+            functions,
             request: 0,
             busy: false,
             synchronized: true,
@@ -339,15 +415,24 @@ impl Worker {
             oom_kills_at_spawn,
         };
         let initialized = (|| {
-            worker.send(
-                &ParentMessage::Init {
+            let init_message = match &init {
+                WorkerInit::Sources(bundles) => ParentMessage::Init {
                     abi: protocol::ABI.into(),
                     bundles: bundles.clone(),
                     generation,
                     limits,
                 },
-                budget,
-            )?;
+                WorkerInit::Prepared(components) => ParentMessage::InitPrepared {
+                    abi: protocol::ABI.into(),
+                    generation,
+                    limits,
+                    components: components
+                        .iter()
+                        .map(|(name, file)| (name.clone(), file.as_raw_fd() as u32))
+                        .collect(),
+                },
+            };
+            worker.send(&init_message, budget)?;
             let ready = match worker.receive(budget) {
                 Ok(message) => message,
                 Err(error) => {
@@ -366,8 +451,11 @@ impl Worker {
                 }
             };
             match ready {
-                ChildMessage::Ready { abi, generation }
-                    if abi == protocol::ABI && generation == worker.generation =>
+                ChildMessage::Ready { abi, generation, engine }
+                    if abi == protocol::ABI
+                        && generation == worker.generation
+                        && engine.is_some()
+                        && expected_engine.is_none_or(|expected| engine == Some(expected)) =>
                 {
                     Ok(())
                 }
