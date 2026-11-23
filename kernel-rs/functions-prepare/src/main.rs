@@ -19,6 +19,8 @@ use wit_component::ComponentEncoder;
 const ABI: &str = "konae-functions-wasm/1";
 const INPUT_LIMIT: u64 = 64 * 1024 * 1024;
 const OUTPUT_LIMIT: u64 = 64 * 1024 * 1024;
+const SCRATCH_LIMIT: u64 = 256 * 1024 * 1024;
+const WIZER_MEMORY_LIMIT: u64 = 1536 * 1024 * 1024;
 const STDOUT_LIMIT: usize = 8 * 1024;
 const STDERR_LIMIT: usize = 4 * 1024;
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -103,6 +105,17 @@ fn prepare_bundle(
     input: &Path,
     output: &Path,
 ) -> Result<(&'static str, Option<Manifest<'static>>, Option<String>)> {
+    macro_rules! write_scratch {
+        ($root:expr, $path:expr, $bytes:expr) => {
+            if !write_scratch_file($root, $path, $bytes, SCRATCH_LIMIT)? {
+                return Ok((
+                    "build_limit",
+                    None,
+                    Some("preparation scratch space exceeds the configured byte limit".into()),
+                ));
+            }
+        };
+    }
     if output.exists() {
         fs::remove_file(output).context("remove stale output")?;
     }
@@ -138,15 +151,17 @@ fn prepare_bundle(
     let initializer = dir.join("initializer.js");
     let module = dir.join("input.wasm");
     let snapshot = dir.join("snapshot.wasm");
-    fs::write(&app, &source)?;
-    fs::write(
+    write_scratch!(dir, &app, source.as_bytes());
+    write_scratch!(
+        dir,
         &adapter_file,
-        include_bytes!(concat!(env!("OUT_DIR"), "/adapter.mjs")),
-    )?;
-    fs::write(
+        include_bytes!(concat!(env!("OUT_DIR"), "/adapter.mjs"))
+    );
+    write_scratch!(
+        dir,
         &entry,
-        "import { hostRuntime, __konaePreparationEffectsSeen } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (__konaePreparationEffectsSeen()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n",
-    )?;
+        b"import { hostRuntime, __konaePreparationEffectsSeen } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (__konaePreparationEffectsSeen()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
+    );
 
     let spliced = splice_bindings(
         ENGINE.to_vec(),
@@ -157,10 +172,17 @@ fn prepare_bundle(
         false,
     )
     .map_err(|error| anyhow::anyhow!("splicing failed: {error}"))?;
-    fs::write(&module, spliced.wasm)?;
-    fs::write(&initializer, spliced.js_bindings)?;
+    write_scratch!(dir, &module, &spliced.wasm);
+    write_scratch!(dir, &initializer, spliced.js_bindings.as_bytes());
     let wizer_path = dir.join("wizer");
-    fs::write(&wizer_path, WIZER)?;
+    write_scratch!(dir, &wizer_path, WIZER);
+    if scratch_exceeds(dir, SCRATCH_LIMIT)? {
+        return Ok((
+            "build_limit",
+            None,
+            Some("preparation scratch space exceeds the configured byte limit".into()),
+        ));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -219,16 +241,7 @@ fn prepare_bundle(
     {
         use std::os::unix::process::CommandExt;
         unsafe {
-            command.pre_exec(|| {
-                let file = libc::rlimit {
-                    rlim_cur: OUTPUT_LIMIT,
-                    rlim_max: OUTPUT_LIMIT,
-                };
-                if libc::setrlimit(libc::RLIMIT_FSIZE, &file) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+            command.pre_exec(apply_child_limits);
         }
     }
     let start = Instant::now();
@@ -245,6 +258,13 @@ fn prepare_bundle(
         dir.display()
     )?;
     loop {
+        if let Some(limit) = exceeded_limit(child.id(), dir, SCRATCH_LIMIT, WIZER_MEMORY_LIMIT)? {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = out_reader.join();
+            let _ = err_reader.join();
+            return Ok(("build_limit", None, Some(limit.to_owned())));
+        }
         if start.elapsed() > DEADLINE {
             let _ = child.kill();
             let _ = child.wait();
@@ -299,6 +319,13 @@ fn prepare_bundle(
         }
         thread::sleep(Duration::from_millis(10));
     }
+    if scratch_exceeds(dir, SCRATCH_LIMIT)? {
+        return Ok((
+            "build_limit",
+            None,
+            Some("preparation scratch space exceeds the configured byte limit".into()),
+        ));
+    }
     let snapshot_bytes = fs::read(&snapshot).context("Wizer produced no snapshot")?;
     let check_status = check_init(&snapshot_bytes)?;
     match check_status {
@@ -350,6 +377,95 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> Result<(Vec<u8>, bool)> 
     }
     Ok((bytes, overflow))
 }
+
+fn scratch_usage(path: &Path) -> Result<u64> {
+    let mut total = 0u64;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.is_dir() {
+            total = total.saturating_add(scratch_usage(&entry.path())?);
+        } else {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(total)
+}
+
+fn scratch_exceeds(path: &Path, limit: u64) -> Result<bool> {
+    Ok(scratch_usage(path)? > limit)
+}
+
+fn write_scratch_file(root: &Path, path: &Path, bytes: &[u8], limit: u64) -> Result<bool> {
+    let current = scratch_usage(root)?;
+    if current.saturating_add(bytes.len() as u64) > limit {
+        return Ok(false);
+    }
+    fs::write(path, bytes)?;
+    Ok(true)
+}
+
+fn exceeded_limit(
+    pid: u32,
+    scratch: &Path,
+    scratch_limit: u64,
+    memory_limit: u64,
+) -> Result<Option<&'static str>> {
+    if scratch_exceeds(scratch, scratch_limit)? {
+        return Ok(Some(
+            "preparation scratch space exceeds the configured byte limit",
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    if process_memory_usage(pid)?.is_some_and(|usage| usage > memory_limit) {
+        return Ok(Some("Wizer exceeded the configured memory limit"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (pid, memory_limit);
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn apply_child_limits() -> std::io::Result<()> {
+    let output = libc::rlimit {
+        rlim_cur: OUTPUT_LIMIT,
+        rlim_max: OUTPUT_LIMIT,
+    };
+    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &output) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let memory = libc::rlimit {
+            rlim_cur: WIZER_MEMORY_LIMIT,
+            rlim_max: WIZER_MEMORY_LIMIT,
+        };
+        if unsafe { libc::setrlimit(libc::RLIMIT_AS, &memory) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn process_memory_usage(pid: u32) -> Result<Option<u64>> {
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
+    let result = unsafe {
+        libc::proc_pid_rusage(
+            pid as libc::c_int,
+            libc::RUSAGE_INFO_V4,
+            info.as_mut_ptr().cast(),
+        )
+    };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+    Ok(Some(unsafe { info.assume_init() }.ri_phys_footprint))
+}
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -398,4 +514,58 @@ fn check_init(snapshot: &[u8]) -> Result<i32> {
         .get_typed_func::<(), i32>(&mut store, "check_init")?
         .call(&mut store, ())?;
     Ok(if status == 0 { 0 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::CommandExt;
+
+    #[test]
+    fn scratch_limit_counts_files_across_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("one"), [0u8; 7]).unwrap();
+        fs::write(dir.path().join("two"), [0u8; 6]).unwrap();
+        assert_eq!(scratch_usage(dir.path()).unwrap(), 13);
+        assert!(scratch_exceeds(dir.path(), 12).unwrap());
+        let third = dir.path().join("three");
+        assert!(!write_scratch_file(dir.path(), &third, &[0u8; 1], 13).unwrap());
+        assert!(!third.exists());
+    }
+
+    #[test]
+    fn child_address_space_limit_is_applied() {
+        #[cfg(target_os = "macos")]
+        {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", "sleep 5"]);
+            unsafe {
+                command.pre_exec(apply_child_limits);
+            }
+            let mut child = command.spawn().unwrap();
+            let scratch = tempfile::tempdir().unwrap();
+            assert_eq!(
+                exceeded_limit(child.id(), scratch.path(), u64::MAX, 1).unwrap(),
+                Some("Wizer exceeded the configured memory limit")
+            );
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", "ulimit -v"]);
+            unsafe {
+                command.pre_exec(apply_child_limits);
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success());
+            let kibibytes: u64 = String::from_utf8(output.stdout)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert_eq!(kibibytes, WIZER_MEMORY_LIMIT / 1024);
+        }
+    }
 }
