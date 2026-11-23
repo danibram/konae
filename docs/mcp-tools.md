@@ -81,6 +81,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Calls and notices | `calls_read`, `notices_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
+| Function preparation | `function_candidate_check` |
 | Credentials, owner session only | `tokens_list`, `token_create`, `token_revoke` |
 | App runtime, with an app session | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` |
 | App accounts, before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |

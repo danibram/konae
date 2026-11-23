@@ -262,7 +262,12 @@ pub(crate) fn read_artifact_with_metadata(directory: &Path) -> Result<Option<(Se
     }
     let artifact = ServerArtifact { version: published.version, abi: published.abi.clone(), manifest: published.manifest.clone(), bundles };
     let checked = validate_artifact(Some(&published.manifest), Some(&artifact))?.unwrap();
-    anyhow::ensure!(checked == published, "Server Artifact hashes do not match its bundles.");
+    if checked != published {
+        return Err(anyhow::Error::new(refuse(
+            "function.artifact-digest",
+            "Server Artifact hashes do not match its bundles.",
+        )));
+    }
     let expected: BTreeSet<_> = std::iter::once("manifest.json".to_owned()).chain(published.manifest.functions.keys().map(|name| format!("{name}.mjs"))).collect();
     for entry in std::fs::read_dir(directory)? { anyhow::ensure!(expected.contains(&entry?.file_name().to_string_lossy().into_owned()), "Server directory contains an undeclared file."); }
     Ok(Some((artifact, checked)))
@@ -416,6 +421,19 @@ pub(crate) mod tests {
                 validate_artifact(manifest.as_ref(), artifact.as_ref())?;
                 Ok(artifact)
             })();
+            if case["folderDigestMismatch"] == true {
+                let artifact = outcome.unwrap().unwrap();
+                let root = std::env::temp_dir().join(format!("konae-artifact-digest-{}", uuid::Uuid::new_v4()));
+                stage(&root, Some(&artifact)).await.unwrap();
+                std::fs::write(root.join("orders.mjs"), "export const handle=()=>new Response('changed');").unwrap();
+                let error = read_artifact(&root).unwrap_err();
+                let refused = crate::refusal::of(&error).unwrap();
+                assert_eq!(refused.code, case["code"].as_str().unwrap());
+                assert_eq!(refused.message, case["message"].as_str().unwrap());
+                assert_eq!(refused.hint(), case["hint"]);
+                std::fs::remove_dir_all(root).unwrap();
+                continue;
+            }
             match (case.get("code"), outcome) {
                 (Some(code), Err(error)) => {
                     assert_eq!(error.code, code.as_str().unwrap(), "{}", case["name"]);

@@ -37,6 +37,7 @@ export type CapsuleToolHooks = {
   previewTest?: (files: CapsuleFiles, test: PreviewTest, signal?: AbortSignal) => Promise<PreviewTestReport>;
   releaseFacts?: () => Promise<ReleaseFacts>;
   sourceFiles?: () => SourceFiles;
+  functionPreparation?: (files: CapsuleFiles) => Promise<{ status: "accepted"; scratchRevision: string; buildFingerprint: string }>;
 };
 
 export function createCapsuleTools(
@@ -267,12 +268,29 @@ function validateTool(
     async execute() {
       return queue(async () => {
         const files = workspace.serialize().files;
-        const validation = await validator.validate(files, await readLiveDatabase(hooks), await readValidationFacts(hooks));
+        const validation = await validateCapsuleCandidate(validator, files, hooks);
         hooks.onValidated?.(files, validation);
         return result(formatValidation(validation), validation);
       });
     },
   });
+}
+
+export async function validateCapsuleCandidate(validator: CapsuleValidator, files: CapsuleFiles, hooks: CapsuleToolHooks = {}) {
+  let validation = await validator.validate(files, await readLiveDatabase(hooks), await readValidationFacts(hooks));
+  if (validation.ok && files["functions.json"] && hooks.functionPreparation) {
+    try {
+      validation = { ...validation, functionPreparation: await hooks.functionPreparation(files) };
+    } catch (error) {
+      const refusal = error && typeof error === "object" && "refusal" in error
+        ? (error as { refusal?: { code?: string; message?: string; hint?: { fix: "capsule" | "owner" | "operator"; remedy: string } } }).refusal
+        : undefined;
+      if (refusal?.code && refusal.message && refusal.hint) {
+        validation = { ...validation, ok: false, errors: [...validation.errors, { stage: "actions", code: refusal.code as any, message: refusal.message, hint: refusal.hint }] };
+      } else validation = { ...validation, functionPreparation: { status: "pending" } };
+    }
+  }
+  return validation;
 }
 
 export async function readLiveDatabase(hooks: CapsuleToolHooks): Promise<LiveDatabase> {
@@ -312,6 +330,7 @@ export function formatValidation(validation: ValidationResult): string {
     return `\n- [${warning.stage}] Warning: ${warning.message}${detail}${owner}`;
   }).join("");
   if (validation.ok) {
+    if (validation.functionPreparation?.status === "pending") return `Validation passed, but function preparation is pending because the owner MCP did not answer. Keep the proposal and reconnect before Apply.${warnings}`;
     const skipped = validation.checked.includes("preview-rows")
       ? ""
       : " The preview-rows stage did not run, so nothing was checked against the live database.";
