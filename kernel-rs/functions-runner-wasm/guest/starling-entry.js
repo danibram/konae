@@ -1,6 +1,10 @@
-import { hostRuntime } from './starling-runtime.js';
+import { hostRuntime, initializationFailed } from './starling-runtime.js';
 import * as web from './web.js';
 import * as app from 'konae:app-source';
+
+if (initializationFailed()) {
+  throw new Error(`function.initialization-cannot-snapshot: The function's top-level code must finish without pending promises, timers, fetch, or random values.`);
+}
 
 Object.assign(globalThis, {
   AbortController: web.AbortController,

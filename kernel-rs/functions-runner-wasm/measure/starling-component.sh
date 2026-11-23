@@ -2,6 +2,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 : "${KONAE_STARLING_WASMTIME:?Set KONAE_STARLING_WASMTIME to the Wasmtime 38.0.4 CLI}"
+KONAE_STARLING_NODE_DIR=$(dirname "${KONAE_STARLING_NODE:-node}")
+PATH="${KONAE_STARLING_TOOLS:?Set KONAE_STARLING_TOOLS to the component toolchain}/node_modules/.bin:$KONAE_STARLING_NODE_DIR:/opt/homebrew/bin:${PATH:-/usr/bin:/bin}"
+export PATH
 if [ ! -s "$2" ]; then
     "${KONAE_STARLING_NODE:-node}" "$(dirname "$0")/starling-component.mjs" "$1" "$2" "$4"
 fi

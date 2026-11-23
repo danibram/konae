@@ -1,3 +1,4 @@
+import re
 import sys
 
 source, destination = sys.argv[1:]
@@ -61,7 +62,10 @@ if '(core module $konae_body_scratch' not in ''.join(lines):
 # This sequence calls SpiderMonkey's private full-GC entry point. The builder
 # checks the pinned engine digest before invoking this probe.
 start = next(i for i, line in enumerate(lines) if 'i32.store offset=4632' in line)
-end = next(i for i in range(start - 1, start - 35, -1) if 'call 10820' in lines[i])
+end = next(
+    i for i in range(start - 1, start - 35, -1)
+    if re.fullmatch(r'\s*call \d+\s*', lines[i])
+)
 begin = next(
     i for i in range(end - 180, end)
     if 'i32.const 2391180' in lines[i]
@@ -91,23 +95,25 @@ return_record = '''
       global.get $konae_body_return_record
       local.tee 3
 '''
-allocation = '''      local.get 2
+allocation = re.compile(r'''      local.get 2
       i32.const 0
       i32.const 0
       i32.const 4
       i32.const 8
-      call 4443
+      call (\d+)
       local.tee 3
-'''
+''')
 # Insert from the later function first so the body-read index remains valid.
 if 'call $konae_body_gc_checkpoint' in ''.join(lines[response_chunk_trampoline:response_chunk_trampoline + 20]):
     raise SystemExit('Response chunk checkpoint already present')
 lines.insert(response_chunk_trampoline + 2, '      call $konae_body_gc_checkpoint\n')
 trampoline_text = ''.join(lines[body_read_trampoline:body_read_trampoline + 30])
-if allocation not in trampoline_text:
+allocation_match = allocation.search(trampoline_text)
+if not allocation_match:
     raise SystemExit('Pinned body-read return record allocation changed')
+return_record = return_record.replace('call 4443', f'call {allocation_match.group(1)}')
 lines[body_read_trampoline:body_read_trampoline + 30] = trampoline_text.replace(
-    allocation, return_record, 1
+    allocation_match.group(0), return_record, 1
 ).splitlines(keepends=True)
 lines.insert(body_read_trampoline + 2, '      call $konae_body_gc_checkpoint\n')
 insertion = next(i for i, line in enumerate(lines) if line.startswith('    (data '))
