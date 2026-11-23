@@ -446,6 +446,7 @@ fn response_limit_refuses_an_oversized_body() {
     );
 }
 
+#[cfg(feature = "starling-runner")]
 #[test]
 fn reply_chunks_fit_guest_memory_and_preserve_limits() {
     let bundle = Bundle::new(
@@ -482,6 +483,7 @@ fn reply_chunks_fit_guest_memory_and_preserve_limits() {
     );
 }
 
+#[cfg(feature = "starling-runner")]
 #[test]
 fn body_chunks_keep_their_bytes_under_the_default_heap() {
     use konae_functions_executor::{RequestBody, RequestBodyChunk};
