@@ -110,6 +110,12 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_BIND` | `127.0.0.1` (`0.0.0.0` in both images) | Address the Kernel listens on. |
 | `KONAE_DATA_DIR` | `/data` (`/kernel` in the `kernel` image, `data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory. See [Data directory and copies](#data-directory-and-copies). |
 | `KONAE_FUNCTIONS_RUNNER` | unset (the runner path in both images) | Absolute path to the packaged JavaScript worker. When set, the Kernel requires either `KONAE_FUNCTIONS_CGROUP` or explicit development mode. |
+| `KONAE_FUNCTIONS_RUNNER_KIND` | `deno` | Set to `wasm` when `KONAE_FUNCTIONS_RUNNER` names the StarlingMonkey runner. The Kernel prepares published bundles before release planning, release apply and app-folder startup. |
+| `KONAE_STARLING_CACHE` | unset | Absolute path to the operator-owned compiled component cache. Required for Wasm preparation. Keep this directory outside every app folder. |
+| `KONAE_STARLING_BUILDER` | unset | Absolute path to the pinned ComponentizeJS build command used on a cache miss. |
+| `KONAE_STARLING_TOOLS` | unset | Root directory of the installed ComponentizeJS 0.21.0 build dependencies. |
+| `KONAE_STARLING_WASMTIME` | unset | Absolute path to the pinned Wasmtime compiler used by the component build command. |
+| `KONAE_STARLING_NODE` | `node` | Node executable used by the ComponentizeJS build command. Set an absolute path when `node` is not on its normal search path. |
 | `KONAE_FUNCTIONS_CGROUP` | unset | Writable cgroup v2 subtree delegated to this Kernel installation, with `memory` and `pids` enabled. Required when the packaged runner is enabled outside development mode. |
 | `KONAE_FUNCTIONS_UID` / `KONAE_FUNCTIONS_GID` | `10002` in both images | Separate worker identity. The Kernel refuses to start the configured runner if either value matches its own identity or the required capabilities are missing. |
 | `KONAE_FUNCTIONS_DEVELOPMENT` | unset | Set to `1` for local development only. Disables the Linux cgroup and OS sandbox policy and uses RSS polling. |

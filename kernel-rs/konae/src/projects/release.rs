@@ -312,6 +312,7 @@ pub(crate) async fn plan(
         crate::package::verify(state, principal, &input.project.id, package).await?;
     }
     let schema = validate_release(state, &input, None).await?;
+    kernel::functions::prepare_artifact(input.server_artifact.as_ref()).await?;
 
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     let (hostname, first_release) = match existing {

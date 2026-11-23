@@ -77,6 +77,9 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
         Ok(server) => server,
         Err(refused) => return refusal_error(&refused),
     };
+    if let Err(error_value) = functions::prepare_artifact(input.server_artifact.as_ref()).await {
+        return error(StatusCode::SERVICE_UNAVAILABLE, &format!("Wasm function preparation failed: {error_value:#}"));
+    }
     let release_sources = match input.project.sources() {
         Ok(files) => files,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
