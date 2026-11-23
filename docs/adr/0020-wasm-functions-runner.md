@@ -6,7 +6,7 @@ An app leaves Konae with the same sign-in and data rules. The editor and CLI bot
 
 ## Decision
 
-Keep the published `konae-functions/1` format. The app folder carries the declared ESM files in `server/` with their SHA-256 hashes and released metadata. The Kernel prepares the version with a pinned Rust helper before release, source import or serving an exported folder. IPC/3 selects a function by name. Aim for one component per app version while preserving each function's JavaScript isolation. The destination owns the component and native compilation cache. Cache misses never compile in the request path.
+Keep the published `konae-functions/1` format. The app folder carries the declared ESM files in `server/` with their SHA-256 hashes and released metadata. The Kernel prepares the version with a pinned Rust helper before release, source import or serving an exported folder. IPC/3 selects a function by name. Use per-bundle snapshots until a combined component can keep each function's JavaScript realm private. One shared realm changes the globals a function sees. The destination owns the component and native compilation cache. Cache misses never compile in the request path.
 
 The offline Gate checks the ESM artifact. For an online function change it also calls the same preparation check the Kernel runs on publish. Both report the same refusal code and sentence. Build diagnostics do not replace the refusal contract. Failed preparation leaves the prior release available.
 
