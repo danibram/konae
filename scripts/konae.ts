@@ -1123,8 +1123,8 @@ export async function localKernel(root: string, settings: AppSettings, options: 
   const port = options.port ?? "8796";
   const env: Record<string, string | undefined> = {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_"))),
-    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => [
-      "KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP",
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name.startsWith("KONAE_STARLING_") || [
+      "KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_RUNNER_KIND", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP",
       "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID",
     ].includes(name))),
     KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,

@@ -699,6 +699,14 @@ impl Worker {
                     } if received == capability => {
                         self.synchronized = true;
                         let code = native_error.as_deref().unwrap_or(&code);
+                        let code = if code == "cancelled"
+                            && !budget.is_cancelled()
+                            && budget.deadline() <= Instant::now()
+                        {
+                            "deadline_exceeded"
+                        } else {
+                            code
+                        };
                         return Err(WorkerError::with_detail(code, detail).into());
                     }
                     _ => return Err(fail("worker_protocol_error")),
@@ -906,6 +914,16 @@ mod tests {
     }
 
     #[test]
+    fn preserves_authored_framing_headers_for_kernel_validation() {
+        let output = Output {
+            status: 200,
+            headers: vec![("content-length".into(), "1".into())],
+            body: "x".into(),
+        };
+        assert!(validate_output(&output, &WorkerLimits::default()).is_ok());
+    }
+
+    #[test]
     fn blocked_pipe_write_observes_cancellation_before_deadline() {
         let mut descriptors = [-1; 2];
         assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
@@ -1015,18 +1033,6 @@ fn validate_output(output: &Output, limits: &WorkerLimits) -> Result<()> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
             || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0)
-            || matches!(
-                name.to_ascii_lowercase().as_str(),
-                "connection"
-                    | "transfer-encoding"
-                    | "content-length"
-                    | "upgrade"
-                    | "trailer"
-                    | "keep-alive"
-                    | "proxy-authenticate"
-                    | "proxy-authorization"
-                    | "te"
-            )
         {
             return Err(fail("invalid_response"));
         }

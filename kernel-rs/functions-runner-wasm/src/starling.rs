@@ -142,7 +142,9 @@ impl Invocation {
             if is_memory_error(&error) {
                 memory_error(error)
             } else {
-                WorkerError::with_detail("handler_error", Some(format!("{error:#}"))).into()
+                self.store.data().check().err().unwrap_or_else(|| {
+                    WorkerError::with_detail("handler_error", Some(format!("{error:#}"))).into()
+                })
             }
         })?;
         function.post_return(&mut self.store)?;

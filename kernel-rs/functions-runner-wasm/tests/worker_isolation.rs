@@ -519,10 +519,13 @@ fn reply_chunks_fit_guest_memory_and_preserve_limits() {
     assert_eq!(split.body, "🦊");
     let bom = invoke(&mut worker, input("/bom", ""), timeout).unwrap();
     assert_eq!(bom.body, "ok");
-    let framing = invoke(&mut worker, input("/framing", ""), timeout).unwrap_err();
+    let framing = invoke(&mut worker, input("/framing", ""), timeout).unwrap();
     assert_eq!(
-        konae_functions_executor::error_code(&framing),
-        "invalid_response"
+        framing.headers,
+        vec![
+            ("content-length".into(), "1".into()),
+            ("content-type".into(), "text/plain;charset=UTF-8".into()),
+        ]
     );
     let malformed_bundle = Bundle::new(&fs::read_to_string(bundle.path().join("orders.mjs")).unwrap());
     let mut malformed_worker =

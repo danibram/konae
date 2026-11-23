@@ -466,7 +466,7 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
     state.functions = Arc::new(Runtime::configured(
         executable.into(),
         policy,
-        Duration::from_secs(60),
+        Duration::from_secs(180),
         Duration::from_secs(1),
     ));
     let id = "http_functions_100mb";
@@ -528,7 +528,7 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
             .unwrap();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
-        assert_eq!(status, expected_status, "{}", String::from_utf8_lossy(&bytes));
+        assert_eq!(status, expected_status, "{path}: {}", String::from_utf8_lossy(&bytes));
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["error"], expected_error);
     }

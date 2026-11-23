@@ -32,7 +32,7 @@ use std::{
 };
 
 // IPC v3 has no deadline field. The executor sends Cancel at its deadline.
-const PARENT_FAILURE_LIMIT: Duration = Duration::from_secs(65);
+const PARENT_FAILURE_LIMIT: Duration = Duration::from_secs(300);
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
