@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import wasmCases from "../../kernel-rs/kernel/src/functions-wasm-cases.json";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
 import { cloneStarter, starterProject } from "../lib/starter";
 import { applyTemplate, templateChoices } from "../lib/templates";
@@ -216,6 +217,28 @@ describe("write", () => {
 });
 
 describe("validate_capsule", () => {
+  test("the real Gate renders generated component refusals with the shared words", async () => {
+    const fixtures = wasmCases.cases.filter((item) => item.fixture);
+    for (const fixture of fixtures) {
+      const files = {
+        ...starterProject.files,
+        "functions.json": JSON.stringify({ version: 1, functions: { main: { entry: "functions/main.ts", mount: "/api", methods: ["GET"], access: "anonymous", actions: [] } } }),
+        "functions/main.ts": "export const handle = () => new Response('ok');",
+      };
+      const workspace = createCapsuleWorkspace(files);
+      const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), {
+        releaseFacts: async () => ({ modules: { functions: { on: true }, auth: { on: true } } }),
+        functionPreparation: async () => {
+          throw { refusal: { code: fixture.code, message: fixture.error, hint: fixture.hint } };
+        },
+      });
+      const result = await call(tools, "validate_capsule", {});
+      expect(result.details).toMatchObject({ ok: false, errors: [{ code: fixture.code, message: fixture.error, hint: fixture.hint }] });
+      expect(textOf(result)).toContain(fixture.error);
+      expect(textOf(result)).toContain(fixture.hint.remedy);
+    }
+  });
+
   test("renders the shared function refusal returned by owner MCP", async () => {
     const files = {
       ...starterProject.files,

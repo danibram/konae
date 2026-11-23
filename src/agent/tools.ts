@@ -268,24 +268,29 @@ function validateTool(
     async execute() {
       return queue(async () => {
         const files = workspace.serialize().files;
-        let validation = await validator.validate(files, await readLiveDatabase(hooks), await readValidationFacts(hooks));
-        if (validation.ok && files["functions.json"] && hooks.functionPreparation) {
-          try {
-            validation = { ...validation, functionPreparation: await hooks.functionPreparation(files) };
-          } catch (error) {
-            const refusal = error && typeof error === "object" && "refusal" in error
-              ? (error as { refusal?: { code?: string; message?: string; hint?: { fix: "capsule" | "owner" | "operator"; remedy: string } } }).refusal
-              : undefined;
-            if (refusal?.code && refusal.message && refusal.hint) {
-              validation = { ...validation, ok: false, errors: [...validation.errors, { stage: "actions", code: refusal.code as any, message: refusal.message, hint: refusal.hint }] };
-            } else validation = { ...validation, functionPreparation: { status: "pending" } };
-          }
-        }
+        const validation = await validateCapsuleCandidate(validator, files, hooks);
         hooks.onValidated?.(files, validation);
         return result(formatValidation(validation), validation);
       });
     },
   });
+}
+
+export async function validateCapsuleCandidate(validator: CapsuleValidator, files: CapsuleFiles, hooks: CapsuleToolHooks = {}) {
+  let validation = await validator.validate(files, await readLiveDatabase(hooks), await readValidationFacts(hooks));
+  if (validation.ok && files["functions.json"] && hooks.functionPreparation) {
+    try {
+      validation = { ...validation, functionPreparation: await hooks.functionPreparation(files) };
+    } catch (error) {
+      const refusal = error && typeof error === "object" && "refusal" in error
+        ? (error as { refusal?: { code?: string; message?: string; hint?: { fix: "capsule" | "owner" | "operator"; remedy: string } } }).refusal
+        : undefined;
+      if (refusal?.code && refusal.message && refusal.hint) {
+        validation = { ...validation, ok: false, errors: [...validation.errors, { stage: "actions", code: refusal.code as any, message: refusal.message, hint: refusal.hint }] };
+      } else validation = { ...validation, functionPreparation: { status: "pending" } };
+    }
+  }
+  return validation;
 }
 
 export async function readLiveDatabase(hooks: CapsuleToolHooks): Promise<LiveDatabase> {

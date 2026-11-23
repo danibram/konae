@@ -10,7 +10,7 @@ import { openDurableStorage, readDurableConversation, uploadDurableDetail, type 
 import { boundModelText, durableOwnerMessage, redactDurableValue } from "./durable-trace";
 import { createCapsuleWorkspace } from "./capsule-env";
 import { createCapsuleValidator, type SqlJsLoader } from "./gate";
-import { createCapsuleTools, readLiveDatabase, readValidationFacts, type CapsuleToolHooks } from "./tools";
+import { createCapsuleTools, validateCapsuleCandidate, type CapsuleToolHooks } from "./tools";
 import { createPlatformTools, type AgentPlatformBinding } from "./platform-tools";
 import { AgentSubmissionNotAdmitted, type AgentKeyStore, type AgentSessionConfig, type CapsuleFiles, type AgentUiEvent, type ApplyGateStatus, type KonaeAgent, type AgentProposal, type ValidationResult } from "./contracts";
 
@@ -115,6 +115,12 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   const candidateSnapshot = () => withCandidateBinaries(workspace.serialize().files);
   const candidateChangedFiles = () => [...new Set([...workspace.changedFiles(), ...restoredBinaryChanges()])];
   const validator = createCapsuleValidator(options.loadSql);
+  const validateCandidate = (files: CapsuleFiles) => validateCapsuleCandidate(validator, files, {
+    liveDatabase: options.liveDatabase,
+    releaseFacts: options.releaseFacts,
+    sourceFiles: options.sourceFiles ?? (() => currentProject),
+    functionPreparation: options.functionPreparation,
+  });
   workspace.onMutation(() => options.onMutation?.(candidateSnapshot()));
   const platformBoundaries = new Map<string, unknown>();
   const tools = createCapsuleTools(workspace, validator, {
@@ -190,11 +196,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   let pendingConfiguration = Promise.resolve();
   if (options.recoveredFiles) {
     const candidate = candidateSnapshot();
-    const result = await validator.validate(
-      candidate,
-      await readLiveDatabase({ liveDatabase: options.liveDatabase }),
-      await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
-    );
+    const result = await validateCandidate(candidate);
     options.onValidation?.(result, candidate);
   }
   return {
@@ -208,11 +210,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       const changedFiles = candidateChangedFiles();
       if (changedFiles.length) {
         const candidate = candidateSnapshot();
-        const result = await validator.validate(
-          candidate,
-          await readLiveDatabase({ liveDatabase: options.liveDatabase }),
-          await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
-        );
+        const result = await validateCandidate(candidate);
         options.onValidation?.(result, candidate);
       }
       if (options.storage || options.openStorage) await appendDurableEntry(conversation, { kind: "konae.checkpoint" });

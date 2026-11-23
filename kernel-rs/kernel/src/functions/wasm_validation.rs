@@ -1,6 +1,10 @@
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use wasmparser::{Encoding, Parser, Payload, Validator};
+use wasmparser::{
+    Encoding, Parser, Payload, PrimitiveValType, Validator,
+    component_types::{ComponentDefinedType, ComponentEntityType, ComponentValType},
+    types::TypesRef,
+};
 
 use crate::refusal::{Refusal, refuse};
 
@@ -91,12 +95,14 @@ pub(crate) fn verify_component(
     }
 
     let mut validator = Validator::new();
-    if validator.validate_all(component).is_err() {
+    let types = if let Ok(types) = validator.validate_all(component) {
+        types
+    } else {
         return Err(refuse_error(
             "function.wasm-invalid",
             "The function component is not valid WebAssembly.",
         ));
-    }
+    };
     if Parser::new(0)
         .parse_all(component)
         .next()
@@ -150,10 +156,12 @@ pub(crate) fn verify_component(
             _ => {}
         }
     }
+    let types = types.as_ref();
     let allowed_imports = ["konae:worker/host"];
     if imports.len() != 1
         || !allowed_imports.contains(&imports[0].0.as_str())
         || imports[0].1 != wasmparser::ComponentExternalKind::Instance
+        || !host_interface_matches(types)
     {
         return Err(refuse_error(
             "function.wasm-import",
@@ -167,6 +175,7 @@ pub(crate) fn verify_component(
                 actual == name && *kind == wasmparser::ComponentExternalKind::Func
             })
         })
+        || !runner_exports_match(types)
     {
         return Err(refuse_error(
             "function.wasm-export",
@@ -176,10 +185,118 @@ pub(crate) fn verify_component(
     Ok(())
 }
 
+fn host_interface_matches(types: TypesRef<'_>) -> bool {
+    let Some(ComponentEntityType::Instance(instance)) =
+        types.component_entity_type_of_import("konae:worker/host")
+    else {
+        return false;
+    };
+    let exports = &types[instance].exports;
+    exports.len() == 4
+        && function_matches(
+            types,
+            exports.get("op-worker-call"),
+            &[(&["args"], "string")],
+            Some("string"),
+        )
+        && function_matches(
+            types,
+            exports.get("op-worker-body-read"),
+            &[],
+            Some("bytes"),
+        )
+        && function_matches(
+            types,
+            exports.get("op-worker-failure"),
+            &[(&["code"], "string"), (&["detail"], "option-string")],
+            None,
+        )
+        && function_matches(types, exports.get("now-ms"), &[], Some("f64"))
+}
+
+fn runner_exports_match(types: TypesRef<'_>) -> bool {
+    function_matches(
+        types,
+        types.component_entity_type_of_export("handle").as_ref(),
+        &[(&["input"], "string"), (&["limit"], "u32")],
+        Some("string"),
+    ) && function_matches(
+        types,
+        types
+            .component_entity_type_of_export("has-shutdown")
+            .as_ref(),
+        &[],
+        Some("bool"),
+    ) && function_matches(
+        types,
+        types.component_entity_type_of_export("shutdown").as_ref(),
+        &[],
+        None,
+    ) && function_matches(
+        types,
+        types.component_entity_type_of_export("spin").as_ref(),
+        &[],
+        None,
+    )
+}
+
+fn function_matches(
+    types: TypesRef<'_>,
+    entity: Option<&ComponentEntityType>,
+    params: &[(&[&str], &str)],
+    result: Option<&str>,
+) -> bool {
+    let Some(ComponentEntityType::Func(id)) = entity else {
+        return false;
+    };
+    let function = &types[*id];
+    if function.async_
+        || function.params.len() != params.len()
+        || function.result.is_some() != result.is_some()
+    {
+        return false;
+    }
+    function
+        .params
+        .iter()
+        .zip(params)
+        .all(|((name, ty), (expected_name, expected_ty))| {
+            name.as_str() == expected_name[0] && value_matches(types, *ty, expected_ty)
+        })
+        && function
+            .result
+            .zip(result)
+            .is_none_or(|(actual, expected)| value_matches(types, actual, expected))
+}
+
+fn value_matches(types: TypesRef<'_>, actual: ComponentValType, expected: &str) -> bool {
+    use ComponentValType::{Primitive as P, Type as T};
+    match (actual, expected) {
+        (P(PrimitiveValType::String), "string") => true,
+        (P(PrimitiveValType::U32), "u32") => true,
+        (P(PrimitiveValType::Bool), "bool") => true,
+        (P(PrimitiveValType::F64), "f64") => true,
+        (T(id), "bytes") => matches!(
+            types[id],
+            ComponentDefinedType::List(P(PrimitiveValType::U8))
+        ),
+        (T(id), "option-string") => matches!(
+            types[id],
+            ComponentDefinedType::Option(P(PrimitiveValType::String))
+        ),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
+    use wasm_encoder::{
+        Alias, Component, ComponentAliasSection, ComponentExportKind, ComponentExportSection,
+        ComponentImportSection, ComponentTypeRef, ComponentTypeSection,
+        ComponentValType as EncodedValType, InstanceType, PrimitiveValType as EncodedPrimitive,
+    };
 
     #[test]
     fn helper_statuses_match_shared_refusal_cases() {
@@ -240,6 +357,117 @@ mod tests {
             refused.message,
             expected("component digest mismatch")["error"]
         );
-        assert_eq!(refused.hint(), expected("component digest mismatch")["hint"]);
+        assert_eq!(
+            refused.hint(),
+            expected("component digest mismatch")["hint"]
+        );
+    }
+
+    #[test]
+    fn generated_wit_fixtures_refuse_malformed_and_wrong_signatures() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../functions-wasm-cases.json")).unwrap();
+        for case in cases["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["fixture"].is_object())
+        {
+            let fixture = &case["fixture"];
+            let bytes = match fixture["kind"].as_str().unwrap() {
+                "malformed_wit" => vec![0, 97, 115, 109, 13, 0, 1, 255],
+                "wrong_host_signature" => component_fixture(true, false),
+                "wrong_runner_signature" => component_fixture(false, true),
+                other => panic!("unknown WIT fixture {other}"),
+            };
+            let manifest = WasmManifest {
+                abi: ABI.into(),
+                input_sha256: "00".repeat(32),
+                component_sha256: format!("{:x}", Sha256::digest(&bytes)),
+            };
+            let error =
+                verify_component(&manifest, &manifest.input_sha256.clone(), &bytes).unwrap_err();
+            let refused = error.downcast_ref::<Refusal>().unwrap();
+            assert_eq!(refused.code, case["code"], "{}", case["case"]);
+            assert_eq!(refused.message, case["error"], "{}", case["case"]);
+            assert_eq!(refused.hint(), case["hint"], "{}", case["case"]);
+        }
+    }
+
+    fn component_fixture(wrong_host: bool, wrong_exports: bool) -> Vec<u8> {
+        let mut host = InstanceType::new();
+        host.ty().defined_type().list(EncodedPrimitive::U8);
+        host.ty().defined_type().option(EncodedPrimitive::String);
+        host.ty()
+            .function()
+            .params([(
+                "args",
+                if wrong_host {
+                    EncodedPrimitive::U32
+                } else {
+                    EncodedPrimitive::String
+                },
+            )])
+            .result(Some(EncodedPrimitive::String.into()));
+        host.export("op-worker-call", ComponentTypeRef::Func(2));
+        host.ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(Some(EncodedValType::Type(0)));
+        host.export("op-worker-body-read", ComponentTypeRef::Func(3));
+        host.ty()
+            .function()
+            .params([
+                ("code", EncodedValType::Primitive(EncodedPrimitive::String)),
+                ("detail", EncodedValType::Type(1)),
+            ])
+            .result(None);
+        host.export("op-worker-failure", ComponentTypeRef::Func(4));
+        host.ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(Some(EncodedPrimitive::F64.into()));
+        host.export("now-ms", ComponentTypeRef::Func(5));
+
+        let mut types = ComponentTypeSection::new();
+        types.ty().instance(&host);
+        let mut component = Component::new();
+        component.section(&types);
+        let mut imports = ComponentImportSection::new();
+        imports.import("konae:worker/host", ComponentTypeRef::Instance(0));
+        component.section(&imports);
+        let mut aliases = ComponentAliasSection::new();
+        let source_names = if wrong_exports {
+            [
+                "op-worker-call",
+                "now-ms",
+                "op-worker-failure",
+                "op-worker-failure",
+            ]
+        } else {
+            [
+                "op-worker-call",
+                "op-worker-call",
+                "op-worker-failure",
+                "op-worker-failure",
+            ]
+        };
+        for name in source_names {
+            aliases.alias(Alias::InstanceExport {
+                instance: 0,
+                kind: ComponentExportKind::Func,
+                name,
+            });
+        }
+        component.section(&aliases);
+        let mut exports = ComponentExportSection::new();
+        for (index, name) in ["handle", "has-shutdown", "shutdown", "spin"]
+            .into_iter()
+            .enumerate()
+        {
+            exports.export(name, ComponentExportKind::Func, index as u32, None);
+        }
+        component.section(&exports);
+        component.finish()
     }
 }

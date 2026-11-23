@@ -35,6 +35,10 @@
       "hint": {
         "fix": "operator",
         "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "wrong_host_signature",
+        "wit": "interface host { op-worker-call: func(args: u32) -> string; }"
       }
     },
     {
@@ -44,6 +48,10 @@
       "hint": {
         "fix": "operator",
         "remedy": "Install a preparer that emits the runner exports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "wrong_runner_signature",
+        "wit": "world ipc { export handle: func(input: string, limit: u32) -> u32; export has-shutdown: func() -> bool; export shutdown: func(); export spin: func(); }"
       }
     },
     {
@@ -53,6 +61,10 @@
       "hint": {
         "fix": "operator",
         "remedy": "Check the preparer and component packaging, then prepare the function again."
+      },
+      "fixture": {
+        "kind": "malformed_wit",
+        "wit": "package konae:worker; interface host { op-worker-call func(args: string) -> string; }"
       }
     },
     {

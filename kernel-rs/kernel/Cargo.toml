@@ -41,3 +41,6 @@ tower.workspace = true
 uuid.workspace = true
 url.workspace = true
 wasmparser = "=0.245.1"
+
+[dev-dependencies]
+wasm-encoder = "=0.245.1"
