@@ -44,4 +44,5 @@ pub trait ExecutionBudget {
     fn deadline(&self) -> Instant;
     fn is_cancelled(&self) -> bool;
     fn register_abort_handler(&self, _handler: Arc<dyn Fn() + Send + Sync>) {}
+    fn clear_abort_handler(&self) {}
 }

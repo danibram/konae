@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const CANCEL_GRACE: Duration = Duration::from_millis(50);
+const CANCEL_GRACE: Duration = Duration::from_millis(100);
 
 struct BufferedBody {
     bytes: Vec<u8>,
@@ -743,6 +743,8 @@ impl Worker {
                 self.stop();
             }
         }
+        // The worker is either answering again or already stopped; a later abort has nothing to kill.
+        budget.clear_abort_handler();
         self.busy = false;
         result
     }

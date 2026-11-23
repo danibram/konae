@@ -390,12 +390,21 @@ fn outcome(code: &str) -> FunctionOutcome {
     }
 }
 
+/// After the deadline the executor gets this long to bring the worker back cooperatively
+/// (its own cancel handshake) before the Kernel kills the worker process from outside.
+const ABORT_GRACE: Duration = Duration::from_millis(200);
+
+/// Kills the request's worker if its invocation is still running once the grace has passed.
+/// An invocation that ended in time cleared its abort handler, so a warm worker survives.
+fn schedule_abort(budget: Budget) {
+    tokio::spawn(async move {
+        tokio::time::sleep(ABORT_GRACE).await;
+        budget.abort();
+    });
+}
+
 fn interrupted(budget: &Budget, code: &str, started: Instant, progress: &RunProgress) -> Timed {
-    let mutation = if code == "deadline_exceeded" {
-        budget.abort()
-    } else {
-        budget.cancel()
-    };
+    let mutation = budget.cancel();
     let code = if mutation.may_have_committed() {
         "mutation_outcome_unknown"
     } else {
@@ -1083,6 +1092,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 }
                 _ => {
                     let progress = progress.lock().unwrap_or_else(|error| error.into_inner());
+                    schedule_abort(budget.clone());
                     interrupted(&budget, "deadline_exceeded", started, &progress)
                 }
             }

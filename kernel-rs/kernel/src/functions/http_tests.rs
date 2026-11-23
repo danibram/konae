@@ -551,11 +551,6 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
         start_partial_chunked_http(address, &deployed.hostname, format!("/api/{name}"))
     }))
     .await;
-    let small_host = deployed.hostname.clone();
-    let small =
-        tokio::spawn(
-            async move { send_chunked_http(address, &small_host, "/api/orders", 2).await },
-        );
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let (_, workers_kib) = function_process_rss();
@@ -586,6 +581,11 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
     })
     .await
     .expect("both partial uploads should hold the Deployment's worker slots");
+    let small_host = deployed.hostname.clone();
+    let small =
+        tokio::spawn(
+            async move { send_chunked_http(address, &small_host, "/api/orders", 2).await },
+        );
     let (kernel_rss_kib, workers_rss_kib) = function_process_rss();
     assert!(kernel_rss_kib > 0);
     assert!(workers_rss_kib > 0);
@@ -1208,9 +1208,10 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     })
     .await
     .unwrap_or_else(|_| {
+        let finished = disconnect.is_finished();
         panic!(
             "disconnect never entered its transaction: task_finished={} {}",
-            disconnect.is_finished(),
+            finished,
             state.functions.debug_state()
         )
     });

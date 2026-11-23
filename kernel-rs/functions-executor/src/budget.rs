@@ -112,6 +112,11 @@ impl Budget {
         }
         outcome
     }
+    /// Forgets the abort handler. The executor calls it when an invocation ends with the worker
+    /// back in a known state, so a later abort does not kill a worker that already answered.
+    pub fn clear_abort_handler(&self) {
+        *self.shared.abort.lock().unwrap() = None;
+    }
     pub fn register_abort_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
         let invoke_now = {
             let mut abort = self.shared.abort.lock().unwrap();
@@ -181,6 +186,9 @@ impl crate::ExecutionBudget for Budget {
     }
     fn register_abort_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
         Budget::register_abort_handler(self, handler);
+    }
+    fn clear_abort_handler(&self) {
+        Budget::clear_abort_handler(self);
     }
 }
 

@@ -94,7 +94,12 @@ impl Containment {
     }
     fn kill_path(path: Option<&Path>) -> bool {
         if let Some(path) = path {
-            match std::fs::write(path.join("cgroup.kill"), "1") {
+            // Open without create: a control file that is gone means the group is gone.
+            let written = std::fs::OpenOptions::new()
+                .write(true)
+                .open(path.join("cgroup.kill"))
+                .and_then(|mut control| std::io::Write::write_all(&mut control, b"1"));
+            match written {
                 Ok(()) => true,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                 Err(error) => {
