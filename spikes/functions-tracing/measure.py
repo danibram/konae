@@ -41,7 +41,7 @@ def prepare(root):
     (capsule / "functions").mkdir(parents=True)
     (capsule / "index.html").write_text('<main>Tracing probe</main><script type="module" src="./app.js"></script>\n')
     (capsule / "app.js").write_text("export {};\n")
-    (capsule / "schema.sql").write_text("CREATE TABLE sample (n INTEGER PRIMARY KEY);\n")
+    (capsule / "schema.sql").write_text("CREATE TABLE IF NOT EXISTS sample (n INTEGER PRIMARY KEY);\n")
     write_json(capsule / "actions.json", {"version": 1, "actions": {
         "probe.read": {"kind": "query", "access": "anonymous", "bindings": [],
                        "statement": "SELECT n FROM sample LIMIT 1"},
