@@ -192,7 +192,7 @@ printf '%s\n' "$worker_report" | grep -Eq '^Seccomp:[[:space:]]+2$' || { echo "W
 printf '%s\n' "$worker_report" | grep -Eq '^Max core file size[[:space:]]+0[[:space:]]+0' || { echo "Worker core rlimit is not zero" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max open files[[:space:]]+64[[:space:]]+64' || { echo "Worker open-file rlimit is not 64" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max file size[[:space:]]+0[[:space:]]+0' || { echo "Worker file-size rlimit is not zero" >&2; exit 1; }
-printf '%s\n' "$worker_report" | grep -Eq '^Max address space[[:space:]]+25165824[[:space:]]+25165824[[:space:]]+kB' || { echo "Worker address-space rlimit differs from the 24 GiB Wasmtime pool budget" >&2; exit 1; }
+printf '%s\n' "$worker_report" | grep -Eq '^Max address space[[:space:]]+25769803776[[:space:]]+25769803776[[:space:]]+bytes' || { echo "Worker address-space rlimit differs from the 24 GiB Wasmtime pool budget" >&2; exit 1; }
 kernel_caps=$(compose exec -T kernel awk '/^CapEff:/ {print $2}' /proc/1/status)
 test "$kernel_caps" = 00000000000000e0 || { echo "Unexpected Kernel effective capabilities: $kernel_caps" >&2; exit 1; }
 container_id=$(compose ps -q kernel)
