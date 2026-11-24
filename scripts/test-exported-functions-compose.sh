@@ -133,7 +133,7 @@ EOF
     exit 1
   }
 else
-  sed -e '/^KONAE_FUNCTIONS_RUNNER_KIND=/d' -e '/^KONAE_FUNCTIONS_WASM_CACHE=/d' \
+  sed -e '/^KONAE_FUNCTIONS_RUNNER=/d' -e '/^KONAE_FUNCTIONS_RUNNER_KIND=/d' -e '/^KONAE_FUNCTIONS_WASM_CACHE=/d' \
     "$scratch/exported/.env" > "$scratch/exported/.env.proof"
   mv "$scratch/exported/.env.proof" "$scratch/exported/.env"
   cat > "$scratch/preparer" <<'EOF'
@@ -155,6 +155,7 @@ EOF
 services:
   kernel:
     environment:
+      KONAE_FUNCTIONS_RUNNER:
       KONAE_FUNCTIONS_RUNNER_KIND:
       KONAE_FUNCTIONS_WASM_CACHE:
       KONAE_FUNCTIONS_PREPARER: /proof/preparer

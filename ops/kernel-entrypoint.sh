@@ -1,22 +1,31 @@
 #!/bin/sh
 set -eu
 data="${KONAE_DATA_DIR:-/kernel}"
-if [ -n "${KONAE_FUNCTIONS_RUNNER:-}" ]; then
-  export KONAE_FUNCTIONS_RUNNER_KIND="${KONAE_FUNCTIONS_RUNNER_KIND-wasm}"
-fi
+export KONAE_FUNCTIONS_RUNNER_KIND="${KONAE_FUNCTIONS_RUNNER_KIND-wasm}"
+case "$KONAE_FUNCTIONS_RUNNER_KIND" in
+  wasm)
+    export KONAE_FUNCTIONS_RUNNER="${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner-wasm}"
+    export KONAE_FUNCTIONS_WASM_CACHE="${KONAE_FUNCTIONS_WASM_CACHE:-$data/.konae/wasm-cache}"
+    export KONAE_FUNCTIONS_PREPARER="${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}"
+    ;;
+  deno)
+    export KONAE_FUNCTIONS_RUNNER="${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner-deno}"
+    ;;
+esac
 if [ "$(id -u)" = 0 ]; then
   owner="$(stat -c %u:%g "$data"/apps/*/ 2>/dev/null | head -n 1 || true)"
   case "$owner" in ""|0:*) owner=10001:10001 ;; esac
   chown "$owner" "$data" "$data/apps"
   chmod 0700 "$data"
   export HOME="$data"
-  if [ -n "${KONAE_FUNCTIONS_RUNNER:-}" ] && [ "$KONAE_FUNCTIONS_RUNNER_KIND" = wasm ]; then
-    cache=${KONAE_FUNCTIONS_WASM_CACHE:-$data/.konae/wasm-cache}
+  if [ "$KONAE_FUNCTIONS_RUNNER_KIND" = wasm ]; then
+    cache=$KONAE_FUNCTIONS_WASM_CACHE
     mkdir -p "$cache"
+    if [ "$cache" = "$data/.konae/wasm-cache" ]; then
+      chown "$owner" "$data/.konae"
+    fi
     chown "$owner" "$cache"
     chmod 0700 "$cache"
-    export KONAE_FUNCTIONS_WASM_CACHE="$cache"
-    export KONAE_FUNCTIONS_PREPARER="${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}"
   fi
   if [ -n "${KONAE_FUNCTIONS_RUNNER:-}" ] && [ "${KONAE_FUNCTIONS_DEVELOPMENT:-0}" != "1" ]; then
     if [ "$KONAE_FUNCTIONS_RUNNER_KIND" = deno ] && [ -z "${KONAE_FUNCTIONS_CGROUP:-}" ]; then
