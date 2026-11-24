@@ -17,7 +17,7 @@ const { buildProjectInBrowser, compileProjectInBrowser } = await import("./brows
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 const source = JSON.stringify({ version: 1, functions: { orders: { entry: "functions/orders.ts", mount: "/api/orders", methods: ["GET"], access: "anonymous" } } });
-const serverCode = 'throw Error("SERVER_TOP_LEVEL_SENTINEL"); export const handle = () => new Response("SERVER_PRIVATE_BYTES");';
+const serverCode = 'import { actions } from "konae:actions"; throw Error("SERVER_TOP_LEVEL_SENTINEL"); export const handle = (_request, context) => { actions(context); return new Response("SERVER_PRIVATE_BYTES"); };';
 const files = { "index.html": "<!doctype html><html><body>Public</body></html>", "functions.json": source, "functions/orders.ts": serverCode, "package.json": '{"dependencies":{}}', "package-lock.json": '{"lockfileVersion":3}' };
 const project: MiniAppProject = { id: "functions", name: "Functions", slug: "functions", manifest: { ...createDefaultManifest(), visibility: "public" }, files, directories: [], updatedAt: 0, modules: { functions: { on: true } } };
 
@@ -32,6 +32,8 @@ test("editor builds separate ESM bytes and preview never imports server entry", 
   const built = await buildProjectInBrowser(project);
   expect(built.serverArtifact?.bundles.orders).toContain("SERVER_TOP_LEVEL_SENTINEL");
   expect(built.serverArtifact?.bundles.orders).toContain("SERVER_PRIVATE_BYTES");
+  expect(built.serverArtifact?.bundles.orders).toMatch(/return \w+\.actions/);
+  expect(built.serverArtifact?.bundles.orders).not.toContain('from "konae:actions"');
   expect(JSON.stringify(built.files)).not.toContain("SERVER_PRIVATE_BYTES");
   expect(Object.keys(built.files)).toEqual(["index.html"]);
   const preview = await compileProjectInBrowser({ ...project, files: { ...files, "app.js": 'document.title = "client";' } });
@@ -43,8 +45,9 @@ test("local and refreshed folder builds validate candidate server bundles", asyn
   const local = await buildLocal(root);
   expect(local.serverArtifact?.bundles.orders).toContain("SERVER_TOP_LEVEL_SENTINEL");
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
+  expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toMatch(/return \w+\.actions/);
   expect(JSON.stringify(local.artifact.files)).not.toContain("SERVER_PRIVATE_BYTES");
-  const generated = generatedFiles({ settings: { id: project.id, name: project.name, slug: project.slug, visibility: "public", kernel: "0.12.1", manifest: {}, modules: project.modules }, actionsSource: '{"version":1,"actions":{}}', schemaSource: "", runtime: "", staticArtifact: await readFile("src/lib/static-artifact.js", "utf8"), localBuilder: await readFile("src/lib/local-builder.js", "utf8"), nodeCompat: await readFile("src/lib/node-compat.js", "utf8"), nodeCompatProviders: await readFile("src/lib/node-compat-providers.js", "utf8"), parserSource: await readFile("node_modules/@babel/parser/lib/index.js", "utf8"), parserLicense: await readFile("node_modules/@babel/parser/LICENSE", "utf8") });
+  const generated = generatedFiles({ settings: { id: project.id, name: project.name, slug: project.slug, visibility: "public", kernel: "0.12.1", manifest: {}, modules: project.modules }, actionsSource: '{"version":1,"actions":{}}', schemaSource: "", functionsSource: source, runtime: "", staticArtifact: await readFile("src/lib/static-artifact.js", "utf8"), localBuilder: await readFile("src/lib/local-builder.js", "utf8"), nodeCompat: await readFile("src/lib/node-compat.js", "utf8"), nodeCompatProviders: await readFile("src/lib/node-compat-providers.js", "utf8"), parserSource: await readFile("node_modules/@babel/parser/lib/index.js", "utf8"), parserLicense: await readFile("node_modules/@babel/parser/LICENSE", "utf8") });
   const generatedBuilder = generated.find((entry) => entry.path === "scripts/local-builder.mjs")?.contents as string;
   for (const entry of generated) { await mkdir(path.dirname(path.join(root, entry.path)), { recursive: true }); await writeFile(path.join(root, entry.path), entry.contents); }
   expect(generated.find((entry) => entry.path === "scripts/build.mjs")?.contents).toContain("babel-parser.cjs");
@@ -52,7 +55,8 @@ test("local and refreshed folder builds validate candidate server bundles", asyn
   expect(generated.some((entry) => entry.path === "scripts/BABEL-PARSER-LICENSE")).toBe(true);
   await mkdir(path.join(root, "node_modules"));
   await symlink(path.resolve("node_modules/esbuild"), path.join(root, "node_modules/esbuild"));
-  await writeFile(path.join(root, "app/functions/orders.ts"), 'import { EventEmitter } from "node:events"; export const handle = () => new Response(String(new EventEmitter().listenerCount("ready")));');
+  await symlink(path.resolve("node_modules/typescript"), path.join(root, "node_modules/typescript"));
+  await writeFile(path.join(root, "app/functions/orders.ts"), '// @ts-ignore Node compatibility is covered by the bundler test below.\nimport { EventEmitter } from "node:events"; export const handle = () => new Response(String(new EventEmitter().listenerCount("ready")));');
   const process = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ exitCode: await process.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
