@@ -13,12 +13,16 @@ if [ "$(id -u)" = 0 ]; then
   case "$owner" in ""|0:*) owner=10001:10001 ;; esac
   chown "$owner" "$data" "$data/apps"
   export HOME="$data"
+  if [ "$kind" = wasm ]; then
+    cache=$KONAE_FUNCTIONS_WASM_CACHE
+    case "$cache" in
+      "$data/.konae/wasm-cache")
+        install -d -m 0700 -o "${owner%%:*}" -g "${owner##*:}" "$data/.konae" "$cache" || true ;;
+      /*) install -d -m 0700 -o "${owner%%:*}" -g "${owner##*:}" "$cache" || true ;;
+    esac
+  fi
   if [ -n "${KONAE_FUNCTIONS_RUNNER:-}" ] && [ "${KONAE_FUNCTIONS_DEVELOPMENT:-0}" != "1" ]; then
     if [ "$kind" = wasm ]; then
-      cache=$KONAE_FUNCTIONS_WASM_CACHE
-      case "$cache" in
-        /*) (umask 077; mkdir -p "$cache") && chown "$owner" "$cache" && chmod 0700 "$cache" || true ;;
-      esac
       exec setpriv --reuid="${owner%%:*}" --regid="${owner##*:}" --clear-groups \
         --bounding-set=-all,+setuid,+setgid,+kill \
         --inh-caps=+setuid,+setgid,+kill --ambient-caps=+setuid,+setgid,+kill \
