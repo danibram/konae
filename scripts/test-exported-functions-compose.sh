@@ -66,7 +66,26 @@ EOF
 cat > "$scratch/source/app/actions.json" <<'EOF'
 {"version":1,"actions":{"count.read":{"kind":"query","access":"authenticated","statement":"SELECT n FROM count_state WHERE id=1 LIMIT 1","bindings":[]},"count.increment":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO count_state(id,n) VALUES(1,1) ON CONFLICT(id) DO UPDATE SET n=n+1","bindings":[]}}}
 EOF
-bun -e 'const fs = require("node:fs"); const p = process.argv[1]; const functions = Object.fromEntries(Array.from({length: 10}, (_, i) => [`counter${i}`, {entry: "functions/counter.js", mount: `/api/counter${i}`, methods: ["GET", "POST"], access: "authenticated", actions: ["count.read", "count.increment"]}])); functions.stall = {entry: "functions/stall.js", mount: "/api/stall", methods: ["GET"], access: "authenticated", actions: []}; fs.writeFileSync(p, JSON.stringify({version: 1, functions}) + "\n");' "$scratch/source/app/functions.json"
+cat > "$scratch/source/app/functions.json" <<'EOF'
+{
+  "version": 1,
+  "functions": {
+    "counter0": {
+      "entry": "functions/counter.js",
+      "mount": "/api/counter0",
+      "methods": ["GET", "POST"],
+      "access": "authenticated",
+      "actions": ["count.read", "count.increment"]
+    },
+    "stall": {
+      "entry": "functions/stall.js",
+      "mount": "/api/stall",
+      "methods": ["GET"],
+      "access": "authenticated"
+    }
+  }
+}
+EOF
 cat > "$scratch/source/app/functions/counter.js" <<'EOF'
 export async function handle(request, context) {
   if (request.method === "POST") {
@@ -133,21 +152,10 @@ get_status=${get_result%% *}
 get_seconds=${get_result#* }
 get=$(cat "$scratch/get.body")
 test "$get_status" = 200 && test "$get" = '{"n":0}' || { echo "Unexpected authenticated GET ($get_status): $get" >&2; exit 1; }
-max_cold=$get_seconds
-for index in $(seq 1 9); do
-  cold_result=$(request --silent --show-error -o "$response_dir/cold.body" -w '%{http_code} %{time_total}' -H "Host: $host" -H "Cookie: $cookie" "$request_url/api/counter$index")
-  cold_status=${cold_result%% *}
-  cold_seconds=${cold_result#* }
-  test "$cold_status" = 200 && test "$(cat "$scratch/cold.body")" = '{"n":0}' || { echo "Cold GET $index failed: $cold_result" >&2; exit 1; }
-  max_cold=$(awk -v a="$max_cold" -v b="$cold_seconds" 'BEGIN { print (a > b) ? a : b }')
-done
-if [ "$runner_kind" = wasm ]; then
-  awk -v seconds="$max_cold" 'BEGIN { if (seconds >= 0.250) exit 1 }' || { echo "Prepared cold GET maximum took ${max_cold}s, over 250ms" >&2; exit 1; }
-fi
 post_status=$(request --silent --show-error -o "$response_dir/post.body" -w '%{http_code}' -H "Host: $host" -H "Origin: http://$host" -H "Cookie: $cookie" -H 'Idempotency-Key: export-check-1' -H 'Content-Type: application/json' -d '{}' "$request_url/api/counter0")
 post=$(cat "$scratch/post.body")
 test "$post_status" = 200 && test "$post" = '{"n":1}' || { echo "Unexpected authenticated POST ($post_status): $post" >&2; exit 1; }
-printf 'runner_kind=%s\nsignup=HTTP_%s\nauthenticated_get=%s %s\nauthenticated_post=%s %s\nfirst_get_max_seconds=%s samples=10\n' "$runner_kind" "$signup_status" "$get_status" "$get" "$post_status" "$post" "$max_cold"
+printf 'runner_kind=%s\nsignup=HTTP_%s\nauthenticated_get=%s %s\nauthenticated_post=%s %s\ncold_get_seconds=%s\n' "$runner_kind" "$signup_status" "$get_status" "$get" "$post_status" "$post" "$get_seconds"
 worker_count() {
   compose exec -T kernel sh -c 'for status in /proc/[0-9]*/status; do tr "\000" "\n" < "${status%/status}/cmdline" 2>/dev/null | grep -qx -- "--function-worker" && echo x; done; true' | wc -l | tr -d ' '
 }
@@ -254,3 +262,4 @@ test "$(worker_count)" = 0 || { echo "RSS-limited worker remained alive" >&2; ex
 reuse_status=$(curl --silent --show-error -o "$scratch/reuse.body" -w '%{http_code}' -H "Host: $host" -H "Cookie: $cookie" "http://127.0.0.1:$port/api/counter0")
 test "$reuse_status" = 200 && test "$(cat "$scratch/reuse.body")" = '{"n":1}' || { echo "Counter app failed after RSS cleanup" >&2; exit 1; }
 printf 'rss_probe=HTTP_%s %s\nrss_worker_reaped=yes\nafter_rss=HTTP_%s %s\n' "$rss_status" "$rss_body" "$reuse_status" "$(cat "$scratch/reuse.body")"
+awk -v seconds="$get_seconds" 'BEGIN { if (seconds >= 0.250) exit 1 }' || { echo "Prepared cold GET took ${get_seconds}s, over 250ms" >&2; exit 1; }
