@@ -91,7 +91,10 @@ async fn invoke_action_inner(
     };
 
     if action.kind == "call" {
-        let response = calls::enqueue(&state, &deployment, &name, &input).await;
+        let traceparent = (headers.get_all(crate::functions::trace::TRACEPARENT).iter().count() == 1)
+            .then(|| headers.get(crate::functions::trace::TRACEPARENT).and_then(|value| value.to_str().ok()))
+            .flatten();
+        let response = calls::enqueue_with_traceparent(&state, &deployment, &name, &input, traceparent).await;
         if response.status().is_success() && !enter::entered(actor.as_ref()) {
             if let Some(user) = actor.as_ref() {
                 usage::count_account(

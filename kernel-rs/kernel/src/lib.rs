@@ -97,7 +97,7 @@ pub use app_accounts::{SignInMethod, default_sign_in_methods, PASSWORD_REQUIRED,
 pub use app_accounts::{session, AuthInput, signup, login, auth_request, blocking, too_many_attempts, logout, cleared_app_cookie, cookie_secure, auth_error};
 pub use app_accounts::{open_auth, authenticate_deployment, app_cookie_name, cookie_value};
 pub use server::{Startup, Running, start, start_locked, state_from_env, bind};
-pub use server::{listen, serve, stack, health, same_origin};
+pub use server::{listen, serve, shutdown_signal, stack, health, same_origin};
 pub(crate) use server::Operation;
 pub use routing::{serve_root, login_page, serve_artifact, serve_key, count_page_view, read_artifact, private_login_page, ArtifactCache, etag_matches, artifact_response};
 pub(crate) use routing::serve_key_with_routes;

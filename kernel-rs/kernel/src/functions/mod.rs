@@ -1,9 +1,10 @@
 pub mod http;
 pub mod invocation;
 mod manifest_artifact;
+pub(crate) mod otlp;
 mod preparation;
 pub mod runtime;
-pub(super) mod trace;
+pub(crate) mod trace;
 #[allow(dead_code)]
 mod wasm_validation;
 
