@@ -61,7 +61,7 @@ bun "$root/scripts/konae.ts" init --dir "$scratch/source" --name "Export functio
 bun -e 'const fs = require("node:fs"); const p = process.argv[1]; const s = JSON.parse(fs.readFileSync(p, "utf8")); s.slug = "export-functions-check"; s.visibility = "private"; s.signupPolicy = { mode: "open", allowlist: [] }; s.modules = { ...(s.modules || {}), auth: { ...(s.modules?.auth || {}), on: true, signupPolicy: { mode: "open", allowlist: [] } }, actions: { on: true }, functions: { on: true } }; fs.writeFileSync(p, JSON.stringify(s, null, 2) + "\n");' "$scratch/source/konae.json"
 mkdir -p "$scratch/source/app/functions"
 cat > "$scratch/source/app/schema.sql" <<'EOF'
-CREATE TABLE count_state (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS count_state (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
 EOF
 cat > "$scratch/source/app/actions.json" <<'EOF'
 {"version":1,"actions":{"count.read":{"kind":"query","access":"authenticated","statement":"SELECT n FROM count_state WHERE id=1 LIMIT 1","bindings":[]},"count.increment":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO count_state(id,n) VALUES(1,1) ON CONFLICT(id) DO UPDATE SET n=n+1","bindings":[]}}}
