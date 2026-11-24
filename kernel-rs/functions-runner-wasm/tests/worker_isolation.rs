@@ -510,6 +510,202 @@ fn web_api_clones_and_microtasks_match_the_contract() {
     assert_eq!(globals["structuredClone"], "function");
 }
 
+#[cfg(feature = "starling-runner")]
+#[test]
+fn request_web_apis_use_fresh_clock_entropy_and_cancelled_timers() {
+    let bundle = Bundle::new(
+        r#"
+        export async function handle(request) {
+          const path = new URL(request.url).pathname;
+          if (path === '/crypto') {
+            const data = new TextEncoder().encode('abc');
+            const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+            const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('secret'),
+              { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+            const signature = await crypto.subtle.sign('HMAC', key, data);
+            const verified = await crypto.subtle.verify('HMAC', key, signature, data);
+            const random = crypto.getRandomValues(new Uint8Array(16));
+            return Response.json({
+              digest: [...digest].map(value => value.toString(16).padStart(2, '0')).join(''),
+              verified, random: [...random], uuid: crypto.randomUUID(),
+              key: key instanceof CryptoKey,
+            });
+          }
+          if (path === '/timer') {
+            const before = performance.now();
+            const wall = Date.now();
+            await new Promise(resolve => setTimeout(resolve, 25));
+            return Response.json({ elapsed: performance.now() - before, wallElapsed: Date.now() - wall });
+          }
+          if (path === '/interval') {
+            let count = 0;
+            await new Promise((resolve, reject) => {
+              const timer = setInterval(() => {
+                if (++count === 3) { clearInterval(timer); resolve(); }
+              }, 5);
+              setTimeout(() => reject(new Error('interval did not fire')), 250);
+            });
+            return Response.json({ count });
+          }
+          if (path === '/pending') {
+            await new Promise(resolve => setTimeout(resolve, 60000));
+            return new Response('late');
+          }
+          if (path === '/retire') {
+            setInterval(() => { globalThis.retiredIntervalFired = true; }, 1);
+            return new Response('retired');
+          }
+          if (path === '/after') await new Promise(resolve => setTimeout(resolve, 20));
+          setTimeout(() => { globalThis.retiredTimerFired = true; }, 60000);
+          return Response.json({
+            timer: typeof setTimeout,
+            retired: globalThis.retiredTimerFired ?? false,
+            intervalRetired: globalThis.retiredIntervalFired ?? false,
+          });
+        }
+    "#,
+    );
+    let mut worker = worker(&bundle, Duration::from_secs(5));
+    let timeout = Duration::from_secs(5);
+
+    let crypto: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/crypto", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(
+        crypto["digest"],
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(crypto["verified"], true);
+    assert_eq!(crypto["key"], true);
+    assert_eq!(crypto["random"].as_array().unwrap().len(), 16);
+    assert_eq!(crypto["uuid"].as_str().unwrap().len(), 36);
+    let crypto_next: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/crypto", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_ne!(crypto["random"], crypto_next["random"]);
+
+    let timer: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/timer", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert!(timer["elapsed"].as_f64().unwrap() >= 20.0);
+    assert!(timer["wallElapsed"].as_f64().unwrap() >= 20.0);
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &invoke(&mut worker, input("/interval", "alice"), timeout)
+                .unwrap()
+                .body
+        )
+        .unwrap()["count"],
+        3
+    );
+    let pending = invoke(
+        &mut worker,
+        input("/pending", "alice"),
+        Duration::from_millis(50),
+    )
+    .unwrap_err();
+    assert_eq!(
+        konae_functions_executor::error_code(&pending),
+        "deadline_exceeded"
+    );
+    assert_eq!(
+        invoke(&mut worker, input("/retire", "alice"), timeout)
+            .unwrap()
+            .body,
+        "retired"
+    );
+    let after: Value = serde_json::from_str(
+        &invoke(&mut worker, input("/after", "alice"), timeout)
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(
+        after,
+        json!({"timer": "function", "retired": false, "intervalRetired": false})
+    );
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn request_webcrypto_imports_fixture_jwks_and_verifies_signatures() {
+    let keys: Value = serde_json::from_str(
+        &fs::read_to_string("../../spikes/node-compat/test-jwks.json").unwrap(),
+    )
+    .unwrap();
+    let source = r#"
+      const keys = __KEYS__;
+      export async function handle() {
+        const results = {};
+        for (const algorithm of ['ES256', 'RS256']) {
+          const ecdsa = algorithm === 'ES256';
+          const name = ecdsa ? 'ECDSA' : 'RSASSA-PKCS1-v1_5';
+          const parameters = ecdsa ? { name, namedCurve: 'P-256' } : { name, hash: 'SHA-256' };
+          const privateKey = await crypto.subtle.importKey('jwk', keys[algorithm].privateKey,
+            parameters, false, ['sign']);
+          const publicKey = await crypto.subtle.importKey('jwk', keys[algorithm].publicKey,
+            parameters, true, ['verify']);
+          const data = new TextEncoder().encode('konae');
+          const signature = await crypto.subtle.sign(
+            ecdsa ? { name, hash: 'SHA-256' } : name, privateKey, data);
+          results[algorithm] = {
+            nativeKeys: privateKey instanceof CryptoKey && publicKey instanceof CryptoKey,
+            verified: await crypto.subtle.verify(
+              ecdsa ? { name, hash: 'SHA-256' } : name, publicKey, signature, data),
+          };
+        }
+        return Response.json(results);
+      }
+    "#
+    .replace("__KEYS__", &keys.to_string());
+    let bundle = Bundle::new(&source);
+    let mut worker = worker(&bundle, Duration::from_secs(15));
+    let response = invoke(&mut worker, input("/jwk", "alice"), Duration::from_secs(15)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&response.body).unwrap(),
+        json!({
+            "ES256": {"nativeKeys": true, "verified": true},
+            "RS256": {"nativeKeys": true, "verified": true},
+        })
+    );
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn caught_top_level_timer_and_crypto_effects_refuse_preparation() {
+    let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
+    for source in [
+        "setTimeout(() => {}, 1); export function handle() {}",
+        "try { setTimeout(() => {}, 1); } catch {} export function handle() {}",
+        "fetch('https://example.com'); export function handle() {}",
+        "try { fetch('https://example.com'); } catch {} export function handle() {}",
+        "crypto.getRandomValues(new Uint8Array(1)); export function handle() {}",
+        "try { crypto.getRandomValues(new Uint8Array(1)); } catch {} export function handle() {}",
+    ] {
+        let bundle = Bundle::new(source);
+        let output = std::process::Command::new(runner)
+            .arg("--prepare")
+            .arg(bundle.path().join("orders.mjs"))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("function.wasm-init-effect"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 #[test]
 fn wasmtime_epoch_reuses_a_synchronized_worker_after_a_loop() {
     let bundle = Bundle::new(
@@ -612,8 +808,8 @@ fn no_host_apis_or_raw_ipc_imports_are_visible_to_javascript() {
     let bundle = Bundle::new(
         r#"
         export function handle() {
-            const names = ['Deno', 'process', 'fetch', 'require', 'WebAssembly',
-                'setTimeout', 'crypto', '__konae', 'op_worker_call', 'op_worker_body_read',
+            const names = ['Deno', 'process', 'require', 'WebAssembly',
+                '__konae', 'op_worker_call', 'op_worker_body_read',
                 'op_worker_failure'];
             return Response.json(names.filter(name => globalThis[name] !== undefined));
         }

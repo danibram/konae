@@ -51,9 +51,18 @@ const [bundled] = (await build({
   }],
 })).outputFiles;
 const witWorld = await readFile(resolve(guest, 'starling.wit'), 'utf8');
-const { component } = await componentize(bundled.text, {
-  engine, witWorld, disableFeatures: ['stdio', 'random', 'clocks', 'http', 'fetch-event'],
-});
+let component;
+try {
+  ({ component } = await componentize(bundled.text, {
+    engine, witWorld, disableFeatures: ['stdio', 'http', 'fetch-event'],
+  }));
+} catch (error) {
+  if (String(error).includes('function.wasm-init-effect')) {
+    console.error('function.wasm-init-effect: A function cannot start timers or fetch during top-level initialization.');
+    process.exit(66);
+  }
+  throw error;
+}
 const work = await mkdtemp(resolve(tmpdir(), 'konae-starling-component-'));
 try {
   const raw = resolve(work, 'raw.wasm');

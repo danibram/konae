@@ -9,97 +9,116 @@ use konae_functions_executor::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     fs,
     os::unix::{fs::MetadataExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use wasmtime::{
     Engine, Store, UpdateDeadline,
-    component::{Component, Instance, InstancePre, Linker, TypedFunc},
+    component::{
+        Component, Instance, InstancePre, Linker, Resource, ResourceAny, ResourceType, TypedFunc,
+        Val,
+    },
 };
 
 const TARGET: &str = env!("KONAE_STARLING_TARGET");
 const STARLING: &str = "0.21.0:b45eb4dda2fed0eaecd4e5581fb26a99e642d001dbf82f3698aba27564a78ea1";
 const WASMTIME: &str = "38.0.4";
 const BUILD_LIMIT: Duration = Duration::from_secs(60);
+const MAX_RANDOM_BYTES: u64 = 1 << 20;
+const ALLOWED_COMPONENT_IMPORTS: [&str; 8] = [
+    "konae:worker/host",
+    "wasi:cli/stderr@0.2.12",
+    "wasi:clocks/monotonic-clock@0.2.12",
+    "wasi:clocks/wall-clock@0.2.12",
+    "wasi:io/error@0.2.12",
+    "wasi:io/poll@0.2.12",
+    "wasi:io/streams@0.2.12",
+    "wasi:random/random@0.2.12",
+];
 static TEST_RANDOM_SEED_INDEX: AtomicU64 = AtomicU64::new(0);
 
 pub struct Compiler {
     pub engine: Engine,
-    linker: Linker<Bridge>,
 }
 
 impl Compiler {
     pub fn new() -> Result<Self> {
         let engine = Engine::new(&crate::engine_config::starling())?;
-        let mut linker = Linker::<Bridge>::new(&engine);
-        let mut host = linker.instance("konae:worker/host")?;
-        host.func_wrap(
-            "op-worker-call",
-            |mut store, (args,): (String,)| -> Result<(String,)> {
-                let bridge = store.data_mut();
-                if args.len() > MAX_OPERATION_BYTES {
-                    bridge.failure("operation_too_large");
-                    return Ok((r#"{"Err":"operation_too_large"}"#.into(),));
-                }
-                let bytes = bridge.call(serde_json::from_str::<Value>(&args)?)?;
-                Ok((String::from_utf8(bytes)?,))
-            },
-        )?;
-        host.func_wrap("op-worker-body-read", |mut store, ()| {
-            Ok((store.data_mut().body(BODY_CHUNK_BYTES)?,))
-        })?;
-        host.func_wrap(
-            "op-worker-response-chunk",
-            |mut store, (bytes,): (Vec<u8>,)| -> Result<(bool,)> {
-                Ok((store.data_mut().response_chunk(bytes)?,))
-            },
-        )?;
-        host.func_wrap(
-            "op-worker-failure",
-            |mut store, (code, detail): (String, Option<String>)| -> Result<()> {
-                let code = match code.as_str() {
-                    "unsupported_runtime_api" => "unsupported_runtime_api",
-                    "function.initialization-cannot-snapshot" => {
-                        "function.initialization-cannot-snapshot"
-                    }
-                    "response_too_large" => "response_too_large",
-                    "function_handle_missing" => "function_handle_missing",
-                    "handler_error" => "handler_error",
-                    _ => "invalid_response",
-                };
-                if code == "handler_error" {
-                    store.data_mut().failure_with_detail(code, detail);
-                } else {
-                    store.data_mut().failure(code);
-                }
-                Ok(())
-            },
-        )?;
-        host.func_wrap("now-ms", |store, ()| -> Result<(f64,)> {
-            store.data().check()?;
-            Ok((SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as f64,))
-        })?;
-        host.func_wrap("random-seed", |_store, ()| -> Result<(u64,)> {
-            if let Some(seed) = std::env::var_os("KONAE_STARLING_TEST_SEED") {
-                let seed = seed.to_string_lossy().parse::<u64>()?;
-                return Ok((
-                    seed.wrapping_add(TEST_RANDOM_SEED_INDEX.fetch_add(1, Ordering::Relaxed)),
-                ));
-            }
-            let mut bytes = [0u8; 8];
-            let result = unsafe { libc::getentropy(bytes.as_mut_ptr().cast(), bytes.len()) };
-            if result != 0 {
-                return Err(std::io::Error::last_os_error().into());
-            }
-            Ok((u64::from_le_bytes(bytes),))
-        })?;
-        Ok(Self { linker, engine })
+        Ok(Self { engine })
     }
+}
+
+fn link_worker_imports(linker: &mut Linker<Bridge>) -> Result<()> {
+    let mut host = linker.instance("konae:worker/host")?;
+    host.func_wrap(
+        "op-worker-call",
+        |mut store, (args,): (String,)| -> Result<(String,)> {
+            let bridge = store.data_mut();
+            if args.len() > MAX_OPERATION_BYTES {
+                bridge.failure("operation_too_large");
+                return Ok((r#"{"Err":"operation_too_large"}"#.into(),));
+            }
+            let bytes = bridge.call(serde_json::from_str::<Value>(&args)?)?;
+            Ok((String::from_utf8(bytes)?,))
+        },
+    )?;
+    host.func_wrap("op-worker-body-read", |mut store, ()| {
+        Ok((store.data_mut().body(BODY_CHUNK_BYTES)?,))
+    })?;
+    host.func_wrap(
+        "op-worker-response-chunk",
+        |mut store, (bytes,): (Vec<u8>,)| -> Result<(bool,)> {
+            Ok((store.data_mut().response_chunk(bytes)?,))
+        },
+    )?;
+    host.func_wrap(
+        "op-worker-failure",
+        |mut store, (code, detail): (String, Option<String>)| -> Result<()> {
+            let code = match code.as_str() {
+                "unsupported_runtime_api" => "unsupported_runtime_api",
+                "function.wasm-init-effect" => "function.wasm-init-effect",
+                "function.initialization-cannot-snapshot" => {
+                    "function.initialization-cannot-snapshot"
+                }
+                "response_too_large" => "response_too_large",
+                "function_handle_missing" => "function_handle_missing",
+                "handler_error" => "handler_error",
+                _ => "invalid_response",
+            };
+            if code == "handler_error" {
+                store.data_mut().failure_with_detail(code, detail);
+            } else {
+                store.data_mut().failure(code);
+            }
+            Ok(())
+        },
+    )?;
+    host.func_wrap("now-ms", |store, ()| -> Result<(f64,)> {
+        store.data().check()?;
+        Ok((store.data().wall_ms()?,))
+    })?;
+    host.func_wrap("random-seed", |_store, ()| -> Result<(u64,)> {
+        if let Some(seed) = std::env::var_os("KONAE_STARLING_TEST_SEED") {
+            let seed = seed.to_string_lossy().parse::<u64>()?;
+            return Ok(
+                (seed.wrapping_add(TEST_RANDOM_SEED_INDEX.fetch_add(1, Ordering::Relaxed)),),
+            );
+        }
+        let mut bytes = [0u8; 8];
+        let result = unsafe { libc::getentropy(bytes.as_mut_ptr().cast(), bytes.len()) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok((u64::from_le_bytes(bytes),))
+    })?;
+    link_request_web_imports(linker)?;
+    Ok(())
 }
 
 pub struct Invocation {
@@ -124,7 +143,29 @@ impl Invocation {
         // Only accept native code from the operator-owned cache.
         let component = unsafe { Component::deserialize_file(&compiler.engine, &cache.compiled) }
             .context("Load the approved StarlingMonkey component")?;
-        compiler.linker.instantiate_pre(&component)
+        let imports = component
+            .component_type()
+            .imports(&compiler.engine)
+            .map(|(name, _)| name.to_owned())
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            imports
+                .iter()
+                .all(|name| ALLOWED_COMPONENT_IMPORTS.contains(&name.as_str())),
+            "Prepared component imports an unsupported host interface"
+        );
+        ensure!(
+            imports.contains("wasi:clocks/monotonic-clock@0.2.12")
+                && imports.contains("wasi:clocks/wall-clock@0.2.12")
+                && imports.contains("wasi:io/poll@0.2.12")
+                && imports.contains("wasi:random/random@0.2.12"),
+            "Prepared component is missing request Web API imports"
+        );
+        let mut linker = Linker::<Bridge>::new(&compiler.engine);
+        linker.allow_shadowing(true);
+        linker.define_unknown_imports_as_traps(&component)?;
+        link_worker_imports(&mut linker)?;
+        linker.instantiate_pre(&component)
     }
 
     pub fn new(
@@ -177,11 +218,13 @@ impl Invocation {
         let body = self.store.data_mut().take_response();
         let body = std::str::from_utf8(&body).map_err(|_| WorkerError::new("invalid_response"))?;
         response.body = body.strip_prefix('\u{feff}').unwrap_or(body).to_owned();
+        self.store.data_mut().clear_pollables();
         self.store.data_mut().request = None;
         Ok(response)
     }
 
     pub fn shutdown(&mut self, grace_ms: u64) -> (bool, Option<String>) {
+        self.store.data_mut().clear_pollables();
         self.store.data_mut().deadline =
             Instant::now() + Duration::from_millis(grace_ms.min(1000).saturating_sub(15));
         self.store.set_epoch_deadline(1);
@@ -214,6 +257,159 @@ impl Invocation {
         function.call(&mut self.store, ())?;
         function.post_return(&mut self.store)
     }
+}
+
+fn link_request_web_imports(linker: &mut Linker<Bridge>) -> Result<()> {
+    let mut clocks = linker.instance("wasi:clocks/monotonic-clock@0.2.12")?;
+    clocks.func_new("now", |store, _, results| {
+        results[0] = Val::U64(store.data().monotonic_ns());
+        Ok(())
+    })?;
+    clocks.func_new("resolution", |_store, _, results| {
+        results[0] = Val::U64(1);
+        Ok(())
+    })?;
+    clocks.func_new("subscribe-duration", |mut store, params, results| {
+        let Val::U64(nanos) = params[0] else {
+            bail!("invalid clock duration")
+        };
+        let deadline = Instant::now()
+            .checked_add(Duration::from_nanos(nanos))
+            .ok_or_else(|| anyhow::anyhow!("timer duration overflow"))?;
+        let id = store.data_mut().add_pollable(deadline)?;
+        results[0] = Val::Resource(ResourceAny::try_from_resource(
+            Resource::<()>::new_own(id),
+            &mut store,
+        )?);
+        Ok(())
+    })?;
+    clocks.func_new("subscribe-instant", |mut store, params, results| {
+        let Val::U64(when) = params[0] else {
+            bail!("invalid clock instant")
+        };
+        let now = store.data().monotonic_ns();
+        let wait = when.saturating_sub(now);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_nanos(wait))
+            .ok_or_else(|| anyhow::anyhow!("timer instant overflow"))?;
+        let id = store.data_mut().add_pollable(deadline)?;
+        results[0] = Val::Resource(ResourceAny::try_from_resource(
+            Resource::<()>::new_own(id),
+            &mut store,
+        )?);
+        Ok(())
+    })?;
+
+    let mut wall = linker.instance("wasi:clocks/wall-clock@0.2.12")?;
+    wall.func_new("now", |store, _, results| {
+        let since_epoch = store.data().wall_time()?.duration_since(UNIX_EPOCH)?;
+        results[0] = Val::Record(vec![
+            ("seconds".into(), Val::U64(since_epoch.as_secs())),
+            ("nanoseconds".into(), Val::U32(since_epoch.subsec_nanos())),
+        ]);
+        Ok(())
+    })?;
+    wall.func_new("resolution", |_store, _, results| {
+        results[0] = Val::Record(vec![
+            ("seconds".into(), Val::U64(0)),
+            ("nanoseconds".into(), Val::U32(1)),
+        ]);
+        Ok(())
+    })?;
+
+    let mut random = linker.instance("wasi:random/random@0.2.12")?;
+    random.func_new("get-random-u64", |mut store, _, results| {
+        require_live_request(&mut store)?;
+        let mut bytes = [0u8; 8];
+        fill_entropy(&mut bytes)?;
+        results[0] = Val::U64(u64::from_le_bytes(bytes));
+        Ok(())
+    })?;
+    random.func_new("get-random-bytes", |mut store, params, results| {
+        require_live_request(&mut store)?;
+        let Val::U64(length) = params[0] else {
+            bail!("invalid random byte count")
+        };
+        if length > MAX_RANDOM_BYTES {
+            bail!("random request exceeds its limit: {length}");
+        }
+        let mut bytes = vec![0; length as usize];
+        fill_entropy(&mut bytes)?;
+        results[0] = Val::List(bytes.into_iter().map(Val::U8).collect());
+        Ok(())
+    })?;
+
+    let mut poll = linker.instance("wasi:io/poll@0.2.12")?;
+    poll.resource("pollable", ResourceType::host::<()>(), |mut store, rep| {
+        store.data_mut().remove_pollable(rep);
+        Ok(())
+    })?;
+    poll.func_wrap(
+        "poll",
+        |store, (resources,): (Vec<Resource<()>>,)| -> Result<(Vec<u32>,)> {
+            ensure!(!resources.is_empty(), "cannot poll an empty list");
+            loop {
+                store.data().check()?;
+                let now = Instant::now();
+                let mut ready = Vec::new();
+                let mut next_deadline = None;
+                for (index, resource) in resources.iter().enumerate() {
+                    let deadline = store.data().pollable_deadline(resource.rep())?;
+                    if deadline <= now {
+                        ready.push(index as u32);
+                    } else {
+                        next_deadline =
+                            Some(next_deadline.map_or(deadline, |old: Instant| old.min(deadline)));
+                    }
+                }
+                if !ready.is_empty() {
+                    return Ok((ready,));
+                }
+                let delay = next_deadline
+                    .map(|at| at.saturating_duration_since(Instant::now()))
+                    .unwrap_or(Duration::from_millis(1))
+                    .min(Duration::from_millis(1));
+                std::thread::sleep(delay.max(Duration::from_micros(100)));
+            }
+        },
+    )?;
+    poll.func_wrap(
+        "[method]pollable.ready",
+        |store, (resource,): (Resource<()>,)| -> Result<(bool,)> {
+            Ok((store.data().pollable_deadline(resource.rep())? <= Instant::now(),))
+        },
+    )?;
+    poll.func_wrap(
+        "[method]pollable.block",
+        |store, (resource,): (Resource<()>,)| -> Result<()> {
+            let deadline = store.data().pollable_deadline(resource.rep())?;
+            loop {
+                store.data().check()?;
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Ok(());
+                }
+                std::thread::sleep(remaining.min(Duration::from_millis(1)));
+            }
+        },
+    )?;
+    Ok(())
+}
+
+fn require_live_request(store: &mut wasmtime::StoreContextMut<'_, Bridge>) -> Result<()> {
+    store.data().check()?;
+    ensure!(store.data().request.is_some(), "request capability expired");
+    Ok(())
+}
+
+fn fill_entropy(output: &mut [u8]) -> Result<()> {
+    for chunk in output.chunks_mut(256) {
+        let result = unsafe { libc::getentropy(chunk.as_mut_ptr().cast(), chunk.len()) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
 }
 
 fn memory_error(error: anyhow::Error) -> anyhow::Error {
@@ -345,6 +541,9 @@ fn cached_component(source: &str, build_limit: Duration) -> Result<(Cache, Optio
     };
     if status.code() == Some(65) {
         return Err(WorkerError::new("function_import_forbidden").into());
+    }
+    if status.code() == Some(66) {
+        return Err(WorkerError::new("function.wasm-init-effect").into());
     }
     ensure!(
         status.success(),

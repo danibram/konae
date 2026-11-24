@@ -6,13 +6,14 @@ use serde_json::Value;
 #[cfg(feature = "quickjs-runner")]
 use std::sync::OnceLock;
 use std::{
+    collections::HashMap,
     io,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::Receiver,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use wasmtime::StoreLimits;
 #[cfg(feature = "quickjs-runner")]
@@ -26,6 +27,10 @@ pub struct Request {
 pub struct Bridge {
     pub limits: StoreLimits,
     pub deadline: Instant,
+    clock_origin: Instant,
+    wall_origin: SystemTime,
+    next_pollable: u32,
+    pollables: HashMap<u32, Instant>,
     pub request: Option<Arc<Request>>,
     replies: Arc<Receiver<ParentMessage>>,
     max_operations: usize,
@@ -51,6 +56,10 @@ impl Bridge {
         Self {
             limits,
             deadline,
+            clock_origin: Instant::now(),
+            wall_origin: SystemTime::now(),
+            next_pollable: 1,
+            pollables: HashMap::new(),
             request,
             replies,
             max_operations,
@@ -77,6 +86,45 @@ impl Bridge {
             return Err(konae_functions_executor::WorkerError::new("deadline_exceeded").into());
         }
         Ok(())
+    }
+
+    pub(crate) fn monotonic_ns(&self) -> u64 {
+        self.clock_origin.elapsed().as_nanos().min(u64::MAX as u128) as u64
+    }
+
+    pub(crate) fn wall_time(&self) -> Result<SystemTime> {
+        self.wall_origin
+            .checked_add(self.clock_origin.elapsed())
+            .ok_or_else(|| anyhow::anyhow!("wall clock overflow"))
+    }
+
+    pub(crate) fn wall_ms(&self) -> Result<f64> {
+        Ok(self.wall_time()?.duration_since(UNIX_EPOCH)?.as_millis() as f64)
+    }
+
+    pub(crate) fn add_pollable(&mut self, deadline: Instant) -> Result<u32> {
+        let id = self.next_pollable;
+        self.next_pollable = self
+            .next_pollable
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("pollable id overflow"))?;
+        self.pollables.insert(id, deadline);
+        Ok(id)
+    }
+
+    pub(crate) fn pollable_deadline(&self, id: u32) -> Result<Instant> {
+        self.pollables
+            .get(&id)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("expired pollable"))
+    }
+
+    pub(crate) fn remove_pollable(&mut self, id: u32) {
+        self.pollables.remove(&id);
+    }
+
+    pub(crate) fn clear_pollables(&mut self) {
+        self.pollables.clear();
     }
 
     pub(crate) fn failure(&mut self, code: impl Into<String>) {
