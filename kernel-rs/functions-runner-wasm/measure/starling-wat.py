@@ -59,6 +59,60 @@ if not body_lowerings:
 if '(core module $konae_body_scratch' not in ''.join(lines):
     lines.insert(body_lowerings[0], scratch)
 
+# StarlingMonkey's preview1 random_get stub traps. Forward it through the
+# componentized WASI random interface so engine WebCrypto uses the host source.
+random_get = next(i for i, line in enumerate(lines) if '(func $random_get ' in line)
+random_get_end = next(i for i in range(random_get + 1, len(lines)) if lines[i].strip() == ')')
+if '      unreachable\n' not in ''.join(lines[random_get:random_get_end + 1]):
+    raise SystemExit('Pinned random_get stub changed')
+random_import = re.search(
+    r'\(import "wasi:random/random@0\.2\.10" "get-random-bytes" \(func \(;([0-9]+);\)',
+    ''.join(lines),
+)
+realloc_export = re.search(r'\(export "cabi_realloc" \(func ([0-9]+)\)\)', ''.join(lines))
+if not random_import or not realloc_export:
+    raise SystemExit('Pinned random or allocator export changed')
+random_body = '''    (func $random_get (type 2) (param $buffer i32) (param $size i32) (result i32)
+      (local $result i32) (local $bytes i32) (local $length i32)
+      i32.const 0
+      i32.const 0
+      i32.const 4
+      i32.const 8
+      call $KONAE_REALLOC
+      local.set $result
+      local.get $size
+      i64.extend_i32_u
+      local.get $result
+      call $KONAE_RANDOM
+      local.get $result
+      i32.load
+      local.set $bytes
+      local.get $result
+      i32.load offset=4
+      local.set $length
+      local.get $buffer
+      local.get $bytes
+      local.get $length
+      memory.copy
+      local.get $bytes
+      local.get $length
+      i32.const 1
+      i32.const 0
+      call $KONAE_REALLOC
+      drop
+      local.get $result
+      i32.const 8
+      i32.const 4
+      i32.const 0
+      call $KONAE_REALLOC
+      drop
+      i32.const 0
+    )
+'''.replace('$KONAE_REALLOC', realloc_export.group(1)).replace(
+    '$KONAE_RANDOM', random_import.group(1)
+).splitlines(keepends=True)
+lines[random_get:random_get_end + 1] = random_body
+
 # This sequence calls SpiderMonkey's private full-GC entry point. The builder
 # checks the pinned engine digest before invoking this probe.
 start = next(i for i, line in enumerate(lines) if 'i32.store offset=4632' in line)
@@ -75,11 +129,22 @@ gc_body = ''.join(lines[begin:end + 1])
 def trampoline_for_call(target):
     calls = [i for i, line in enumerate(lines) if line.strip() == f'call {target}']
     if len(calls) != 1:
-        raise SystemExit(f'Expected one trampoline call to host function {target}')
+        raise SystemExit(f'Expected one trampoline call to host function {target}, found {len(calls)}')
     return max(i for i in range(calls[0]) if lines[i].startswith('    (func (;'))
 
-body_read_trampoline = trampoline_for_call(1)
-response_chunk_trampoline = trampoline_for_call(2)
+def imported_host_function(name):
+    pattern = re.compile(
+        rf'\(import "konae:worker/host" "{re.escape(name)}" '
+        r'\(func \(;([0-9]+);\)'
+    )
+    matches = [pattern.search(line) for line in lines]
+    indices = [int(match.group(1)) for match in matches if match]
+    if len(indices) != 1:
+        raise SystemExit(f'Expected one host import for {name}, found {len(indices)}')
+    return indices[0]
+
+body_read_trampoline = trampoline_for_call(imported_host_function('op-worker-body-read'))
+response_chunk_trampoline = trampoline_for_call(imported_host_function('op-worker-response-chunk'))
 return_record = '''
       local.get 2
       global.get $konae_body_return_record
