@@ -9,8 +9,10 @@ use wasmparser::{
 use crate::refusal::{Refusal, refuse};
 
 const ABI: &str = "konae-functions-wasm/1";
-const ALLOWED_COMPONENT_IMPORTS: [&str; 15] = [
+const CRYPTO_INTERFACE: &str = "konae:worker/crypto";
+const ALLOWED_COMPONENT_IMPORTS: [&str; 16] = [
     "konae:worker/host",
+    CRYPTO_INTERFACE,
     "wasi:cli/stderr@0.2.10",
     "wasi:cli/stderr@0.2.12",
     "wasi:clocks/monotonic-clock@0.2.10",
@@ -195,7 +197,11 @@ pub(crate) fn verify_component(
         && ["wasi:random/random@0.2.10", "wasi:random/random@0.2.12"]
             .iter()
             .any(|name| imports.iter().any(|(actual, _)| actual == name));
-    if !supported_imports || !has_host || !has_request_web_imports || !host_interface_matches(types)
+    if !supported_imports
+        || !has_host
+        || !has_request_web_imports
+        || !host_interface_matches(types)
+        || !crypto_interface_matches(types)
     {
         return Err(refuse_error(
             "function.wasm-import",
@@ -253,6 +259,57 @@ fn host_interface_matches(types: TypesRef<'_>) -> bool {
         )
         && function_matches(types, exports.get("now-ms"), &[], Some("f64"))
         && function_matches(types, exports.get("random-seed"), &[], Some("u64"))
+}
+
+fn crypto_interface_matches(types: TypesRef<'_>) -> bool {
+    // Components prepared before the host crypto adapter have no crypto interface.
+    let Some(ComponentEntityType::Instance(instance)) =
+        types.component_entity_type_of_import(CRYPTO_INTERFACE)
+    else {
+        return true;
+    };
+    let exports = &types[instance].exports;
+    let signature = [
+        (&["id"][..], "u32"),
+        (&["algorithm"][..], "string"),
+        (&["hash"][..], "string"),
+        (&["salt-length"][..], "u32"),
+        (&["data"][..], "bytes"),
+    ];
+    let mut verification = signature.to_vec();
+    verification.push((&["signature"], "bytes"));
+    exports.len() == 6
+        && function_matches(
+            types,
+            exports.get("digest"),
+            &[(&["hash"], "string"), (&["data"], "bytes")],
+            Some("result-bytes"),
+        )
+        && function_matches(
+            types,
+            exports.get("random-bytes"),
+            &[(&["length"], "u32")],
+            Some("result-bytes"),
+        )
+        && function_matches(
+            types,
+            exports.get("import-key"),
+            &[(&["options"], "string"), (&["material"], "bytes")],
+            Some("result-string"),
+        )
+        && function_matches(
+            types,
+            exports.get("export-key"),
+            &[(&["id"], "u32"), (&["format"], "string")],
+            Some("result-bytes"),
+        )
+        && function_matches(types, exports.get("sign"), &signature, Some("result-bytes"))
+        && function_matches(
+            types,
+            exports.get("verify"),
+            &verification,
+            Some("result-bool"),
+        )
 }
 
 fn runner_exports_match(types: TypesRef<'_>) -> bool {
@@ -326,6 +383,17 @@ fn value_matches(types: TypesRef<'_>, actual: ComponentValType, expected: &str) 
             types[id],
             ComponentDefinedType::Option(P(PrimitiveValType::String))
         ),
+        (T(id), expected) if expected.starts_with("result-") => {
+            let ComponentDefinedType::Result {
+                ok: Some(ok),
+                err: Some(err),
+            } = types[id]
+            else {
+                return false;
+            };
+            value_matches(types, ok, &expected["result-".len()..])
+                && value_matches(types, err, "string")
+        }
         _ => false,
     }
 }
@@ -420,13 +488,20 @@ mod tests {
                 "malformed_wit" => vec![0, 97, 115, 109, 13, 0, 1, 255],
                 "wrong_host_signature" => component_fixture(true, false),
                 "wrong_runner_signature" => component_fixture(false, true),
+                "wrong_crypto_signature" | "extra_crypto_export" => {
+                    let imports = ALLOWED_COMPONENT_IMPORTS
+                        .iter()
+                        .map(|name| name.to_string())
+                        .collect::<Vec<_>>();
+                    component_with_imports(&imports, fixture["kind"].as_str().unwrap())
+                }
                 "extra_import" => {
                     let mut imports = ALLOWED_COMPONENT_IMPORTS
                         .iter()
                         .map(|name| (*name).to_owned())
                         .collect::<Vec<_>>();
                     imports.push(fixture["interface"].as_str().unwrap().to_owned());
-                    component_with_imports(&imports)
+                    component_with_imports(&imports, "")
                 }
                 other => panic!("unknown WIT fixture {other}"),
             };
@@ -462,16 +537,76 @@ mod tests {
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>()
         );
-        let bytes = component_with_imports(&imports);
+        let bytes = component_with_imports(&imports, "");
         let manifest = WasmManifest {
             abi: ABI.into(),
             input_sha256: "00".repeat(32),
             component_sha256: format!("{:x}", Sha256::digest(&bytes)),
         };
         verify_component(&manifest, &manifest.input_sha256, &bytes).unwrap();
+
+        let prior_imports = imports
+            .into_iter()
+            .filter(|name| name != CRYPTO_INTERFACE)
+            .collect::<Vec<_>>();
+        let bytes = component_with_imports(&prior_imports, "");
+        let manifest = WasmManifest {
+            component_sha256: format!("{:x}", Sha256::digest(&bytes)),
+            ..manifest
+        };
+        verify_component(&manifest, &manifest.input_sha256, &bytes).unwrap();
     }
 
-    fn component_with_imports(import_names: &[String]) -> Vec<u8> {
+    fn component_with_imports(import_names: &[String], fixture: &str) -> Vec<u8> {
+        let mut crypto = InstanceType::new();
+        let bytes = EncodedValType::Type(0);
+        let string = EncodedValType::Primitive(EncodedPrimitive::String);
+        let u32_ = EncodedValType::Primitive(EncodedPrimitive::U32);
+        let bool_ = EncodedValType::Primitive(EncodedPrimitive::Bool);
+        crypto.ty().defined_type().list(EncodedPrimitive::U8);
+        for ok in [bytes, string, bool_] {
+            crypto.ty().defined_type().result(Some(ok), Some(string));
+        }
+        let sign = [
+            ("id", u32_),
+            ("algorithm", string),
+            ("hash", string),
+            ("salt-length", u32_),
+            ("data", bytes),
+        ];
+        let mut verify = sign.to_vec();
+        verify.push(("signature", bytes));
+        let digest_result = if fixture == "wrong_crypto_signature" {
+            2
+        } else {
+            1
+        };
+        for (index, (name, params, result)) in [
+            (
+                "digest",
+                &[("hash", string), ("data", bytes)][..],
+                digest_result,
+            ),
+            ("random-bytes", &[("length", u32_)], 1),
+            ("import-key", &[("options", string), ("material", bytes)], 2),
+            ("export-key", &[("id", u32_), ("format", string)], 1),
+            ("sign", &sign, 1),
+            ("verify", &verify, 3),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            crypto
+                .ty()
+                .function()
+                .params(params.iter().copied())
+                .result(Some(EncodedValType::Type(result)));
+            crypto.export(name, ComponentTypeRef::Func(4 + index as u32));
+        }
+        if fixture == "extra_crypto_export" {
+            crypto.export("extra", ComponentTypeRef::Func(4));
+        }
+
         let mut host = InstanceType::new();
         host.ty().defined_type().list(EncodedPrimitive::U8);
         host.ty().defined_type().option(EncodedPrimitive::String);
@@ -542,6 +677,7 @@ mod tests {
         types.ty().instance(&host);
         types.ty().instance(&runner);
         types.ty().instance(&InstanceType::new());
+        types.ty().instance(&crypto);
         let mut component = Component::new();
         component.section(&types);
         let mut imports = ComponentImportSection::new();
@@ -550,6 +686,8 @@ mod tests {
         for name in import_names {
             let type_index = if name == "konae:worker/host" {
                 0
+            } else if name == CRYPTO_INTERFACE {
+                3
             } else if runner_instance.is_none() {
                 runner_instance = Some(instance_index);
                 1
@@ -638,7 +776,7 @@ mod tests {
         if wrong_exports {
             for name in ALLOWED_COMPONENT_IMPORTS
                 .iter()
-                .filter(|name| **name != "konae:worker/host")
+                .filter(|name| !matches!(**name, "konae:worker/host" | CRYPTO_INTERFACE))
             {
                 imports.import(*name, ComponentTypeRef::Instance(1));
             }

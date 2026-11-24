@@ -25,8 +25,9 @@ use wasmtime::{
 
 const MAX_COMPONENT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RANDOM_BYTES: u64 = 1 << 20;
-const ALLOWED_COMPONENT_IMPORTS: [&str; 15] = [
+const ALLOWED_COMPONENT_IMPORTS: [&str; 16] = [
     "konae:worker/host",
+    "konae:worker/crypto",
     "wasi:cli/stderr@0.2.10",
     "wasi:cli/stderr@0.2.12",
     "wasi:clocks/monotonic-clock@0.2.10",
@@ -119,7 +120,7 @@ fn link_worker_imports(linker: &mut Linker<Bridge>) -> Result<()> {
         Ok((u64::from_le_bytes(bytes),))
     })?;
     link_request_web_imports(linker)?;
-    Ok(())
+    crate::crypto::link(linker)
 }
 
 pub struct PreparedComponents {
@@ -274,6 +275,7 @@ impl Invocation {
         let function: TypedFunc<(&str, u32), (String,)> =
             self.instance.get_typed_func(&mut self.store, "handle")?;
         let result = function.call(&mut self.store, (&input, limit as u32));
+        self.store.data_mut().crypto.clear();
         if let Some(code) = self.store.data().failure.as_ref() {
             return Err(WorkerError::with_detail(
                 code.clone(),
@@ -490,7 +492,7 @@ fn require_live_request(store: &mut wasmtime::StoreContextMut<'_, Bridge>) -> Re
     Ok(())
 }
 
-fn fill_entropy(output: &mut [u8]) -> Result<()> {
+pub(crate) fn fill_entropy(output: &mut [u8]) -> Result<()> {
     for chunk in output.chunks_mut(256) {
         let result = unsafe { libc::getentropy(chunk.as_mut_ptr().cast(), chunk.len()) };
         if result != 0 {

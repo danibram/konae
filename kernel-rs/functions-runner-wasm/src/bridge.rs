@@ -32,6 +32,8 @@ pub struct Bridge {
     next_pollable: u32,
     pollables: HashMap<u32, Instant>,
     pub request: Option<Arc<Request>>,
+    #[cfg(feature = "starling-runner")]
+    pub crypto: crate::crypto::Keys,
     replies: Arc<Receiver<ParentMessage>>,
     max_operations: usize,
     operations: u64,
@@ -61,6 +63,8 @@ impl Bridge {
             next_pollable: 1,
             pollables: HashMap::new(),
             request,
+            #[cfg(feature = "starling-runner")]
+            crypto: crate::crypto::Keys::default(),
             replies,
             max_operations,
             operations: 0,

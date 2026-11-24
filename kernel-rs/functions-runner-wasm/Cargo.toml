@@ -8,6 +8,10 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+base64 = { version = "0.22", optional = true }
+openssl = { version = "0.10.82", features = ["vendored"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+zeroize = { version = "1.9", optional = true }
 konae-functions-executor = { path = "../functions-executor" }
 serde_json = "1"
 sha2 = "0.10.9"
@@ -28,7 +32,7 @@ opt-level = 3
 default = ["starling-runner"]
 quickjs-runner = ["dep:libc"]
 starling-bench = ["wasmtime/component-model", "wasmtime/pooling-allocator"]
-starling-runner = ["starling-bench", "dep:libc"]
+starling-runner = ["starling-bench", "dep:base64", "dep:libc", "dep:openssl", "dep:serde", "dep:zeroize"]
 
 [[bin]]
 name = "starling-bench"

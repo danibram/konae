@@ -1,4 +1,6 @@
 mod bridge;
+#[cfg(feature = "starling-runner")]
+mod crypto;
 mod engine_config;
 #[cfg(any(
     all(feature = "quickjs-runner", feature = "starling-runner"),

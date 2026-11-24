@@ -1,5 +1,6 @@
 import { opWorkerCall, opWorkerBodyRead, opWorkerResponseChunk, opWorkerFailure, nowMs, randomSeed } from 'konae:worker/host';
 import { dispatch } from './dispatch.js';
+import { installCrypto } from './starling-crypto.js';
 
 let running = false;
 let requestGeneration = 0;
@@ -12,7 +13,6 @@ const nativeTimers = {
   clearInterval: globalThis.clearInterval,
   queueMicrotask: globalThis.queueMicrotask,
 };
-const nativeCrypto = globalThis.crypto;
 const nativePerformance = globalThis.performance;
 const initEffectCode = 'function.wasm-init-effect';
 
@@ -76,34 +76,11 @@ globalThis.queueMicrotask = callback => {
   });
 };
 
-function cryptoCall(target, property) {
-  const method = Reflect.get(target, property, target);
-  if (typeof method !== 'function') return method;
-  return (...args) => {
-    if (!running) refuseInitializationEffect(`crypto.${String(property)}`);
-    const result = Reflect.apply(method, target, args);
-    if (property !== 'importKey' || args[0] !== 'jwk' || args[3] !== true) return result;
-    const jwk = args[1];
-    if (!jwk || jwk.ext !== undefined || jwk.d !== undefined || !['EC', 'RSA'].includes(jwk.kty)) return result;
-    return result.catch(error => {
-      if (error?.name !== 'DataError') throw error;
-      const compatibleArgs = [...args];
-      compatibleArgs[3] = false;
-      return Reflect.apply(method, target, compatibleArgs);
-    });
-  };
-}
-
-const subtleProxy = new Proxy(nativeCrypto.subtle, {
-  get(target, property) { return cryptoCall(target, property); },
+let handlingRequest = false;
+installCrypto(api => {
+  if (!running) refuseInitializationEffect(api);
+  if (!handlingRequest) throw new DOMException('The request has ended.', 'InvalidStateError');
 });
-const cryptoProxy = new Proxy(nativeCrypto, {
-  get(target, property) {
-    if (property === 'subtle') return subtleProxy;
-    return cryptoCall(target, property);
-  },
-});
-Object.defineProperty(globalThis, 'crypto', { value: cryptoProxy, configurable: true, writable: true });
 delete globalThis.WebAssembly;
 const performanceProxy = new Proxy(nativePerformance, {
   get(target, property) {
@@ -165,9 +142,11 @@ export function hostRuntime(app) {
         opWorkerFailure('function_handle_missing');
         throw new Error('The bundle must export handle');
       }
+      handlingRequest = true;
       try {
         return await runtime.invoke(app.handle, input, limit);
       } finally {
+        handlingRequest = false;
         clearAllTimers();
         running = false;
       }
