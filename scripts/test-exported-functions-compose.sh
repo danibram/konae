@@ -27,7 +27,7 @@ compose() {
 }
 request() {
   if [ "$runner_kind" = deno ]; then
-    compose exec -T --user "$(id -u):$(id -g)" kernel curl "$@"
+    compose exec -T kernel curl "$@"
   else
     curl "$@"
   fi
