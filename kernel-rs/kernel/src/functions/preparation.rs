@@ -617,14 +617,14 @@ mod tests {
         command.args([
             "-ec",
             r#"
-test ! -e /dev/fd/9
+for fd in /dev/fd/[0-9]*; do test "${fd##*/}" -lt 9; done
 test "$(ps -o pgid= -p "$$" | tr -d ' ')" = "$$"
 if [ -r /proc/$$/status ]; then
     awk '/^Cap(Inh|Prm|Eff|Amb):/ && $2 !~ /^0+$/ { exit 1 }
          /^NoNewPrivs:/ { if ($2 != 1) exit 1; seen = 1 }
          END { if (!seen) exit 1 }' /proc/$$/status
 fi
-/bin/sh -ec 'test ! -e /dev/fd/9; test "$(ps -o pgid= -p "$$" | tr -d " ")" = "$1"' child "$$"
+/bin/sh -ec 'test "$(ps -o pgid= -p "$$" | tr -d " ")" = "$1"' child "$$"
 "#,
         ]);
         unsafe {
@@ -635,8 +635,8 @@ fi
                 }
                 let result = libc::fcntl(fd, libc::F_DUPFD, 9);
                 libc::close(fd);
-                if result != 9 {
-                    return Err(io::Error::other("Could not open test descriptor 9"));
+                if result < 0 {
+                    return Err(io::Error::last_os_error());
                 }
                 Ok(())
             });
