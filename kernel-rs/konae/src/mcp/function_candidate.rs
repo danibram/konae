@@ -13,8 +13,8 @@ pub(super) async fn check(
     principal: &str,
     args: &Value,
 ) -> Result<Value> {
-    check_with(state, owner, principal, args, |kernel, artifact| async move {
-        kernel::functions::check_preparation(&kernel, &artifact).await
+    check_with(state, owner, principal, args, |kernel, project, artifact| async move {
+        kernel::functions::check_preparation(&kernel, &project, &artifact).await
     })
     .await
 }
@@ -27,8 +27,8 @@ async fn check_with<F, Fut>(
     prepare: F,
 ) -> Result<Value>
 where
-    F: FnOnce(kernel::AppState, kernel::functions::ServerArtifact) -> Fut,
-    Fut: Future<Output = Result<()>>,
+    F: FnOnce(kernel::AppState, String, kernel::functions::ServerArtifact) -> Fut,
+    Fut: Future<Output = Result<bool>>,
 {
     let project_id = args["projectId"]
         .as_str()
@@ -79,9 +79,9 @@ where
     let value: Value = serde_json::from_slice(&bytes)
         .context("Candidate upload must be a Server Artifact JSON object")?;
     let artifact = kernel::functions::parse_server_artifact(&value)?;
-    prepare(state.kernel.clone(), artifact).await?;
+    let checked = prepare(state.kernel.clone(), project_id.to_owned(), artifact).await?;
     Ok(json!({
-        "status":"accepted",
+        "status": if checked { "accepted" } else { "unchecked" },
         "scratchRevision":args["scratchRevision"],
         "buildFingerprint":expected
     }))
@@ -125,10 +125,11 @@ mod tests {
         let result = check_with(
             &state, &owner, "owner:owner",
             &json!({"projectId":"app_one","transferId":transfer_id,"scratchRevision":"revision-a","buildFingerprint":fingerprint}),
-            |_, artifact| async move {
+            |_, project, artifact| async move {
+                assert_eq!(project, "app_one");
                 assert_eq!(artifact.manifest.functions.len(), 1);
                 prepared_in_callback.store(true, Ordering::SeqCst);
-                Ok(())
+                Ok(true)
             },
         ).await.unwrap();
         assert!(prepared.load(Ordering::SeqCst));
@@ -138,13 +139,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_missing_preparer_reports_an_unchecked_candidate() {
+        let (state, owner, transfer_id, _, fingerprint) = fixture().await;
+        let result = check(
+            &state, &owner, "owner:owner",
+            &json!({"projectId":"app_one", "transferId":transfer_id, "buildFingerprint":fingerprint}),
+        ).await.unwrap();
+        assert_eq!(result["status"], "unchecked");
+    }
+
+    #[tokio::test]
     async fn handler_refuses_a_transfer_scoped_to_another_project_and_read_only_credentials() {
         let (state, mut owner, transfer_id, _bytes, fingerprint) = fixture().await;
         let args = json!({"projectId":"app_one","transferId":transfer_id,"scratchRevision":"revision-a","buildFingerprint":fingerprint});
-        let wrong_project = check_with(&state, &owner, "owner:owner", &json!({"projectId":"app_two","transferId":args["transferId"],"scratchRevision":"revision-a","buildFingerprint":args["buildFingerprint"]}), |_, _| async { Ok(()) }).await.unwrap_err();
+        let wrong_project = check_with(&state, &owner, "owner:owner", &json!({"projectId":"app_two","transferId":args["transferId"],"scratchRevision":"revision-a","buildFingerprint":args["buildFingerprint"]}), |_, _, _| async { Ok(true) }).await.unwrap_err();
         assert!(wrong_project.to_string().contains("Candidate upload belongs to another project."));
         owner.scopes = vec!["read".into()];
-        let read_only = check_with(&state, &owner, "owner:owner", &args, |_, _| async { Ok(()) }).await.unwrap_err();
+        let read_only = check_with(&state, &owner, "owner:owner", &args, |_, _, _| async { Ok(true) }).await.unwrap_err();
         assert!(read_only.to_string().contains("Permission denied for write"));
     }
 }

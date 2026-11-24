@@ -80,13 +80,23 @@ pub async fn start_locked(
     tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
-    if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm") {
-        let deployments = state.deployments.read().await.values().cloned().collect::<Vec<_>>();
-        for deployment in deployments {
-            let artifact = functions::read_artifact(&crate::layout::server(&state.data_root, &deployment.id))?;
-            let prepared = functions::prepare_artifact(artifact.as_ref()).await
-                .with_context(|| format!("Could not prepare functions for app {} before startup", deployment.id))?;
-            state.functions.retain_prepared(&deployment.id, &prepared);
+    let deployments = state.deployments.read().await.values()
+        .filter(|deployment| deployment.server.as_ref().is_some_and(|server| !server.manifest.functions.is_empty()))
+        .cloned().collect::<Vec<_>>();
+    for deployment in deployments {
+        let id = &deployment.id;
+        let prepared = async {
+            let artifact = functions::read_artifact(&crate::layout::server(&state.data_root, id))?
+                .context("Published Server Artifact is missing")?;
+            functions::prepare_artifact(&state, Some(&artifact)).await
+        }.await;
+        match prepared {
+            Ok(pin) => state.functions.retain_prepared(id, pin),
+            Err(error) if error.is::<functions::ConfigurationError>() => return Err(error),
+            Err(error) => {
+                state.functions.block_preparation(id);
+                eprintln!("Not serving functions for apps/{id}: {error:#}");
+            }
         }
     }
     path::load(&state);
@@ -205,5 +215,100 @@ mod bind_tests {
         let startup = Startup { port: 0, bind: "256.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new(), execution_mode: execution::ExecutionMode::Live };
         let message = bind(&startup).await.unwrap_err().to_string();
         assert!(message.starts_with("Could not listen on 256.0.0.1:0: "), "{message}");
+    }
+}
+
+#[cfg(test)]
+mod function_tests {
+    use super::*;
+    use crate::functions::tests::{publish, release};
+    use std::{fs, process::{Child, Command, Stdio}, time::{Duration, Instant}};
+
+    struct Server(Child);
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the Konae binary, preparer and a real function worker"]
+    async fn startup_refuses_one_apps_functions_and_repairs_a_cold_cache_miss() {
+        let runner = std::env::var_os("KONAE_TEST_FUNCTION_WORKER").unwrap();
+        let helper = std::env::var_os("KONAE_TEST_FUNCTION_PREPARER")
+            .or_else(|| std::env::var_os("KONAE_FUNCTIONS_PREPARER")).unwrap();
+        let konae = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("konae");
+        let root = std::env::temp_dir().join(format!("konae-function-startup-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let cache = root.join("wasm-cache");
+        fs::create_dir(&cache).unwrap();
+        let state = AppState::for_test(&root);
+        let bad = publish(&state, &release("bad", "Math.random(); export function handle() { return new Response('unexpected'); }")).await;
+        let good = publish(&state, &release("good", "export function handle() { return new Response('ready'); }")).await;
+
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let origin = format!("http://127.0.0.1:{port}");
+        let log = root.join("stderr");
+        let wasm = std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() != Ok("deno");
+        let mut command = Command::new(&konae);
+        command.env_clear()
+            .env("KONAE_DATA_DIR", &root)
+            .env("KONAE_BIND", "127.0.0.1")
+            .env("KONAE_KERNEL_PORT", port.to_string())
+            .env("KONAE_PUBLIC_ORIGIN", &origin)
+            .env("KONAE_EXECUTION_MODE", "test")
+            .env("KONAE_MAIL_TRANSPORT", "development")
+            .env("KONAE_FUNCTIONS_RUNNER", runner)
+            .env("KONAE_FUNCTIONS_PREPARER", helper)
+            .env("KONAE_FUNCTIONS_WASM_CACHE", &cache)
+            .env("KONAE_FUNCTIONS_DEVELOPMENT", "1")
+            .env("KONAE_FUNCTIONS_TIMEOUT_MS", "5000")
+            .stdout(Stdio::null())
+            .stderr(fs::File::create(&log).unwrap());
+        if !wasm {
+            command.env("KONAE_FUNCTIONS_RUNNER_KIND", "deno");
+        }
+        let mut server = Server(command.spawn().unwrap());
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).no_proxy().build().unwrap();
+        let get = |host: &str, path: &str| client.get(format!("{origin}{path}")).header("Host", host);
+        let deadline = Instant::now() + Duration::from_secs(95);
+        loop {
+            if get("localhost", "/_konae/health").send().await.is_ok() {
+                break;
+            }
+            assert!(server.0.try_wait().unwrap().is_none(), "{}", fs::read_to_string(&log).unwrap());
+            assert!(Instant::now() < deadline, "{}", fs::read_to_string(&log).unwrap());
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let refused = get(&bad.hostname, "/api/orders").send().await.unwrap();
+        assert_eq!(refused.status(), 503);
+        let page = get(&bad.hostname, "/").send().await.unwrap();
+        assert_eq!(page.status(), 200);
+        assert!(page.text().await.unwrap().contains("<p>public</p>"));
+        assert!(fs::read_to_string(&log).unwrap().contains("Not serving functions for apps/bad"));
+
+        if wasm {
+            let alias = fs::read_dir(&cache).unwrap().map(|entry| entry.unwrap())
+                .find(|entry| entry.file_name().to_string_lossy().starts_with(".alias-")).unwrap().path();
+            fs::remove_file(&alias).unwrap();
+            assert_eq!(get(&good.hostname, "/api/orders").send().await.unwrap().status(), 503);
+            let deadline = Instant::now() + Duration::from_secs(95);
+            while !alias.exists() {
+                assert!(Instant::now() < deadline, "{}", fs::read_to_string(&log).unwrap());
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }
+        let reply = get(&good.hostname, "/api/orders").send().await.unwrap();
+        let status = reply.status();
+        let body = reply.text().await.unwrap();
+        println!("GET {} /api/orders -> {status} {body}", good.hostname);
+        assert_eq!(status, 200);
+        assert_eq!(body, "ready");
+        drop(server);
+        fs::remove_dir_all(root).unwrap();
     }
 }
