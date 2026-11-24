@@ -7,14 +7,24 @@ on:
       - kernel-rs/Cargo.toml
       - kernel-rs/functions-executor/**
       - kernel-rs/functions-runner/**
+      - kernel-rs/functions-runner-wasm/**
+      - kernel-rs/functions-prepare/**
+      - kernel-rs/functions-executor/src/supervisor.rs
       - kernel-rs/kernel/src/functions/**
       - kernel-rs/kernel/src/app_folders/folder.rs
       - scripts/build-functions-runner.sh
       - scripts/build-functions-images.sh
       - ops/kernel-entrypoint.sh
       - Dockerfile.kernel
+      - Dockerfile.konae
+      - Dockerfile.functions-runner
+      - Dockerfile.kernel
+      - Dockerfile.konae
       - docker-compose.yml
+      - .dockerignore
       - scripts/test-exported-functions-compose.sh
+      - docs/operate.md
+      - docs/guides/take-the-app-elsewhere.md
       - src/lib/app-folder.ts
       - src/lib/app-folder.test.ts
       - docs/functions.md
@@ -36,6 +46,40 @@ jobs:
         run: rustup toolchain install 1.91.0 --profile minimal
       - name: Test the runner and watchdog
         run: cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml
+
+  wasm-runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install 1.91.0 --profile minimal
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install pinned component tools
+        run: npm install --prefix "$RUNNER_TEMP/starling-tools" --no-audit --no-fund --save-exact @bytecodealliance/componentize-js@0.21.0 esbuild@0.25.12 es-module-lexer@1.7.0
+      - name: Build preparation helper
+        run: KONAE_STARLING_TOOLS="$RUNNER_TEMP/starling-tools" cargo build --release --locked --manifest-path kernel-rs/functions-prepare/Cargo.toml
+      - name: Test StarlingMonkey worker and watchdog
+        env:
+          KONAE_FUNCTIONS_PREPARER: ${{ github.workspace }}/kernel-rs/functions-prepare/target/release/konae-functions-prepare
+        run: cargo test --release --locked --manifest-path kernel-rs/functions-runner-wasm/Cargo.toml -- --test-threads=1
+
+  wasm-export-compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install editor dependencies
+        run: bun install --frozen-lockfile
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Run exported Wasm app under default Compose security profiles
+        run: scripts/test-exported-functions-compose.sh
 
   strict-linux:
     strategy:
@@ -88,8 +132,8 @@ jobs:
               test -e "$cg/delegated/cgroup.kill"
               chown "$KERNEL_UID:$KERNEL_GID" "$cg/delegated" "$cg/delegated/cgroup.procs" "$cg/delegated/kernel-manager" "$cg/delegated/kernel-manager/cgroup.procs"
               run_tests() {
-                setpriv --reuid="$KERNEL_UID" --regid="$KERNEL_GID" --clear-groups --bounding-set=-all,+setuid,+setgid \
-                  --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid --no-new-privs \
+                setpriv --reuid="$KERNEL_UID" --regid="$KERNEL_GID" --clear-groups --bounding-set=-all,+setuid,+setgid,+kill \
+                  --inh-caps=+setuid,+setgid,+kill --ambient-caps=+setuid,+setgid,+kill --no-new-privs \
                   env HOME=/tmp KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
                   KONAE_TEST_FUNCTION_WORKER="$RUNNER_BIN" KONAE_TEST_FUNCTION_CGROUP="$cg/delegated" \
                   "$TEST_BINARY" "$@" --ignored --test-threads=1

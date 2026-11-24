@@ -53,22 +53,28 @@ test("the generated compose stays unchanged when the published app has no functi
   expect(env).not.toContain("KONAE_FUNCTIONS_");
 });
 
-test("the generated compose configures the packaged runner and delegated cgroup for published functions", () => {
+test("the generated compose configures the packaged Wasm runner and persistent cache for published functions", () => {
   const files = folderSettings(true);
   const compose = files.find((file) => file.path === "compose.yaml")?.contents as string;
   const env = files.find((file) => file.path === ".env.example")?.contents as string;
-  expect(compose).toContain("KONAE_FUNCTIONS_RUNNER: ${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner}");
-  expect(compose).toContain("KONAE_FUNCTIONS_CGROUP: ${KONAE_FUNCTIONS_CGROUP:-auto}");
+  expect(compose).toContain("KONAE_FUNCTIONS_RUNNER: ${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner-wasm}");
+  expect(compose).toContain("KONAE_FUNCTIONS_RUNNER_KIND: ${KONAE_FUNCTIONS_RUNNER_KIND:-wasm}");
+  expect(compose).toContain("KONAE_FUNCTIONS_PREPARER: ${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}");
+  expect(compose).toContain("KONAE_FUNCTIONS_WASM_CACHE: ${KONAE_FUNCTIONS_WASM_CACHE:-/kernel/.konae/wasm-cache}");
   expect(compose).toContain('KONAE_FUNCTIONS_UID: ${KONAE_FUNCTIONS_UID:-10002}');
   expect(compose).toContain('KONAE_FUNCTIONS_GID: ${KONAE_FUNCTIONS_GID:-10002}');
-  expect(compose).toContain("cgroup: private");
-  expect(compose).toContain("- SYS_ADMIN\n      - SETUID\n      - SETGID");
-  expect(compose).toContain("apparmor=unconfined");
+  expect(compose).not.toContain("cgroup:");
+  expect(compose).toContain("- SETUID\n      - SETGID\n      - KILL");
+  expect(compose).not.toContain("SYS_ADMIN");
+  expect(compose).not.toContain("security_opt:");
   expect(compose).not.toContain("cgroup_parent");
   expect(compose).not.toContain("/sys/fs/cgroup");
   expect(compose.match(/volumes:/g)).toHaveLength(2);
-  expect(env).toContain("KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner");
-  expect(env).toContain("KONAE_FUNCTIONS_CGROUP=auto");
+  expect(env).toContain("KONAE_FUNCTIONS_RUNNER_KIND=wasm");
+  expect(env).toContain("KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner-wasm");
+  expect(env).toContain("KONAE_FUNCTIONS_PREPARER=/usr/local/lib/konae/functions-prepare");
+  expect(env).toContain("KONAE_FUNCTIONS_WASM_CACHE=/kernel/.konae/wasm-cache");
+  expect(env).not.toContain("KONAE_FUNCTIONS_CGROUP");
   expect(env).toContain("KONAE_FUNCTIONS_UID=10002");
   expect(env).toContain("KONAE_FUNCTIONS_GID=10002");
 });

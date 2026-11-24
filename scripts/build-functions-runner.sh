@@ -19,13 +19,22 @@ docker buildx build --platform "$platform" --target artifact \
   --output "type=local,dest=$scratch" \
   --file "$root/Dockerfile.functions-runner" "$root"
 
-runner="$scratch/konae-functions-runner"
-test -x "$runner" || { echo 'el build no produjo el runner ejecutable' >&2; exit 1; }
+runner="$scratch/konae-functions-runner-wasm"
+deno_runner="$scratch/konae-functions-runner-deno"
+preparer="$scratch/konae-functions-prepare"
+test -x "$runner" && test -x "$deno_runner" && test -x "$preparer" || { echo 'the build did not produce both runners and the preparation helper' >&2; exit 1; }
 description=$(file -b "$runner")
 case "$description" in
   *"$expected"*) ;;
   *) echo "runner $description, se esperaba $arch" >&2; exit 1 ;;
 esac
+deno_description=$(file -b "$deno_runner")
+case "$deno_description" in
+  *"$expected"*) ;;
+  *) echo "deno runner $deno_description, se esperaba $arch" >&2; exit 1 ;;
+esac
 mkdir -p "$output"
-install -m 755 "$runner" "$output/konae-functions-runner"
-shasum -a 256 "$output/konae-functions-runner"
+install -m 755 "$runner" "$output/konae-functions-runner-wasm"
+install -m 755 "$deno_runner" "$output/konae-functions-runner-deno"
+install -m 755 "$preparer" "$output/konae-functions-prepare"
+shasum -a 256 "$output/konae-functions-runner-wasm" "$output/konae-functions-runner-deno" "$output/konae-functions-prepare"

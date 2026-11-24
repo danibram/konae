@@ -144,10 +144,12 @@ KONAE_HOST_SUFFIX=localhost
 # How account email leaves: resend, smtp or development, which writes it to mailbox.jsonl in the Kernel's volume.
 # Without a transport, invitations and password resets are refused.
 KONAE_MAIL_TRANSPORT=
-${hasFunctions ? `# The runner shipped in the Kernel image executes published functions.
-KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner
-# The entrypoint finds this service's private subtree and replaces "auto" with its path.
-KONAE_FUNCTIONS_CGROUP=auto
+${hasFunctions ? `# The StarlingMonkey runner and preparation helper ship in the Kernel image.
+KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner-wasm
+KONAE_FUNCTIONS_RUNNER_KIND=wasm
+KONAE_FUNCTIONS_PREPARER=/usr/local/lib/konae/functions-prepare
+# Prepared components live in this installation volume and survive container restarts.
+KONAE_FUNCTIONS_WASM_CACHE=/kernel/.konae/wasm-cache
 # The Kernel starts isolated workers with this separate Linux identity.
 KONAE_FUNCTIONS_UID=10002
 KONAE_FUNCTIONS_GID=10002
@@ -168,25 +170,20 @@ services:
       KONAE_KERNEL_PORT: "8787"
       KONAE_DATA_DIR: /kernel
 ${hasFunctions ? `      # The image includes the runner built with this Kernel.
-      KONAE_FUNCTIONS_RUNNER: \${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner}
-      # The entrypoint prepares this cgroup v2 subtree before starting the Kernel.
-      KONAE_FUNCTIONS_CGROUP: \${KONAE_FUNCTIONS_CGROUP:-auto}
+      KONAE_FUNCTIONS_RUNNER: \${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner-wasm}
+      KONAE_FUNCTIONS_RUNNER_KIND: \${KONAE_FUNCTIONS_RUNNER_KIND:-wasm}
+      KONAE_FUNCTIONS_PREPARER: \${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}
+      KONAE_FUNCTIONS_WASM_CACHE: \${KONAE_FUNCTIONS_WASM_CACHE:-/kernel/.konae/wasm-cache}
       # The Kernel starts isolated workers with this separate Linux identity.
       KONAE_FUNCTIONS_UID: \${KONAE_FUNCTIONS_UID:-10002}
       KONAE_FUNCTIONS_GID: \${KONAE_FUNCTIONS_GID:-10002}
 ` : ""}    ports:
       - "127.0.0.1:\${KONAE_PORT:-8787}:8787"
-${hasFunctions ? `    # A private cgroup namespace gives the entrypoint a container-local cgroup v2 root.
-    cgroup: private
-    # The entrypoint remounts that root writable, prepares the workers' subtree, then drops
-    # SYS_ADMIN. The Kernel keeps SETUID and SETGID to start each worker with its own identity.
+${hasFunctions ? `    # The Kernel keeps only the capabilities needed to start and reap isolated workers.
     cap_add:
-      - SYS_ADMIN
       - SETUID
       - SETGID
-    # Docker's default AppArmor profile denies mounts inside containers; the remount needs this.
-    security_opt:
-      - apparmor=unconfined
+      - KILL
     volumes:
       - ./:/kernel/apps/${settings.id}
       - kernel:/kernel

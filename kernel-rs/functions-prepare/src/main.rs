@@ -530,7 +530,10 @@ fn core_ty(ty: &CoreTy) -> &'static str {
 
 fn check_init(snapshot: &[u8]) -> Result<i32> {
     let mut config = wasmtime::Config::new();
-    config.epoch_interruption(true);
+    config
+        .epoch_interruption(true)
+        .wasm_reference_types(true)
+        .wasm_function_references(true);
     let engine = Engine::new(&config)?;
     let timeout_engine = engine.clone();
     thread::spawn(move || {

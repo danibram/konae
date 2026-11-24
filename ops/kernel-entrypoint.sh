@@ -7,6 +7,16 @@ if [ "$(id -u)" = 0 ]; then
   chown "$owner" "$data" "$data/apps"
   export HOME="$data"
   if [ -n "${KONAE_FUNCTIONS_RUNNER:-}" ] && [ "${KONAE_FUNCTIONS_DEVELOPMENT:-0}" != "1" ]; then
+    if [ "${KONAE_FUNCTIONS_RUNNER_KIND:-deno}" = wasm ]; then
+      cache=${KONAE_FUNCTIONS_WASM_CACHE:-$data/.konae/wasm-cache}
+      mkdir -p "$cache"
+      chown "$owner" "$cache"
+      chmod 0700 "$cache"
+      exec setpriv --reuid="${owner%%:*}" --regid="${owner##*:}" --clear-groups \
+        --bounding-set=-all,+setuid,+setgid,+kill \
+        --inh-caps=+setuid,+setgid,+kill --ambient-caps=+setuid,+setgid,+kill \
+        -- /usr/local/lib/konae/kernel "$@"
+    fi
     cgroup_mount=/sys/fs/cgroup
     # A private cgroup namespace puts this process at the namespace root. Docker mounts that
     # root read-only; with CAP_SYS_ADMIN the entrypoint remounts it writable, and setpriv drops
@@ -42,7 +52,8 @@ if [ "$(id -u)" = 0 ]; then
       "$functions_cgroup/kernel-manager" "$functions_cgroup/kernel-manager/cgroup.procs"
     export KONAE_FUNCTIONS_CGROUP="$functions_cgroup"
     exec setpriv --reuid="${owner%%:*}" --regid="${owner##*:}" --clear-groups \
-      --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid \
+      --bounding-set=-all,+setuid,+setgid,+kill \
+      --inh-caps=+setuid,+setgid,+kill --ambient-caps=+setuid,+setgid,+kill \
       -- /usr/local/lib/konae/kernel "$@"
   fi
   exec setpriv --reuid="${owner%%:*}" --regid="${owner##*:}" --clear-groups --inh-caps=-all -- /usr/local/lib/konae/kernel "$@"
