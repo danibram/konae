@@ -10,12 +10,12 @@ I ran the unmodified `e162cc7f` runner on an Apple M3 Pro with 18 GiB of RAM and
 
 I sampled RSS with `proc_pidinfo(PROC_PIDTASKINFO)`, the same reading the executor uses on macOS. The probe attempted a sample every 2 ms while waiting for each reply and took a separate snapshot after each reply. I used `vmmap -wide -noCoalesce -interleaved` for the size of anonymous executable mappings and the read/write range within Wasmtime's linear memory pool. The latter measures the guest's accessible linear memory. It excludes virtual address guards and says nothing about how many pages the host currently keeps resident.
 
-| Functions | Ready RSS, MiB | Peak sampled Init RSS, MiB | RSS after last GET, MiB | Executable mappings at Ready / after last GET, MiB | Guest linear memory at Ready / after each GET, MiB |
+| Functions | Ready RSS, MiB | Peak sampled Init RSS, MiB | RSS range after GETs, MiB | Executable mappings at Ready / after each GET, MiB | Guest linear memory at Ready / after each GET, MiB |
 | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 | 102.19 | 102.19 | 24.48 | 18.16 / 18.16 | 0 / 9.06 |
-| 3 | 200.86 | 200.86 | 24.69 | 54.47 / 54.47 | 0 / 9.06 |
-| 6 | 196.14 | 258.06 | 24.92 | 108.94 / 108.94 | 0 / 9.06 |
-| 18 | 389.66 | 398.56 | 24.59 | 326.81 / 326.81 | 0 / 9.06 |
+| 3 | 200.86 | 200.86 | 24.59 to 24.69 | 54.47 / 54.47 | 0 / 9.06 |
+| 6 | 196.14 | 258.06 | 24.72 to 25.00 | 108.94 / 108.94 | 0 / 9.06 |
+| 18 | 389.66 | 398.56 | 20.09 to 25.09 | 326.81 / 326.81 | 0 / 9.06 |
 
 macOS reported anonymous pages in the `vmmap` SWAP column between snapshots. The executable mappings stayed in place even when the measured RSS fell. Each native image includes 18.16 MiB of executable instructions and other sections that bring the image to 47.91 MiB. The baseline's file read buffer and Wasmtime's copy into anonymous memory can both contribute to Init RSS.
 
@@ -30,6 +30,13 @@ The first lazy-loading build still needed a median 1,226 ms per switch over 24 d
 After recompiling the same portable fixture, the same 24 switches took a median 140 ms and a maximum 394 ms in a run without `vmmap`. All 28 invocations returned 200. The highest sampled RSS was 3.05 MiB at Ready and 107.28 MiB during requests.
 
 The repeat with `vmmap` measured zero component executable mappings at Ready and one 18.16 MiB component executable mapping after every request, for all four function counts. The guest had 9.06 MiB of accessible linear memory after each request. The native file with unwind records disabled weighed 46.57 MiB.
+
+| Functions | Ready RSS, MiB | RSS range after GETs, MiB |
+| ---: | ---: | ---: |
+| 1 | 3.02 | 105.86 |
+| 3 | 3.05 | 105.81 to 106.25 |
+| 6 | 3.03 | 105.78 to 105.97 |
+| 18 | 3.03 | 105.86 to 106.19 |
 
 ## File verification before worker launch
 
