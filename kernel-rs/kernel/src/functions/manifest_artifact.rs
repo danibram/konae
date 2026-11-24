@@ -340,10 +340,13 @@ fn bundle_contract_refusal(name: &str) -> Refusal {
 }
 
 pub fn read_artifact(directory: &Path) -> Result<Option<ServerArtifact>> {
-    Ok(read_artifact_with_metadata(directory)?.map(|(artifact, _)| artifact))
+    Ok(read_artifact_with_metadata(directory, None)?.map(|(artifact, _)| artifact))
 }
 
-pub(crate) fn read_artifact_with_metadata(directory: &Path) -> Result<Option<(ServerArtifact, Published)>> {
+pub(crate) fn read_artifact_with_metadata(
+    directory: &Path,
+    expected: Option<&Published>,
+) -> Result<Option<(ServerArtifact, Published)>> {
     if !directory.exists() { return Ok(None); }
     if std::fs::read_dir(directory)?.next().is_none() { return Ok(None); }
     let file = directory.join("manifest.json");
@@ -361,7 +364,18 @@ pub(crate) fn read_artifact_with_metadata(directory: &Path) -> Result<Option<(Se
         bundles.insert(name.clone(), std::fs::read_to_string(path)?);
     }
     let artifact = ServerArtifact { version: published.version, abi: published.abi.clone(), manifest: published.manifest.clone(), bundles };
-    let checked = validate_artifact(Some(&published.manifest), Some(&artifact))?.unwrap();
+    let checked = if let Some(expected) = expected {
+        anyhow::ensure!(expected == &published, "Published server artifact changed");
+        let mut checked = published.clone();
+        checked.hashes = artifact
+            .bundles
+            .iter()
+            .map(|(name, bundle)| (name.clone(), format!("{:x}", Sha256::digest(bundle.as_bytes()))))
+            .collect();
+        checked
+    } else {
+        validate_artifact(Some(&published.manifest), Some(&artifact))?.unwrap()
+    };
     if checked != published {
         return Err(anyhow::Error::new(refuse(
             "function.artifact-digest",

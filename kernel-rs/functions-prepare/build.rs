@@ -36,28 +36,31 @@ fn main() -> Result<()> {
     copy(&adapter, &out.join("wasi-reactor.wasm"))?;
     copy(&guest.join("starling.wit"), &out.join("starling.wit"))?;
     let target = env::var("TARGET")?;
-    let platform = if target.contains("apple-darwin") {
-        "darwin"
-    } else if target.contains("linux") {
-        "linux"
-    } else {
-        bail!("Unsupported Wizer target {target}")
-    };
-    let arch = if target.starts_with("aarch64") {
-        "arm64"
-    } else if target.starts_with("x86_64") {
-        "x64"
-    } else {
-        bail!("Unsupported Wizer target {target}")
+    let os = env::var("CARGO_CFG_TARGET_OS")?;
+    let arch = env::var("CARGO_CFG_TARGET_ARCH")?;
+    let (wizer_package, wizer_sha256) = match (os.as_str(), arch.as_str()) {
+        ("macos", "aarch64") => (
+            "wizer-darwin-arm64",
+            "22e35af0887a351ef8a702fd10630abf056ce8387d9580461ea30d72adf50ee7",
+        ),
+        ("macos", "x86_64") => (
+            "wizer-darwin-x64",
+            "d7c6868e7318df271cc53fe0fde5706b7e346b346be10be6e453d5890e941dab",
+        ),
+        ("linux", "aarch64") => (
+            "wizer-linux-arm64",
+            "c0b1f9acc56d8536259cfc5398416c3947ddb572b3535e3dcc8ccd6703694d18",
+        ),
+        ("linux", "x86_64") => (
+            "wizer-linux-x64",
+            "bd74fcd8677c5c511f8a7b053965d774bf0534109638a8e1b015d6190d26cb6e",
+        ),
+        _ => bail!("Unsupported Wizer target {target}"),
     };
     let wizer = tools.join(format!(
-        "node_modules/@bytecodealliance/wizer-{platform}-{arch}/wizer"
+        "node_modules/@bytecodealliance/{wizer_package}/wizer"
     ));
-    let version = Command::new(&wizer).arg("--version").output()?;
-    let version = String::from_utf8_lossy(&version.stdout);
-    if !version.contains("10.0.0") {
-        bail!("Expected Wizer 10.0.0, found {}", version.trim());
-    }
+    ensure_sha(&wizer, wizer_sha256)?;
     copy(&wizer, &out.join("wizer"))?;
     let adapter_source = guest.join("starling-runtime.js");
     let esbuild = tools.join("node_modules/.bin/esbuild");
@@ -120,7 +123,11 @@ fn main() -> Result<()> {
     println!("cargo:rustc-env=KONAE_ENGINE_SHA256={}", digest(&engine)?);
     println!(
         "cargo:rustc-env=KONAE_BUILDER_FINGERPRINT={}",
-        fingerprint(&root, &guest, &engine, &adapter_bundle, &web_bundle)?
+        fingerprint(
+            &root,
+            &guest,
+            [&engine, &adapter_bundle, &web_bundle, &wizer, &adapter]
+        )?
     );
     println!("cargo:rerun-if-changed=src/main.rs");
     println!("cargo:rerun-if-changed=src/streaming.rs");
@@ -160,38 +167,10 @@ fn check_package(path: &std::path::Path, version: &str) -> Result<()> {
 fn fingerprint(
     root: &std::path::Path,
     guest: &std::path::Path,
-    engine: &std::path::Path,
-    adapter_bundle: &std::path::Path,
-    web_bundle: &std::path::Path,
+    assets: [&std::path::Path; 5],
 ) -> Result<String> {
     let mut hash = Sha256::new();
-    let target = env::var("TARGET").unwrap_or_default();
-    let platform = if target.contains("apple-darwin") {
-        "darwin"
-    } else {
-        "linux"
-    };
-    let arch = if target.starts_with("aarch64") {
-        "arm64"
-    } else {
-        "x64"
-    };
-    let wizer = env::var_os("KONAE_STARLING_TOOLS")
-        .map(PathBuf::from)
-        .context("Set KONAE_STARLING_TOOLS")?
-        .join(format!(
-            "node_modules/@bytecodealliance/wizer-{platform}-{arch}/wizer"
-        ));
-    let adapter = env::var_os("KONAE_STARLING_TOOLS")
-        .map(PathBuf::from)
-        .context("Set KONAE_STARLING_TOOLS")?
-        .join("node_modules/@bytecodealliance/jco/lib/wasi_snapshot_preview1.reactor.wasm");
-    for path in [
-        engine.to_path_buf(),
-        adapter_bundle.to_path_buf(),
-        web_bundle.to_path_buf(),
-        wizer,
-        adapter,
+    let sources = [
         guest.join("starling.wit"),
         guest.join("starling-entry.js"),
         guest.join("starling-runtime.js"),
@@ -210,9 +189,13 @@ fn fingerprint(
         root.join("vendor/spidermonkey-embedding-splicer/src/bindgen.rs"),
         root.join("vendor/spidermonkey-embedding-splicer/src/wit.rs"),
         root.join("vendor/spidermonkey-embedding-splicer/src/lib.rs"),
-    ] {
+    ];
+    for path in assets
+        .into_iter()
+        .chain(sources.iter().map(|path| path.as_path()))
+    {
         hash.update(path.file_name().unwrap().to_string_lossy().as_bytes());
-        hash.update((fs::metadata(&path)?.len() as u64).to_le_bytes());
+        hash.update(fs::metadata(path)?.len().to_le_bytes());
         hash.update(fs::read(path)?);
     }
     hash.update(

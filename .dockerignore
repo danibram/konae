@@ -2,11 +2,13 @@
 .audit/
 .env*
 .konae/
+.konae-export-functions.*/
 data/
 dist/
 node_modules/
 **/node_modules/
 kernel-rs/target/
+**/target/
 kernel-rs/functions-runner/target/
 spikes/functions-runtime/app/
 spikes/functions-runtime/baselines/

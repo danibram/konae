@@ -1286,7 +1286,7 @@ fn pinned_bundle(
         anyhow::ensure!(bundles.contains_key(name), "Missing function bundle");
         return Ok(bundles);
     }
-    let (artifact, checked) = crate::functions::read_artifact_with_metadata(&server)?
+    let (artifact, checked) = crate::functions::read_artifact_with_metadata(&server, Some(published))?
         .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
     anyhow::ensure!(&checked == published, "Published server artifact changed");
     let source = Arc::new(artifact.bundles);

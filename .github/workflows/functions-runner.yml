@@ -7,14 +7,20 @@ on:
       - kernel-rs/Cargo.toml
       - kernel-rs/functions-executor/**
       - kernel-rs/functions-runner/**
+      - kernel-rs/functions-runner-wasm/**
+      - kernel-rs/functions-prepare/**
       - kernel-rs/kernel/src/functions/**
       - kernel-rs/kernel/src/app_folders/folder.rs
       - scripts/build-functions-runner.sh
       - scripts/build-functions-images.sh
       - ops/kernel-entrypoint.sh
+      - Dockerfile.functions-runner
       - Dockerfile.kernel
+      - Dockerfile.konae
       - docker-compose.yml
+      - .dockerignore
       - scripts/test-exported-functions-compose.sh
+      - docs/operate.md
       - src/lib/app-folder.ts
       - src/lib/app-folder.test.ts
       - docs/functions.md
@@ -36,6 +42,69 @@ jobs:
         run: rustup toolchain install 1.91.0 --profile minimal
       - name: Test the runner and watchdog
         run: cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml
+
+  wasm-runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install 1.91.0 --profile minimal
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install pinned component tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/starling-tools" --no-audit --no-fund --save-exact \
+            @bytecodealliance/componentize-js@0.21.0 @bytecodealliance/jco@1.42.0 \
+            @bytecodealliance/wizer@10.0.0 esbuild@0.25.12 es-module-lexer@1.7.0
+      - name: Build preparation helper
+        env:
+          KONAE_STARLING_TOOLS: ${{ runner.temp }}/starling-tools
+        run: |
+          cargo test --release --locked --manifest-path kernel-rs/functions-prepare/Cargo.toml -- --test-threads=1
+          cargo build --release --locked --manifest-path kernel-rs/functions-prepare/Cargo.toml
+      - name: Test StarlingMonkey worker and watchdog
+        env:
+          KONAE_FUNCTIONS_PREPARER: ${{ github.workspace }}/kernel-rs/functions-prepare/target/release/konae-functions-prepare
+        run: cargo test --release --locked --manifest-path kernel-rs/functions-runner-wasm/Cargo.toml -- --test-threads=1
+
+  export-compose:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: ubuntu-24.04
+            arch: amd64
+          - host: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install editor dependencies
+        run: bun install --frozen-lockfile
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build both packaged runners and the Wasm preparer
+        run: scripts/build-functions-runner.sh "${{ matrix.arch }}" "$RUNNER_TEMP/functions-packaged"
+      - name: Build images with the packaged binaries
+        id: images
+        run: |
+          docker buildx prune --all --force
+          scripts/build-functions-images.sh "$RUNNER_TEMP/functions-packaged" konae-export-ci
+      - name: Run exported Wasm app under default Compose security profiles
+        env:
+          KONAE_EXPORT_CHECK_IMAGE: konae-export-ci-kernel
+        run: scripts/test-exported-functions-compose.sh wasm
+      - name: Run exported deno_core app with development polling
+        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
+        env:
+          KONAE_EXPORT_CHECK_IMAGE: konae-export-ci-kernel
+        run: scripts/test-exported-functions-compose.sh deno
 
   strict-linux:
     strategy:
@@ -88,8 +157,8 @@ jobs:
               test -e "$cg/delegated/cgroup.kill"
               chown "$KERNEL_UID:$KERNEL_GID" "$cg/delegated" "$cg/delegated/cgroup.procs" "$cg/delegated/kernel-manager" "$cg/delegated/kernel-manager/cgroup.procs"
               run_tests() {
-                setpriv --reuid="$KERNEL_UID" --regid="$KERNEL_GID" --clear-groups --bounding-set=-all,+setuid,+setgid \
-                  --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid --no-new-privs \
+                setpriv --reuid="$KERNEL_UID" --regid="$KERNEL_GID" --clear-groups --bounding-set=-all,+setuid,+setgid,+kill \
+                  --inh-caps=+setuid,+setgid,+kill --ambient-caps=+setuid,+setgid,+kill --no-new-privs \
                   env HOME=/tmp KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
                   KONAE_TEST_FUNCTION_WORKER="$RUNNER_BIN" KONAE_TEST_FUNCTION_CGROUP="$cg/delegated" \
                   "$TEST_BINARY" "$@" --ignored --test-threads=1
@@ -115,5 +184,3 @@ jobs:
               run_tests real_ || diagnose
               run_tests functions_export_import_executes_the_published_bundle_with_imported_identity || diagnose
             '
-      - name: Build and run an exported function folder, then deny Landlock
-        run: scripts/test-exported-functions-compose.sh

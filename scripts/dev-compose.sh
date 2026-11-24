@@ -13,9 +13,11 @@ case "$arch" in
   amd64) expected='x86-64' ;;
   arm64) expected='ARM aarch64' ;;
 esac
-runner="$output/konae-functions-runner"
+runner="$output/konae-functions-runner-wasm"
+deno_runner="$output/konae-functions-runner-deno"
+preparer="$output/konae-functions-prepare"
 valid=0
-if [ -x "$runner" ] && command -v file >/dev/null 2>&1; then
+if [ -x "$runner" ] && [ -x "$deno_runner" ] && [ -x "$preparer" ] && command -v file >/dev/null 2>&1; then
   description=$(file -b "$runner")
   case "$description" in *"$expected"*) valid=1 ;; esac
 fi
@@ -23,6 +25,8 @@ if [ "$valid" -ne 1 ]; then
   sh "$root/scripts/build-functions-runner.sh" "$arch" "$output"
 fi
 KONAE_FUNCTIONS_RUNNER_SHA256=$(shasum -a 256 "$runner" | awk '{print $1}')
-export KONAE_FUNCTIONS_RUNNER_SHA256
+KONAE_FUNCTIONS_DENO_RUNNER_SHA256=$(shasum -a 256 "$deno_runner" | awk '{print $1}')
+KONAE_FUNCTIONS_PREPARER_SHA256=$(shasum -a 256 "$preparer" | awk '{print $1}')
+export KONAE_FUNCTIONS_RUNNER_SHA256 KONAE_FUNCTIONS_DENO_RUNNER_SHA256 KONAE_FUNCTIONS_PREPARER_SHA256
 cd "$root"
 KONAE_FUNCTIONS_RUNNER_CONTEXT="$output" docker compose "$@"

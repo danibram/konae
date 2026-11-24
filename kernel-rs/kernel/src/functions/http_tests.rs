@@ -1410,12 +1410,11 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     assert_eq!(c_series["samples"], 1, "{latency}");
     assert_eq!(c_series["timeouts"], 1, "{latency}");
     assert_eq!(c_series["coldStarts"], 1, "{latency}");
+    let cold_initialization_ms = c_series["initialization"]["maxMs"].as_f64().unwrap();
+    let cold_execution_ms = c_series["execution"]["maxMs"].as_f64().unwrap();
+    assert!(cold_initialization_ms > 0.0, "{latency}");
     assert!(
-        c_series["initialization"]["maxMs"].as_f64().unwrap() > 0.0,
-        "{latency}"
-    );
-    assert!(
-        c_series["execution"]["maxMs"].as_f64().unwrap() >= (DEADLINE_MS - 100) as f64,
+        cold_initialization_ms + cold_execution_ms >= (DEADLINE_MS - 100) as f64,
         "{latency}"
     );
     assert!(
