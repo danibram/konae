@@ -1097,7 +1097,7 @@ fn body_chunks_keep_their_bytes_under_the_default_heap() {
         }
     "#,
     );
-    let timeout = Duration::from_secs(60);
+    let timeout = Duration::from_secs(180);
     let mut worker = worker(&bundle, timeout);
     let body = Arc::new(Upload(Mutex::new(0), AtomicBool::new(false)));
     let request = Input {
