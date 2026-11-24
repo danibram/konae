@@ -56,9 +56,16 @@ jobs:
         with:
           node-version: 22
       - name: Install pinned component tools
-        run: npm install --prefix "$RUNNER_TEMP/starling-tools" --no-audit --no-fund --save-exact @bytecodealliance/componentize-js@0.21.0 esbuild@0.25.12 es-module-lexer@1.7.0
+        run: |
+          npm install --prefix "$RUNNER_TEMP/starling-tools" --no-audit --no-fund --save-exact \
+            @bytecodealliance/componentize-js@0.21.0 @bytecodealliance/jco@1.42.0 \
+            @bytecodealliance/wizer@10.0.0 esbuild@0.25.12 es-module-lexer@1.7.0
       - name: Build preparation helper
-        run: KONAE_STARLING_TOOLS="$RUNNER_TEMP/starling-tools" cargo build --release --locked --manifest-path kernel-rs/functions-prepare/Cargo.toml
+        env:
+          KONAE_STARLING_TOOLS: ${{ runner.temp }}/starling-tools
+        run: |
+          cargo test --release --locked --manifest-path kernel-rs/functions-prepare/Cargo.toml -- --test-threads=1
+          cargo build --release --locked --manifest-path kernel-rs/functions-prepare/Cargo.toml
       - name: Test StarlingMonkey worker and watchdog
         env:
           KONAE_FUNCTIONS_PREPARER: ${{ github.workspace }}/kernel-rs/functions-prepare/target/release/konae-functions-prepare

@@ -240,6 +240,7 @@ fn prepare_bundle(
             "--init-func",
             "componentize.wizer",
             "--wasm-bulk-memory=true",
+            "--wasm-reference-types=true",
             "--inherit-env=true",
         ])
         .arg(format!("--dir={}", dir.display()))
@@ -353,7 +354,7 @@ fn prepare_bundle(
         ));
     }
     let snapshot_bytes = fs::read(&snapshot).context("Wizer produced no snapshot")?;
-    let check_status = check_init(&snapshot_bytes)?;
+    let check_status = check_init(&snapshot_bytes).context("check initialized Wizer snapshot")?;
     match check_status {
         1 => {
             return Ok((
@@ -579,6 +580,23 @@ fn check_init(snapshot: &[u8]) -> Result<i32> {
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
+
+    #[test]
+    fn prepares_starlingmonkey_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("bundle.mjs");
+        let output = dir.path().join("component.wasm");
+        fs::write(
+            &input,
+            "export function handle() { return new Response('ok'); }",
+        )
+        .unwrap();
+
+        let (status, manifest, diagnostic) = prepare_bundle(&input, &output).unwrap();
+        assert_eq!(status, "ok", "{diagnostic:?}");
+        let sha = hex(Sha256::digest(fs::read(output).unwrap()).as_slice());
+        assert_eq!(manifest.unwrap().component_sha256, sha);
+    }
 
     #[test]
     fn scratch_limit_counts_files_across_the_directory() {
