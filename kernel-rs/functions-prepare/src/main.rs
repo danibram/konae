@@ -205,9 +205,10 @@ fn prepare_bundle(
         fs::set_permissions(&wizer_path, fs::Permissions::from_mode(0o700))?;
     }
     let mut command = Command::new(&wizer_path);
+    command.env_clear();
+    #[cfg(target_os = "linux")]
+    command.env("HOME", dir);
     command
-        .env_clear()
-        .env("HOME", dir)
         .env("SOURCE_NAME", "source.js")
         .env("DEBUG", "")
         .env("FEATURE_CLOCKS", "1")
