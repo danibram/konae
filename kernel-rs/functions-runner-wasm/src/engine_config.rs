@@ -19,5 +19,8 @@ pub fn starling() -> wasmtime::Config {
     config
         .epoch_interruption(true)
         .allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pool));
+    // libunwind can spend more than a second unregistering a StarlingMonkey image on macOS.
+    #[cfg(target_os = "macos")]
+    config.native_unwind_info(false);
     config
 }
