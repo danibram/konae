@@ -25,6 +25,13 @@ export COMPOSE_PROJECT_NAME
 compose() {
   (cd "$scratch/exported" && KONAE_PORT="$port" docker compose "$@")
 }
+request() {
+  if [ "$runner_kind" = deno ]; then
+    compose exec -T --user "$(id -u):$(id -g)" kernel curl "$@"
+  else
+    curl "$@"
+  fi
+}
 cleanup() {
   if [ "${KONAE_KEEP_EXPORT_CHECK:-0}" = 1 ]; then
     printf 'export_check_files=%s\n' "$scratch" >&2
@@ -77,12 +84,24 @@ export function handle() {
 EOF
 bun "$root/scripts/konae.ts" export --dir "$scratch/source" --out "$scratch/exported"
 sed "s|^KONAE_KERNEL_IMAGE=.*|KONAE_KERNEL_IMAGE=$tag-kernel|" "$scratch/exported/.env.example" > "$scratch/exported/.env"
+request_url="http://127.0.0.1:$port"
+response_dir="$scratch"
 if [ "$runner_kind" = deno ]; then
   cat >> "$scratch/exported/.env" <<'EOF'
 KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner-deno
 KONAE_FUNCTIONS_RUNNER_KIND=deno
 KONAE_FUNCTIONS_DEVELOPMENT=1
 EOF
+  cat > "$scratch/exported/compose.override.yaml" <<'EOF'
+services:
+  kernel:
+    environment:
+      KONAE_BIND: "127.0.0.1"
+    volumes:
+      - ..:/proof
+EOF
+  request_url="http://127.0.0.1:8787"
+  response_dir=/proof
 fi
 
 start_export() {
@@ -91,7 +110,7 @@ start_export() {
     return 1
   fi
   for attempt in $(seq 1 "$1"); do
-    if curl --fail --silent "http://127.0.0.1:$port/_konae/health" >/dev/null; then return 0; fi
+    if request --fail --silent "$request_url/_konae/health" >/dev/null; then return 0; fi
     sleep 1
   done
   compose logs kernel >&2
@@ -100,7 +119,7 @@ start_export() {
 }
 start_export 60
 host=export-functions-check.localhost:$port
-signup_status=$(curl --silent --show-error --dump-header "$scratch/signup.headers" -o "$scratch/signup.body" -w '%{http_code}' -H "Host: $host" -H "Origin: http://$host" -H 'Content-Type: application/json' -d '{"email":"worker@example.test","password":"correct horse battery"}' "http://127.0.0.1:$port/_konae/auth/signup")
+signup_status=$(request --silent --show-error --dump-header "$response_dir/signup.headers" -o "$response_dir/signup.body" -w '%{http_code}' -H "Host: $host" -H "Origin: http://$host" -H 'Content-Type: application/json' -d '{"email":"worker@example.test","password":"correct horse battery"}' "$request_url/_konae/auth/signup")
 test "$signup_status" = 200 || {
   cat "$scratch/signup.body" >&2
   echo "Signup failed with HTTP $signup_status" >&2
@@ -109,14 +128,14 @@ test "$signup_status" = 200 || {
 }
 cookie=$(awk '/^[Ss]et-[Cc]ookie:/ {sub(/^[^:]*:[[:space:]]*/, ""); sub(/;.*/, ""); print; exit}' "$scratch/signup.headers")
 test -n "$cookie" || { echo "Signup returned no session cookie" >&2; exit 1; }
-get_result=$(curl --silent --show-error -o "$scratch/get.body" -w '%{http_code} %{time_total}' -H "Host: $host" -H "Cookie: $cookie" "http://127.0.0.1:$port/api/counter0")
+get_result=$(request --silent --show-error -o "$response_dir/get.body" -w '%{http_code} %{time_total}' -H "Host: $host" -H "Cookie: $cookie" "$request_url/api/counter0")
 get_status=${get_result%% *}
 get_seconds=${get_result#* }
 get=$(cat "$scratch/get.body")
 test "$get_status" = 200 && test "$get" = '{"n":0}' || { echo "Unexpected authenticated GET ($get_status): $get" >&2; exit 1; }
 max_cold=$get_seconds
 for index in $(seq 1 9); do
-  cold_result=$(curl --silent --show-error -o "$scratch/cold.body" -w '%{http_code} %{time_total}' -H "Host: $host" -H "Cookie: $cookie" "http://127.0.0.1:$port/api/counter$index")
+  cold_result=$(request --silent --show-error -o "$response_dir/cold.body" -w '%{http_code} %{time_total}' -H "Host: $host" -H "Cookie: $cookie" "$request_url/api/counter$index")
   cold_status=${cold_result%% *}
   cold_seconds=${cold_result#* }
   test "$cold_status" = 200 && test "$(cat "$scratch/cold.body")" = '{"n":0}' || { echo "Cold GET $index failed: $cold_result" >&2; exit 1; }
@@ -125,7 +144,7 @@ done
 if [ "$runner_kind" = wasm ]; then
   awk -v seconds="$max_cold" 'BEGIN { if (seconds >= 0.250) exit 1 }' || { echo "Prepared cold GET maximum took ${max_cold}s, over 250ms" >&2; exit 1; }
 fi
-post_status=$(curl --silent --show-error -o "$scratch/post.body" -w '%{http_code}' -H "Host: $host" -H "Origin: http://$host" -H "Cookie: $cookie" -H 'Idempotency-Key: export-check-1' -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$port/api/counter0")
+post_status=$(request --silent --show-error -o "$response_dir/post.body" -w '%{http_code}' -H "Host: $host" -H "Origin: http://$host" -H "Cookie: $cookie" -H 'Idempotency-Key: export-check-1' -H 'Content-Type: application/json' -d '{}' "$request_url/api/counter0")
 post=$(cat "$scratch/post.body")
 test "$post_status" = 200 && test "$post" = '{"n":1}' || { echo "Unexpected authenticated POST ($post_status): $post" >&2; exit 1; }
 printf 'runner_kind=%s\nsignup=HTTP_%s\nauthenticated_get=%s %s\nauthenticated_post=%s %s\nfirst_get_max_seconds=%s samples=10\n' "$runner_kind" "$signup_status" "$get_status" "$get" "$post_status" "$post" "$max_cold"
@@ -134,7 +153,7 @@ worker_count() {
 }
 workers_before=$(worker_count)
 test "$workers_before" -ge 1 || { echo "Expected a warm function worker before the deadline probe" >&2; exit 1; }
-stall_status=$(curl --silent --show-error --max-time 4 -o "$scratch/stall.body" -w '%{http_code}' -H "Host: $host" -H "Cookie: $cookie" "http://127.0.0.1:$port/api/stall" || true)
+stall_status=$(request --silent --show-error --max-time 4 -o "$response_dir/stall.body" -w '%{http_code}' -H "Host: $host" -H "Cookie: $cookie" "$request_url/api/stall" || true)
 test "$stall_status" = 504 || { echo "Deadline probe returned HTTP $stall_status, expected 504" >&2; cat "$scratch/stall.body" >&2; exit 1; }
 for attempt in $(seq 1 30); do
   workers=$(worker_count)
@@ -143,7 +162,7 @@ for attempt in $(seq 1 30); do
 done
 test "$workers" -le "$workers_before" || { echo "Timed-out worker remained alive" >&2; exit 1; }
 printf 'deadline_probe=HTTP_%s worker_count_after_reap=%s\n' "$stall_status" "$workers"
-reuse_status=$(curl --silent --show-error -o "$scratch/reuse.body" -w '%{http_code}' -H "Host: $host" -H "Cookie: $cookie" "http://127.0.0.1:$port/api/counter0")
+reuse_status=$(request --silent --show-error -o "$response_dir/reuse.body" -w '%{http_code}' -H "Host: $host" -H "Cookie: $cookie" "$request_url/api/counter0")
 test "$reuse_status" = 200 && test "$(cat "$scratch/reuse.body")" = '{"n":1}' || { echo "A counter worker did not run after the deadline cleanup" >&2; exit 1; }
 printf 'slot_reuse=HTTP_%s %s\n' "$reuse_status" "$(cat "$scratch/reuse.body")"
 readback=$(compose exec -T kernel kernel sql 'SELECT n FROM count_state WHERE id=1 LIMIT 1;')
