@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use crate::{
     ActionProgram, AppState, Ran, action_lock, authenticate_deployment, calls, copies,
-    deployment_for, enter, error, guard, http, is_private, modules, notify, now_ms,
-    refusal_error, resolve_bindings, run_action_in_slot, usage,
+    deployment_for, enter, error, guard, http, is_private, modules, notify, now_ms, refusal_error,
+    resolve_bindings, run_action_in_slot, usage,
 };
 
 pub async fn invoke_action(
@@ -15,6 +15,17 @@ pub async fn invoke_action(
     AxumPath(name): AxumPath<String>,
     headers: HeaderMap,
     Json(input): Json<Value>,
+) -> Response {
+    let mut response = invoke_action_inner(state, name, headers.clone(), input).await;
+    crate::functions::trace::attach_request_response(&headers, &mut response);
+    response
+}
+
+async fn invoke_action_inner(
+    state: AppState,
+    name: String,
+    headers: HeaderMap,
+    input: Value,
 ) -> Response {
     let deployment = match deployment_for(&state, &headers).await {
         Some(value) => value,
@@ -38,17 +49,26 @@ pub async fn invoke_action(
     };
     // An action whose route does not answer anyone answers only there.
     if let Some(route) = http::route_only(&name, action, is_private(&deployment)) {
-        return error(StatusCode::FORBIDDEN, &format!("Action {name} answers only on its HTTP route, {route}."));
+        return error(
+            StatusCode::FORBIDDEN,
+            &format!("Action {name} answers only on its HTTP route, {route}."),
+        );
     }
     // A call's then mutation records what the call's answer said, so no one
     // else may write it.
     if let Some(call) = calls::then_of(&program, &name) {
-        return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only after the call {call} answers."));
+        return error(
+            StatusCode::FORBIDDEN,
+            &format!("Action {name} runs only after the call {call} answers."),
+        );
     }
     // A scheduled mutation with no route belongs to the Kernel's timer
 
     if action.schedule.is_some() && action.http.is_none() {
-        return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only on its schedule."));
+        return error(
+            StatusCode::FORBIDDEN,
+            &format!("Action {name} runs only on its schedule."),
+        );
     }
     let actor = match authenticate_deployment(&state, &deployment, &headers).await {
         Ok(actor) => actor,
@@ -74,18 +94,26 @@ pub async fn invoke_action(
         let response = calls::enqueue(&state, &deployment, &name, &input).await;
         if response.status().is_success() && !enter::entered(actor.as_ref()) {
             if let Some(user) = actor.as_ref() {
-                usage::count_account(&state.data_root, &deployment.id, &user.user_id, usage::AccountKind::Action);
+                usage::count_account(
+                    &state.data_root,
+                    &deployment.id,
+                    &user.user_id,
+                    usage::AccountKind::Action,
+                );
             }
         }
         return response;
     }
-    let db_path = crate::layout::database(&state
-        .data_root, &deployment.id);
-
+    let db_path = crate::layout::database(&state.data_root, &deployment.id);
 
     copies::operation::action(&state, &deployment.id, &name, action, async {
+        let action_started = std::time::Instant::now();
         let result = if action.kind == "signal" {
-            Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
+            Ok(Ran {
+                answer: json!({"recorded": true}),
+                rows: Vec::new(),
+                sqlite: std::time::Duration::ZERO,
+            })
         } else {
             let _guard = action_lock(&state, &deployment.id, &action.kind).await;
             match state.guards.statement_permit(&deployment.id).await {
@@ -93,6 +121,43 @@ pub async fn invoke_action(
                 Err(wait) => return http::rate_limited(wait),
             }
         };
+        let rows_read = result.as_ref().ok().and_then(|ran| {
+            ran.answer
+                .as_array()
+                .map(|rows| rows.len().min(u32::MAX as usize) as u32)
+        });
+        let rows_written = result
+            .as_ref()
+            .ok()
+            .and_then(|ran| ran.answer["changes"].as_u64())
+            .map(|rows| rows.min(u32::MAX as u64) as u32);
+        let reply_bytes = result
+            .as_ref()
+            .ok()
+            .and_then(|ran| serde_json::to_vec(&ran.answer).ok())
+            .map(|bytes| bytes.len().min(u32::MAX as usize) as u32);
+        let sqlite = result
+            .as_ref()
+            .ok()
+            .map_or(std::time::Duration::ZERO, |ran| ran.sqlite);
+        crate::usage::function_action_latency(
+            &state.data_root,
+            &deployment.id,
+            crate::usage::FunctionActionTiming {
+                action: name.clone(),
+                version: deployment.artifact_version.clone(),
+                origin: "runtime".into(),
+                duration: action_started.elapsed(),
+                sqlite,
+                rows_read,
+                rows_written,
+                reply_bytes,
+                error_code: result
+                    .as_ref()
+                    .err()
+                    .map(|_| "action-execution-failed".to_owned()),
+            },
+        );
         let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
 
         let counted = !enter::entered(actor.as_ref());
@@ -100,25 +165,63 @@ pub async fn invoke_action(
             Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
                 guard::Outcome::Refused(message) => {
                     if counted {
-                        usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
-                        usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
+                        usage::execution(
+                            &state.data_root,
+                            &deployment.id,
+                            &name,
+                            "runtime",
+                            "refused",
+                        );
+                        usage::count(
+                            &state.data_root,
+                            &deployment.id,
+                            usage::Operation::Refused(name.clone()),
+                        );
                     }
                     error(StatusCode::FORBIDDEN, &message)
                 }
                 changed => {
                     if counted {
                         usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
-                        usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                        usage::count(
+                            &state.data_root,
+                            &deployment.id,
+                            usage::Operation::Action(name.clone()),
+                        );
                         if let Some(account) = actor_id {
-                            usage::count_account(&state.data_root, &deployment.id, account, usage::AccountKind::Action);
+                            usage::count_account(
+                                &state.data_root,
+                                &deployment.id,
+                                account,
+                                usage::AccountKind::Action,
+                            );
                         }
                     }
                     if matches!(changed, guard::Outcome::Changed) {
                         if counted {
-                            usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                            usage::signal(
+                                &state.data_root,
+                                &deployment.id,
+                                &name,
+                                action,
+                                &input,
+                                actor_id,
+                            );
                         }
-                        let caller = notify::Caller { account: actor_id, actor_id };
-                        notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
+                        let caller = notify::Caller {
+                            account: actor_id,
+                            actor_id,
+                        };
+                        notify::record(
+                            &state,
+                            &deployment,
+                            &name,
+                            action,
+                            &input,
+                            caller,
+                            ran.changed(now_ms()),
+                        )
+                        .await;
                     }
                     Json(json!({"result": ran.answer})).into_response()
                 }
@@ -128,7 +231,8 @@ pub async fn invoke_action(
                     usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
                 }
                 error(StatusCode::BAD_REQUEST, &error_value.to_string())
-            },
+            }
         }
-    }).await
+    })
+    .await
 }

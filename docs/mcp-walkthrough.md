@@ -1466,7 +1466,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
-        "size": 65536,
+        "size": 73728,
         "transferId": "<usage download>"
       }
     },
@@ -1498,7 +1498,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         {
           "name": "usage",
           "sha256": "<sha256>",
-          "size": 65536
+          "size": 73728
         }
       ],
       "createdAt": <time ms>,
