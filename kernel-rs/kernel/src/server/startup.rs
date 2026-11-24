@@ -275,7 +275,7 @@ mod function_tests {
         let mut server = Server(command.spawn().unwrap());
         let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).no_proxy().build().unwrap();
         let get = |host: &str, path: &str| client.get(format!("{origin}{path}")).header("Host", host);
-        let deadline = Instant::now() + Duration::from_secs(95);
+        let deadline = Instant::now() + Duration::from_secs(285);
         loop {
             if get("localhost", "/_konae/health").send().await.is_ok() {
                 break;
@@ -296,7 +296,7 @@ mod function_tests {
                 .find(|entry| entry.file_name().to_string_lossy().starts_with(".alias-")).unwrap().path();
             fs::remove_file(&alias).unwrap();
             assert_eq!(get(&good.hostname, "/api/orders").send().await.unwrap().status(), 503);
-            let deadline = Instant::now() + Duration::from_secs(95);
+            let deadline = Instant::now() + Duration::from_secs(185);
             while !alias.exists() {
                 assert!(Instant::now() < deadline, "{}", fs::read_to_string(&log).unwrap());
                 tokio::time::sleep(Duration::from_millis(25)).await;

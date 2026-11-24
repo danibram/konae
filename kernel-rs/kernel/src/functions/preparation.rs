@@ -45,7 +45,7 @@ enum JobKey {
 struct PreparationJob {
     _permit: tokio::sync::SemaphorePermit<'static>,
     key: Option<JobKey>,
-    deadline: Instant,
+    queue_deadline: Instant,
 }
 
 impl PreparationJob {
@@ -66,7 +66,7 @@ impl PreparationJob {
         Ok(Self {
             _permit: permit,
             key,
-            deadline: Instant::now() + PREPARE_LIMIT,
+            queue_deadline: Instant::now() + PREPARE_LIMIT,
         })
     }
 }
@@ -210,7 +210,7 @@ impl Preparation {
         bundles: &BTreeMap<String, String>,
         job: PreparationJob,
     ) -> Result<PreparedPin> {
-        let deadline = job.deadline;
+        let deadline = job.queue_deadline;
         let _serial = loop {
             check_deadline(deadline)?;
             if let Ok(lock) = SERIAL.try_lock() {
@@ -223,7 +223,6 @@ impl Preparation {
         let mut pins = PreparedPin::default();
         let mut aliases = HashSet::new();
         for (name, source) in bundles {
-            check_deadline(deadline)?;
             let alias = cache.map(|cache| alias_key(source, &self.identity, &cache.target));
             if let (Some(cache), Some(alias)) = (cache, &alias) {
                 if !aliases.insert(alias.clone()) {
@@ -240,10 +239,11 @@ impl Preparation {
                 None => std::env::temp_dir().canonicalize()?,
             };
             let staging = Staging::new(&scratch)?;
-            let (manifest, component) =
-                self.portable_component(&staging, name, source, deadline)?;
+            let (manifest, component) = self.portable_component(&staging, name, source)?;
             if let (Some(cache), Some(alias)) = (cache, alias) {
-                let file = cache.install(&staging, &alias, &manifest, &component, deadline)?;
+                let file = cache
+                    .install(&staging, &alias, &manifest, &component)
+                    .with_context(|| format!("Prepare native component for {name}"))?;
                 pin_file(&mut pins, file)?;
             }
         }
@@ -255,7 +255,6 @@ impl Preparation {
         staging: &Staging,
         name: &str,
         source: &str,
-        deadline: Instant,
     ) -> Result<(WasmManifest, File)> {
         let input = staging.write(name, source.as_bytes())?;
         let output = staging.path.join("component.wasm");
@@ -268,8 +267,9 @@ impl Preparation {
                 "--output",
                 output.to_str().unwrap(),
             ],
-            deadline,
-        )?;
+            Instant::now() + PREPARE_LIMIT,
+        )
+        .with_context(|| format!("Prepare portable component for {name}"))?;
         if reply.status != "ok" {
             let status = parse_prepare_status(&reply.status)?;
             if let Some(diagnostic) = reply.diagnostic {
@@ -518,7 +518,6 @@ impl NativeCache {
         alias: &str,
         manifest: &WasmManifest,
         component: &File,
-        deadline: Instant,
     ) -> Result<File> {
         let cache = &self.directory;
         let mut key_hash = Sha256::new();
@@ -537,7 +536,12 @@ impl NativeCache {
             .saturating_add(8 * 1024 * 1024)
             .min(NATIVE_RESERVATION_LIMIT);
         ensure_cache_room(cache, reservation, cache_limit)?;
-        compile_component(&self.runner, &native, component, deadline)?;
+        compile_component(
+            &self.runner,
+            &native,
+            component,
+            Instant::now() + PREPARE_LIMIT,
+        )?;
         let mut file =
             open_cache_file(&native)?.context("Native compiler wrote an unsafe component")?;
         let digest = native_digest(&mut file)?.context("Invalid native component size")?;

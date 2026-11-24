@@ -1530,6 +1530,11 @@ async fn kernel_binary_keeps_other_apps_available_while_one_app_uploads_slowly()
         .unwrap();
     let base = format!("http://127.0.0.1:{port}/api/orders");
     let b_started = Instant::now();
+    let startup_budget = if super::super::runtime::wasm_selected() {
+        Duration::from_secs(3 * 180 + 15)
+    } else {
+        Duration::from_secs(10)
+    };
     let b_response = loop {
         if !server.try_wait().unwrap().is_none() {
             panic!("Kernel stopped before serving the published apps");
@@ -1552,10 +1557,11 @@ async fn kernel_binary_keeps_other_apps_available_while_one_app_uploads_slowly()
         {
             break response;
         }
-        assert!(
-            b_started.elapsed() < Duration::from_secs(10),
-            "Kernel did not start"
-        );
+        if b_started.elapsed() >= startup_budget {
+            let _ = server.kill();
+            let _ = server.wait();
+            panic!("Kernel did not start");
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     let b_output = String::from_utf8_lossy(&b_response.stdout);

@@ -1777,9 +1777,9 @@ export async function main() {
         const decoder = new TextDecoder();
         for await (const block of started.stderr as ReadableStream<Uint8Array>) { const text = decoder.decode(block); output += text; process.stderr.write(text); }
       })();
-      const hasFunctions = Object.keys(serverArtifact?.bundles ?? {}).length > 0;
-      // An installed release and an app folder can each require a preparation pass.
-      const startupDeadline = performance.now() + (hasFunctions ? 195_000 : 15_000);
+      const functionCount = Object.keys(serverArtifact?.bundles ?? {}).length;
+      // Preparation and native compilation each have a 90 second deadline.
+      const startupDeadline = performance.now() + 15_000 + 180_000 * functionCount;
       while (performance.now() < startupDeadline && !/listening on/.test(output) && !shuttingDown) {
         if (started.exitCode !== null) break;
         await Bun.sleep(100);
