@@ -405,6 +405,37 @@ mod linux {
         }
 
         #[test]
+        fn wasm_network_filter_refuses_socket_creation_after_exec() {
+            use std::{os::unix::process::CommandExt, process::Command};
+
+            const PROBE: &str = "KONAE_TEST_WASM_NETWORK_FILTER";
+            if std::env::var_os(PROBE).is_some() {
+                let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+                assert_eq!(fd, -1);
+                assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+                return;
+            }
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.env(PROBE, "1").args([
+                "--exact",
+                "sandbox::linux::tests::wasm_network_filter_refuses_socket_creation_after_exec",
+            ]);
+            let filter = network_filter();
+            unsafe {
+                command.pre_exec(move || {
+                    drop_privileges()?;
+                    filter()
+                });
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+
+        #[test]
         fn landlock_access_mask_follows_reported_abi() {
             assert_eq!(landlock_handled_access_fs(1), 0x1fff);
             assert_eq!(landlock_handled_access_fs(2), 0x3fff);

@@ -88,6 +88,9 @@ cat > "$scratch/source/app/functions.json" <<'EOF'
 EOF
 cat > "$scratch/source/app/functions/counter.js" <<'EOF'
 export async function handle(request, context) {
+  if (new URL(request.url).pathname.endsWith("/headers")) {
+    return new Response("test", { headers: { "content-security-policy-report-only": "default-src 'none'" } });
+  }
   if (request.method === "POST") {
     await request.text();
     await context.actions.call("count.increment", {});
@@ -121,6 +124,43 @@ services:
 EOF
   request_url="http://127.0.0.1:8787"
   response_dir=/proof
+  if cgroup_result=$(compose run --rm --no-deps +    -e KONAE_FUNCTIONS_DEVELOPMENT=0 +    -e KONAE_FUNCTIONS_CGROUP=relative-test-path kernel 2>&1); then
+    echo "The Kernel accepted a relative cgroup path" >&2
+    exit 1
+  fi
+  printf '%s\n' "$cgroup_result" | grep -F 'KONAE_FUNCTIONS_CGROUP must be absolute' || {
+    printf '%s\n' "$cgroup_result" >&2
+    exit 1
+  }
+else
+  sed -e '/^KONAE_FUNCTIONS_RUNNER_KIND=/d' -e '/^KONAE_FUNCTIONS_WASM_CACHE=/d' \
+    "$scratch/exported/.env" > "$scratch/exported/.env.proof"
+  mv "$scratch/exported/.env.proof" "$scratch/exported/.env"
+  cat > "$scratch/preparer" <<'EOF'
+#!/bin/sh
+set -eu
+if [ "$1" = prepare ]; then
+  awk -v pid="$$" '
+    /^Cap(Inh|Prm|Eff|Amb):/ && $2 !~ /^0+$/ { exit 1 }
+    /^NoNewPrivs:/ { nnp = $2 }
+    /^NSpgid:/ { pgid = $NF }
+    END { if (nnp != 1 || pgid != pid) exit 1 }
+  ' "/proc/$$/status"
+  awk '/^(CapInh|CapPrm|CapEff|CapAmb|NoNewPrivs|NSpgid):/' "/proc/$$/status" > /proof/preparer.status
+fi
+exec /usr/local/lib/konae/functions-prepare "$@"
+EOF
+  chmod +x "$scratch/preparer"
+  cat > "$scratch/exported/compose.override.yaml" <<'EOF'
+services:
+  kernel:
+    environment:
+      KONAE_FUNCTIONS_RUNNER_KIND:
+      KONAE_FUNCTIONS_WASM_CACHE:
+      KONAE_FUNCTIONS_PREPARER: /proof/preparer
+    volumes:
+      - ..:/proof
+EOF
 fi
 
 start_export() {
@@ -156,6 +196,14 @@ post_status=$(request --silent --show-error -o "$response_dir/post.body" -w '%{h
 post=$(cat "$scratch/post.body")
 test "$post_status" = 200 && test "$post" = '{"n":1}' || { echo "Unexpected authenticated POST ($post_status): $post" >&2; exit 1; }
 printf 'runner_kind=%s\nsignup=HTTP_%s\nauthenticated_get=%s %s\nauthenticated_post=%s %s\ncold_get_seconds=%s\n' "$runner_kind" "$signup_status" "$get_status" "$get" "$post_status" "$post" "$get_seconds"
+header_status=$(request --silent --show-error -o "$response_dir/headers.body" -w '%{http_code}' -H "Host: $host" -H "Cookie: $cookie" "$request_url/api/counter0/headers")
+header_body=$(cat "$scratch/headers.body")
+test "$header_status" = 500 && printf '%s' "$header_body" | bun -e 'if ((await Bun.stdin.json()).code !== "function.output-invalid") process.exit(1)' || {
+  echo "Response header check returned HTTP $header_status: $header_body" >&2
+  exit 1
+}
+printf 'response_header_check=HTTP_%s %s\n' "$header_status" "$header_body"
+test "$(compose exec -T kernel stat -c %a /kernel)" = 700
 worker_count() {
   compose exec -T kernel sh -c 'for status in /proc/[0-9]*/status; do tr "\000" "\n" < "${status%/status}/cmdline" 2>/dev/null | grep -qx -- "--function-worker" && echo x; done; true' | wc -l | tr -d ' '
 }
@@ -181,14 +229,17 @@ if [ "$runner_kind" = deno ]; then
   exit 0
 fi
 
+test "$(compose exec -T kernel stat -c %a /kernel/.konae/wasm-cache)" = 700
+printf 'preparer_security=\n'
+cat "$scratch/preparer.status"
 worker_report=$(compose exec -T kernel sh -ec '
   for status in /proc/[0-9]*/status; do
     pid=${status#/proc/}; pid=${pid%/status}
     tr "\000" "\n" < "/proc/$pid/cmdline" | grep -qx -- "--function-worker" || continue
     echo "worker_pid=$pid"
-    awk "/^(Uid|Gid|CapEff|NoNewPrivs|Seccomp):/ {print}" "$status"
+    awk "/^(Uid|Gid|CapEff|NoNewPrivs|Seccomp|Seccomp_filters):/ {print}" "$status"
     awk "/^VmSize:/ {print}" "$status"
-    grep -E "Max core file size|Max open files|Max file size|Max address space" "/proc/$pid/limits"
+    grep -E "Max core file size|Max open files|Max processes|Max file size|Max address space" "/proc/$pid/limits"
     exit 0
   done
   exit 1')
@@ -199,6 +250,10 @@ printf '%s\n' "$worker_report" | grep -Eq '^NoNewPrivs:[[:space:]]+1$' || { echo
 printf '%s\n' "$worker_report" | grep -Eq '^Seccomp:[[:space:]]+2$' || { echo "Worker is outside Docker's default seccomp filter" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max core file size[[:space:]]+0[[:space:]]+0' || { echo "Worker core rlimit is not zero" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max open files[[:space:]]+64[[:space:]]+64' || { echo "Worker open-file rlimit is not 64" >&2; exit 1; }
+printf '%s\n' "$worker_report" | grep -Eq '^Max processes[[:space:]]+64[[:space:]]+64' || { echo "Worker process rlimit is not 64" >&2; exit 1; }
+worker_filters=$(printf '%s\n' "$worker_report" | awk '/^Seccomp_filters:/ {print $2}')
+kernel_filters=$(compose exec -T kernel awk '/^Seccomp_filters:/ {print $2}' /proc/1/status)
+test "$worker_filters" -gt "$kernel_filters" || { echo "Worker lacks its own seccomp filter" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max file size[[:space:]]+0[[:space:]]+0' || { echo "Worker file-size rlimit is not zero" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max address space[[:space:]]+25769803776[[:space:]]+25769803776[[:space:]]+bytes' || { echo "Worker address-space rlimit differs from the 24 GiB Wasmtime pool budget" >&2; exit 1; }
 kernel_caps=$(compose exec -T kernel awk '/^CapEff:/ {print $2}' /proc/1/status)
