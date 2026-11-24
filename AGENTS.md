@@ -16,6 +16,8 @@ That sentence is the yardstick. A review that scores polish without it can call 
 
 A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and an export of the app folder can carry the app's accounts, data and rules. Anything else is operator work on the installation, not an app feature.
 
+Functions use a versioned Konae contract independent of the JavaScript engine. Put engine-specific preparation, APIs and lifecycle behavior behind runtime adapters. When an engine lacks required behavior, implement it in its adapter and run the same contract cases on every supported runner. An unresolved gap blocks compatibility for that contract; do not silently remove the feature, weaken permissions or require app code to branch on the engine. [ADR-0018](docs/adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md#adaptadores-y-conformidad) defines the boundary and acceptance checks.
+
 After any write through MCP or the editor, observe the effect through the same door before retrying or telling the owner it worked. `platform_guide` topic `rules` lists the read-back for each write tool. Decide what this credential may do from `session_inspect`'s `can` map, not from memory of login flags.
 
 `CONTEXT.md` holds the words. An owner has a Konae account; an app user has an account in one app; the app folder is the app.
