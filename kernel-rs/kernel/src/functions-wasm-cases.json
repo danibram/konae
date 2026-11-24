@@ -29,7 +29,7 @@
       }
     },
     {
-      "case": "component import outside WIT",
+      "case": "component import outside runner allowlist",
       "code": "function.wasm-import",
       "error": "The function component has an import outside the allowed host interface.",
       "hint": {
@@ -39,6 +39,42 @@
       "fixture": {
         "kind": "wrong_host_signature",
         "wit": "interface host { op-worker-call: func(args: u32) -> string; }"
+      }
+    },
+    {
+      "case": "component with request Web API imports",
+      "acceptedFixture": {
+        "kind": "request_web_api_imports",
+        "imports": [
+          "konae:worker/host",
+          "wasi:cli/stderr@0.2.10",
+          "wasi:cli/stderr@0.2.12",
+          "wasi:clocks/monotonic-clock@0.2.10",
+          "wasi:clocks/monotonic-clock@0.2.12",
+          "wasi:clocks/wall-clock@0.2.10",
+          "wasi:clocks/wall-clock@0.2.12",
+          "wasi:io/error@0.2.10",
+          "wasi:io/error@0.2.12",
+          "wasi:io/poll@0.2.10",
+          "wasi:io/poll@0.2.12",
+          "wasi:io/streams@0.2.10",
+          "wasi:io/streams@0.2.12",
+          "wasi:random/random@0.2.10",
+          "wasi:random/random@0.2.12"
+        ]
+      }
+    },
+    {
+      "case": "component with an extra interface",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "extra_import",
+        "interface": "wasi:sockets/tcp@0.2.0"
       }
     },
     {
