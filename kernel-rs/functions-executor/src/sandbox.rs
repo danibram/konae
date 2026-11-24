@@ -2,7 +2,7 @@
 mod linux {
     use crate::WorkerError;
     use anyhow::Result;
-    use std::{mem, os::fd::RawFd};
+    use std::{io, mem, os::fd::RawFd};
 
     const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
     const LANDLOCK_ACCESS_FS_ALL: u64 = 0x1_ffff;
@@ -127,7 +127,7 @@ mod linux {
         Ok(())
     }
 
-    fn clear_capabilities() -> Result<()> {
+    fn clear_capabilities() -> io::Result<()> {
         let header = CapHeader {
             version: CAP_VERSION_3,
             pid: 0,
@@ -145,7 +145,15 @@ mod linux {
             },
         ];
         if unsafe { libc::syscall(libc::SYS_capset, &header, data.as_ptr()) } != 0 {
-            return Err(fail());
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn drop_privileges() -> io::Result<()> {
+        clear_capabilities()?;
+        if unsafe { libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+            return Err(io::Error::last_os_error());
         }
         Ok(())
     }
@@ -168,30 +176,25 @@ mod linux {
         filter.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32));
     }
 
-    fn seccomp_filter() -> Vec<SockFilter> {
+    fn seccomp_arch_filter() -> Vec<SockFilter> {
         #[cfg(target_arch = "aarch64")]
         let audit_arch = 0xc000_00b7;
         #[cfg(target_arch = "x86_64")]
         let audit_arch = 0xc000_003e;
 
-        let mut filter = vec![
+        vec![
             stmt(BPF_LD_W_ABS, 4),
             jump(BPF_JMP_JEQ_K, audit_arch, 1, 0),
             stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
             stmt(BPF_LD_W_ABS, 0),
-        ];
-        #[cfg(target_arch = "x86_64")]
-        filter.extend([
+            #[cfg(target_arch = "x86_64")]
             jump(BPF_JMP_JGE_K, 0x4000_0000, 0, 1),
+            #[cfg(target_arch = "x86_64")]
             stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
-        ]);
-        filter.extend([
-            jump(BPF_JMP_JEQ_K, libc::SYS_prlimit64 as u32, 0, 4),
-            stmt(BPF_LD_W_ABS, 16),
-            jump(BPF_JMP_JEQ_K, 0, 1, 0),
-            stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
-            stmt(BPF_LD_W_ABS, 0),
-        ]);
+        ]
+    }
+
+    fn deny_network_syscalls(filter: &mut Vec<SockFilter>) {
         for syscall in [
             libc::SYS_socket,
             libc::SYS_connect,
@@ -208,6 +211,36 @@ mod linux {
             libc::SYS_getpeername,
             libc::SYS_setsockopt,
             libc::SYS_getsockopt,
+        ] {
+            deny_syscall(filter, syscall);
+        }
+        filter.extend([
+            jump(BPF_JMP_JEQ_K, libc::SYS_socketpair as u32, 0, 3),
+            stmt(BPF_LD_W_ABS, 16),
+            jump(BPF_JMP_JEQ_K, libc::AF_UNIX as u32, 1, 0),
+            stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+            stmt(BPF_LD_W_ABS, 0),
+        ]);
+        for syscall in [
+            libc::SYS_io_uring_setup,
+            libc::SYS_io_uring_enter,
+            libc::SYS_io_uring_register,
+        ] {
+            deny_syscall(filter, syscall);
+        }
+    }
+
+    fn seccomp_filter() -> Vec<SockFilter> {
+        let mut filter = seccomp_arch_filter();
+        filter.extend([
+            jump(BPF_JMP_JEQ_K, libc::SYS_prlimit64 as u32, 0, 4),
+            stmt(BPF_LD_W_ABS, 16),
+            jump(BPF_JMP_JEQ_K, 0, 1, 0),
+            stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+            stmt(BPF_LD_W_ABS, 0),
+        ]);
+        deny_network_syscalls(&mut filter);
+        for syscall in [
             libc::SYS_ptrace,
             libc::SYS_process_vm_readv,
             libc::SYS_process_vm_writev,
@@ -234,9 +267,6 @@ mod linux {
             libc::SYS_request_key,
             libc::SYS_open_by_handle_at,
             libc::SYS_name_to_handle_at,
-            libc::SYS_io_uring_setup,
-            libc::SYS_io_uring_enter,
-            libc::SYS_io_uring_register,
             libc::SYS_userfaultfd,
             libc::SYS_kexec_load,
             libc::SYS_reboot,
@@ -255,11 +285,6 @@ mod linux {
         ] {
             deny_syscall(&mut filter, syscall);
         }
-        filter.push(jump(BPF_JMP_JEQ_K, libc::SYS_socketpair as u32, 0, 3));
-        filter.push(stmt(BPF_LD_W_ABS, 16));
-        filter.push(jump(BPF_JMP_JEQ_K, libc::AF_UNIX as u32, 1, 0));
-        filter.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32));
-        filter.push(stmt(BPF_LD_W_ABS, 0));
         filter.push(jump(BPF_JMP_JEQ_K, libc::SYS_clone as u32, 0, 4));
         filter.push(stmt(BPF_LD_W_ABS, 16));
         filter.push(jump(BPF_JMP_JSET_K, 0x7e02_0000, 0, 1));
@@ -271,23 +296,34 @@ mod linux {
         filter
     }
 
-    fn restrict_syscalls() -> Result<()> {
-        let filter = seccomp_filter();
+    fn install_filter(filter: &[SockFilter]) -> io::Result<()> {
         let program = SockFprog {
-            len: filter.len().try_into().map_err(|_| fail())?,
+            len: filter.len() as u16,
             filter: filter.as_ptr(),
         };
         if unsafe { libc::prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) } != 0 {
-            return Err(fail());
+            return Err(io::Error::last_os_error());
         }
         Ok(())
     }
 
+    fn network_only_filter() -> Vec<SockFilter> {
+        let mut filter = seccomp_arch_filter();
+        deny_network_syscalls(&mut filter);
+        filter.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
+        filter
+    }
+
+    pub fn network_filter() -> impl Fn() -> io::Result<()> + Send + Sync {
+        let filter = network_only_filter();
+        move || install_filter(&filter)
+    }
+
     pub fn enter() -> Result<()> {
         close_inherited_descriptors()?;
-        clear_capabilities()?;
+        clear_capabilities().map_err(|_| fail())?;
         restrict_filesystem()?;
-        restrict_syscalls()?;
+        install_filter(&seccomp_filter()).map_err(|_| fail())?;
         Ok(())
     }
 
@@ -333,14 +369,6 @@ mod linux {
                 assert_eq!((filter[8].jt, filter[8].jf), (1, 0));
                 assert_eq!(filter[9].k, SECCOMP_RET_ERRNO | libc::EPERM as u32);
                 assert_eq!(filter[10].k, 0);
-                assert_eq!(
-                    denied_pair_position(&filter, libc::SYS_rt_sigqueueinfo),
-                    11 + 2 * 29
-                );
-                assert_eq!(
-                    denied_pair_position(&filter, libc::SYS_rt_tgsigqueueinfo),
-                    11 + 2 * 30
-                );
             }
             #[cfg(target_arch = "aarch64")]
             {
@@ -351,14 +379,28 @@ mod linux {
                 assert_eq!((filter[6].jt, filter[6].jf), (1, 0));
                 assert_eq!(filter[7].k, SECCOMP_RET_ERRNO | libc::EPERM as u32);
                 assert_eq!(filter[8].k, 0);
-                assert_eq!(
-                    denied_pair_position(&filter, libc::SYS_rt_sigqueueinfo),
-                    9 + 2 * 29
-                );
-                assert_eq!(
-                    denied_pair_position(&filter, libc::SYS_rt_tgsigqueueinfo),
-                    9 + 2 * 30
-                );
+            }
+            denied_pair_position(&filter, libc::SYS_rt_sigqueueinfo);
+            denied_pair_position(&filter, libc::SYS_rt_tgsigqueueinfo);
+        }
+
+        #[test]
+        fn both_filters_deny_network_syscalls() {
+            for filter in [network_only_filter(), seccomp_filter()] {
+                for syscall in [
+                    libc::SYS_socket,
+                    libc::SYS_connect,
+                    libc::SYS_bind,
+                    libc::SYS_listen,
+                    libc::SYS_accept4,
+                    libc::SYS_sendmsg,
+                    libc::SYS_recvmsg,
+                    libc::SYS_io_uring_setup,
+                    libc::SYS_io_uring_enter,
+                    libc::SYS_io_uring_register,
+                ] {
+                    denied_pair_position(&filter, syscall);
+                }
             }
         }
 
@@ -374,6 +416,11 @@ mod linux {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+pub use linux::drop_privileges;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::network_filter;
 
 #[cfg(target_os = "linux")]
 pub fn enter_worker_sandbox() -> anyhow::Result<()> {

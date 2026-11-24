@@ -350,18 +350,24 @@ impl Worker {
                             return Ok(());
                         }
                         #[cfg(target_os = "linux")]
-                        if libc::syscall(libc::SYS_close_range, start, end, 0) == 0 {
+                        if libc::syscall(
+                            libc::SYS_close_range,
+                            start,
+                            end,
+                            libc::CLOSE_RANGE_CLOEXEC,
+                        ) == 0
+                        {
                             return Ok(());
                         }
                         let mut limit = std::mem::MaybeUninit::<libc::rlimit>::zeroed();
                         if libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) != 0 {
                             return Err(std::io::Error::last_os_error());
                         }
-                        let end = end
-                            .min(limit.assume_init().rlim_cur.min(1_048_576) as u32)
-                            .saturating_sub(1);
+                        let end = end.min(
+                            (limit.assume_init().rlim_cur.min(1_048_576) as u32).saturating_sub(1),
+                        );
                         for fd in start..=end {
-                            if libc::close(fd as RawFd) != 0 {
+                            if libc::fcntl(fd as RawFd, libc::F_SETFD, libc::FD_CLOEXEC) != 0 {
                                 let error = std::io::Error::last_os_error();
                                 if error.raw_os_error() != Some(libc::EBADF) {
                                     return Err(error);
@@ -389,6 +395,7 @@ impl Worker {
                     .env("KONAE_INTERNAL_FUNCTIONS_GID", gid.to_string());
             }
             let supervisor_pid = std::process::id() as i32;
+            let network_filter = wasm_linux.then(crate::sandbox::network_filter);
             unsafe {
                 child_command.pre_exec(move || {
                     let oom_path = b"/proc/self/oom_score_adj\0";
@@ -401,42 +408,19 @@ impl Worker {
                         return Err(std::io::Error::last_os_error());
                     }
                     libc::close(oom_fd);
-                    if wasm_linux {
+                    if let Some(network_filter) = &network_filter {
                         if libc::setgroups(0, std::ptr::null()) != 0
                             || libc::setresgid(gid, gid, gid) != 0
                             || libc::setresuid(uid, uid, uid) != 0
                         {
                             return Err(std::io::Error::last_os_error());
                         }
-                        #[repr(C)]
-                        struct CapHeader {
-                            version: u32,
-                            pid: i32,
-                        }
-                        #[repr(C)]
-                        #[derive(Clone, Copy)]
-                        struct CapData {
-                            effective: u32,
-                            permitted: u32,
-                            inheritable: u32,
-                        }
-                        let caps = [CapData {
-                            effective: 0,
-                            permitted: 0,
-                            inheritable: 0,
-                        }; 2];
-                        let header = CapHeader {
-                            version: 0x2008_0522,
-                            pid: 0,
-                        };
-                        if libc::syscall(libc::SYS_capset, &header, caps.as_ptr()) != 0
-                            || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                        {
-                            return Err(std::io::Error::last_os_error());
-                        }
+                        crate::sandbox::drop_privileges()?;
+                        network_filter()?;
                         for (resource, soft, hard) in [
                             (libc::RLIMIT_CORE, 0, 0),
                             (libc::RLIMIT_NOFILE, 64, 64),
+                            (libc::RLIMIT_NPROC, 64, 64),
                             (libc::RLIMIT_FSIZE, 0, 0),
                             (
                                 libc::RLIMIT_AS,

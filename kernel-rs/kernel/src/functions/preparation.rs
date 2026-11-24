@@ -1,7 +1,10 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::{
+        fs::{MetadataExt, OpenOptionsExt},
+        process::CommandExt,
+    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, OnceLock},
@@ -440,13 +443,66 @@ fn parse_prepare_status(status: &str) -> Result<PrepareStatus> {
         .context("Wasm preparer returned an unknown refusal status")
 }
 
+fn isolate_preparation_command(command: &mut Command) {
+    // Wizer inherits the preparer's process group so both can be stopped together.
+    command.process_group(0);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        command.pre_exec(|| {
+            // Keep Rust's exec error pipe open until exec, but pass only stdio to the tool.
+            if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC)
+                != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            konae_functions_executor::sandbox::drop_privileges()
+        });
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        command.pre_exec(|| {
+            let mut descriptors = [std::mem::MaybeUninit::<libc::proc_fdinfo>::uninit(); 128];
+            let capacity = std::mem::size_of_val(&descriptors) as libc::c_int;
+            let bytes = libc::proc_pidinfo(
+                libc::getpid(),
+                libc::PROC_PIDLISTFDS,
+                0,
+                descriptors.as_mut_ptr().cast(),
+                capacity,
+            );
+            let mark_close_on_exec = |fd| {
+                if fd >= 3 && libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EBADF) {
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            };
+            if bytes > 0 && bytes < capacity {
+                let count = bytes as usize / std::mem::size_of::<libc::proc_fdinfo>();
+                for entry in &descriptors[..count] {
+                    mark_close_on_exec(entry.assume_init_ref().proc_fd)?;
+                }
+            } else {
+                for fd in 3..libc::getdtablesize() {
+                    mark_close_on_exec(fd)?;
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
 fn json_command<T: for<'de> Deserialize<'de>>(
     program: &Path,
     args: &[&str],
     timeout: Duration,
 ) -> Result<T> {
     let start = Instant::now();
-    let output = Command::new(program)
+    let mut command = Command::new(program);
+    isolate_preparation_command(&mut command);
+    let output = command
         .args(args)
         .env_clear()
         .stdin(Stdio::null())
@@ -480,7 +536,9 @@ fn compile_component(runner: &Path, output: &Path, component: &[u8]) -> Result<(
         output.is_absolute(),
         "Native component staging path must be absolute"
     );
-    let mut child = Command::new(runner)
+    let mut command = Command::new(runner);
+    isolate_preparation_command(&mut command);
+    let mut child = command
         .arg("--compile-component")
         .arg(output)
         .env_clear()
@@ -552,6 +610,40 @@ impl Drop for Staging {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparation_shell_and_its_child_share_an_isolated_process_group() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-ec",
+            r#"
+test ! -e /dev/fd/9
+test "$(ps -o pgid= -p "$$" | tr -d ' ')" = "$$"
+if [ -r /proc/$$/status ]; then
+    awk '/^Cap(Inh|Prm|Eff|Amb):/ && $2 !~ /^0+$/ { exit 1 }
+         /^NoNewPrivs:/ { if ($2 != 1) exit 1; seen = 1 }
+         END { if (!seen) exit 1 }' /proc/$$/status
+fi
+/bin/sh -ec 'test ! -e /dev/fd/9; test "$(ps -o pgid= -p "$$" | tr -d " ")" = "$1"' child "$$"
+"#,
+        ]);
+        unsafe {
+            command.pre_exec(|| {
+                let fd = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                if fd < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let result = libc::fcntl(fd, libc::F_DUPFD, 9);
+                libc::close(fd);
+                if result != 9 {
+                    return Err(io::Error::other("Could not open test descriptor 9"));
+                }
+                Ok(())
+            });
+        }
+        isolate_preparation_command(&mut command);
+        assert!(command.status().unwrap().success());
+    }
 
     #[test]
     fn a_cache_alias_returns_only_bytes_matching_its_digest() {
