@@ -157,7 +157,7 @@
       "error": "A function cannot use timers, fetch, queueMicrotask, Web Crypto or random values during top-level initialization.",
       "hint": {
         "fix": "capsule",
-        "remedy": "Move request effects out of top-level initialization. Use a Call Action for outbound HTTP."
+        "remedy": "Move request effects out of top-level initialization. Use a call action for outbound HTTP."
       }
     },
     {

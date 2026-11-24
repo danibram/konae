@@ -201,7 +201,7 @@ Use the runner, preparer and Kernel from the same build. StarlingMonkey is the d
 
 Local development uses RSS polling. For production worker isolation and requirements for each runner, see [Operate an installation](./operate.md#typescript-function-workers). The editor preview does not execute functions.
 
-Functions expose the Web Request and Response APIs, request-scoped timers and supported Web Crypto operations. WebAssembly and the Cache API are absent. Calling `fetch` or `AbortSignal.timeout()` refuses with `unsupported_runtime_api`. Use a Call Action for outbound HTTP. Return a Web `Response` or the runner refuses with `invalid_response`. The Kernel owns response framing. Hono routing and ETag with a supplied digest work. Hono streaming helpers that set framing headers need adaptation.
+Functions expose the Web Request and Response APIs, request-scoped timers and supported Web Crypto operations. WebAssembly and the Cache API are absent. Calling `fetch` or `AbortSignal.timeout()` refuses with `unsupported_runtime_api`. Use a call action for outbound HTTP. Return a Web `Response` or the runner refuses with `invalid_response`. The Kernel owns response framing. Hono routing and ETag with a supplied digest work. Hono streaming helpers that set framing headers need adaptation.
 
 Top-level clock reads use the Unix epoch. Read the clock inside `handle` for request time and use Server Actions for durable state. The Kernel cancels timed-out requests at the runner boundary. The handler's `request.signal` is a Web signal, but Kernel cancellation does not dispatch an abort event to it.
 
