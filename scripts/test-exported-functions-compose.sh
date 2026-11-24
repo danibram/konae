@@ -124,7 +124,9 @@ services:
 EOF
   request_url="http://127.0.0.1:8787"
   response_dir=/proof
-  if cgroup_result=$(compose run --rm --no-deps +    -e KONAE_FUNCTIONS_DEVELOPMENT=0 +    -e KONAE_FUNCTIONS_CGROUP=relative-test-path kernel 2>&1); then
+  if cgroup_result=$(compose run --rm --no-deps -T \
+    -e KONAE_FUNCTIONS_DEVELOPMENT=0 \
+    -e KONAE_FUNCTIONS_CGROUP=relative-test-path kernel 2>&1); then
     echo "The Kernel accepted a relative cgroup path" >&2
     exit 1
   fi
