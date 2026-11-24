@@ -10,3 +10,10 @@ pub const NAMED_BUNDLES: &[(&str, &str)] = &[
         "export function handle() { return new Response('users'); }",
     ),
 ];
+
+pub fn webcrypto_vectors() -> String {
+    include_str!("webcrypto.js").replace(
+        "__FIXTURE_KEYS__",
+        include_str!("../../../../spikes/node-compat/test-jwks.json"),
+    )
+}

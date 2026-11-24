@@ -22,6 +22,13 @@
   timerApi = core.loadExtScript('ext:deno_web/02_timers.js');
   cloneApi = core.loadExtScript('ext:deno_web/13_message_port.js');
   const cryptoApi = core.loadExtScript('ext:deno_crypto/00_crypto.js');
+  const domException = DOMException;
+  for (const name of [
+    'DataError', 'InvalidAccessError', 'NotSupportedError', 'OperationError', 'QuotaExceededError',
+    'SyntaxError', 'TypeMismatchError',
+  ]) {
+    core.registerErrorBuilder('DOMException' + name, message => new domException(message, name));
+  }
   const requestClass = Request;
   const controllerClass = AbortController;
   const encode = new TextEncoder().encode.bind(new TextEncoder());
@@ -83,15 +90,29 @@
   function algorithmName(value) {
     return typeof value === 'string' ? value.toUpperCase() : value?.name?.toUpperCase();
   }
-  function hashName(value) {
-    return algorithmName(typeof value === 'string' ? value : value?.hash);
+  const cryptoHashes = ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512'];
+  const rsaSignatures = ['RSASSA-PKCS1-V1_5', 'RSA-PSS'];
+  const keyFormats = ['jwk', 'spki', 'pkcs8', 'raw'];
+  function keyFormat(value) {
+    const format = String(value);
+    if (!keyFormats.includes(format)) throw new TypeError('Invalid key format.');
+    return format;
   }
-  function supportedAlgorithm(value) {
-    const name = algorithmName(value);
-    if (name === 'HMAC') return typeof value === 'string' || hashName(value) === 'SHA-256';
-    if (name === 'ECDSA') return hashName(value) === 'SHA-256';
-    if (name === 'RSASSA-PKCS1-V1_5') return true;
-    return ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512'].includes(name);
+  function signatureParameters(algorithm) {
+    const name = algorithmName(algorithm);
+    if (name === 'HMAC' || name === rsaSignatures[0]) return name;
+    if (name === 'ECDSA') {
+      const hash = algorithmName(algorithm.hash);
+      if (cryptoHashes.includes(hash)) return { name, hash };
+    }
+    if (name === 'RSA-PSS') {
+      const saltLength = Math.trunc(+algorithm.saltLength);
+      if (!Number.isFinite(saltLength) || saltLength < 0 || saltLength > 0xffffffff) {
+        throw new TypeError('Expected an unsigned 32-bit integer.');
+      }
+      return { name, saltLength };
+    }
+    throw new DOMException('Unsupported signature algorithm', 'NotSupportedError');
   }
   function makeSubtle() {
     const getSubtle = () => {
@@ -99,33 +120,36 @@
       return cryptoApi.crypto.subtle;
     };
     const facade = Object.create(null);
-    facade.digest = (algorithm, data) => {
-      if (!['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512'].includes(algorithmName(algorithm))) {
+    facade.digest = async (algorithm, data) => {
+      const subtle = getSubtle();
+      if (!cryptoHashes.includes(algorithmName(algorithm))) {
         throw new DOMException('Unsupported digest algorithm', 'NotSupportedError');
       }
-      return getSubtle().digest(algorithm, data);
+      return subtle.digest(algorithm, data);
     };
-    facade.importKey = (format, keyData, algorithm, extractable, usages) => {
+    facade.importKey = async (format, keyData, algorithm, extractable, usages) => {
+      const subtle = getSubtle();
+      format = keyFormat(format);
       const name = algorithmName(algorithm);
-      const hash = hashName(algorithm);
-      const allowed = (name === 'HMAC' && hash === 'SHA-256' && ['RAW', 'JWK'].includes(String(format).toUpperCase()))
-        || (name === 'ECDSA' && algorithm?.namedCurve === 'P-256' && String(format).toUpperCase() === 'JWK')
-        || (name === 'RSASSA-PKCS1-V1_5' && hash === 'SHA-256' && String(format).toUpperCase() === 'JWK');
+      const hash = algorithmName(algorithm?.hash);
+      const namedCurve = algorithm?.namedCurve;
+      const allowed = (name === 'HMAC' && cryptoHashes.includes(hash) && ['raw', 'jwk'].includes(format))
+        || (name === 'ECDSA' && namedCurve === 'P-256')
+        || (rsaSignatures.includes(name) && cryptoHashes.includes(hash) && format !== 'raw');
       if (!allowed) throw new DOMException('Unsupported key algorithm', 'NotSupportedError');
-      return getSubtle().importKey(format, keyData, algorithm, extractable, usages);
+      return subtle.importKey(format, keyData, { name, hash, namedCurve, length: algorithm?.length }, extractable, usages);
     };
-    facade.sign = (algorithm, key, data) => {
-      if (!supportedAlgorithm(algorithm) || !['HMAC', 'ECDSA', 'RSASSA-PKCS1-V1_5'].includes(algorithmName(algorithm))) {
-        throw new DOMException('Unsupported signing algorithm', 'NotSupportedError');
+    facade.exportKey = async (format, key) => getSubtle().exportKey(keyFormat(format), key);
+    facade.sign = async (algorithm, key, data) => {
+      const subtle = getSubtle();
+      const parameters = signatureParameters(algorithm);
+      if (parameters.name === 'RSA-PSS' && parameters.saltLength > 1024) {
+        throw new DOMException('RSA-PSS salt length exceeds the supported size', 'OperationError');
       }
-      return getSubtle().sign(algorithm, key, data);
+      return subtle.sign(parameters, key, data);
     };
-    facade.verify = (algorithm, key, signature, data) => {
-      if (!supportedAlgorithm(algorithm) || !['HMAC', 'ECDSA', 'RSASSA-PKCS1-V1_5'].includes(algorithmName(algorithm))) {
-        throw new DOMException('Unsupported verification algorithm', 'NotSupportedError');
-      }
-      return getSubtle().verify(algorithm, key, signature, data);
-    };
+    facade.verify = async (algorithm, key, signature, data) =>
+      getSubtle().verify(signatureParameters(algorithm), key, signature, data);
     return Object.freeze(facade);
   }
   let subtleFacade;

@@ -9,8 +9,18 @@ interface host {
     random-seed: func() -> u64;
 }
 
+interface crypto {
+    digest: func(hash: string, data: list<u8>) -> result<list<u8>, string>;
+    random-bytes: func(length: u32) -> result<list<u8>, string>;
+    import-key: func(options: string, material: list<u8>) -> result<string, string>;
+    export-key: func(id: u32, format: string) -> result<list<u8>, string>;
+    sign: func(id: u32, algorithm: string, hash: string, salt-length: u32, data: list<u8>) -> result<list<u8>, string>;
+    verify: func(id: u32, algorithm: string, hash: string, salt-length: u32, data: list<u8>, signature: list<u8>) -> result<bool, string>;
+}
+
 world ipc {
     import host;
+    import crypto;
     export handle: func(input: string, limit: u32) -> string;
     export has-shutdown: func() -> bool;
     export shutdown: func();

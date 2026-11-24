@@ -47,6 +47,7 @@
         "kind": "request_web_api_imports",
         "imports": [
           "konae:worker/host",
+          "konae:worker/crypto",
           "wasi:cli/stderr@0.2.10",
           "wasi:cli/stderr@0.2.12",
           "wasi:clocks/monotonic-clock@0.2.10",
@@ -62,6 +63,32 @@
           "wasi:random/random@0.2.10",
           "wasi:random/random@0.2.12"
         ]
+      }
+    },
+    {
+      "case": "component with a wrong crypto result type",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "wrong_crypto_signature",
+        "wit": "interface crypto { digest: func(hash: string, data: list<u8>) -> result<string, string>; }"
+      }
+    },
+    {
+      "case": "component with an extra crypto host function",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "extra_crypto_export",
+        "wit": "interface crypto { extra: func(hash: string, data: list<u8>) -> result<list<u8>, string>; }"
       }
     },
     {

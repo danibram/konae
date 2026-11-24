@@ -72,6 +72,7 @@ fn main() -> Result<()> {
             "--format=esm",
             "--platform=neutral",
             "--external:konae:worker/host",
+            "--external:konae:worker/crypto",
             &outfile,
         ])
         .status()?;
@@ -107,6 +108,7 @@ fn main() -> Result<()> {
     for name in [
         "starling-entry.js",
         "starling-runtime.js",
+        "starling-crypto.js",
         "dispatch.js",
         "web.js",
         "text.js",
@@ -174,6 +176,7 @@ fn fingerprint(
         guest.join("starling.wit"),
         guest.join("starling-entry.js"),
         guest.join("starling-runtime.js"),
+        guest.join("starling-crypto.js"),
         guest.join("dispatch.js"),
         guest.join("web.js"),
         guest.join("text.js"),
