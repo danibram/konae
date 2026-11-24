@@ -10,15 +10,16 @@ if [ "$(id -u)" = 0 ]; then
   chown "$owner" "$data" "$data/apps"
   chmod 0700 "$data"
   export HOME="$data"
+  if [ -n "${KONAE_FUNCTIONS_RUNNER:-}" ] && [ "$KONAE_FUNCTIONS_RUNNER_KIND" = wasm ]; then
+    cache=${KONAE_FUNCTIONS_WASM_CACHE:-$data/.konae/wasm-cache}
+    mkdir -p "$cache"
+    chown "$owner" "$cache"
+    chmod 0700 "$cache"
+    export KONAE_FUNCTIONS_WASM_CACHE="$cache"
+    export KONAE_FUNCTIONS_PREPARER="${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}"
+  fi
   if [ -n "${KONAE_FUNCTIONS_RUNNER:-}" ] && [ "${KONAE_FUNCTIONS_DEVELOPMENT:-0}" != "1" ]; then
-    if [ "$KONAE_FUNCTIONS_RUNNER_KIND" = wasm ]; then
-      cache=${KONAE_FUNCTIONS_WASM_CACHE:-$data/.konae/wasm-cache}
-      mkdir -p "$cache"
-      chown "$owner" "$cache"
-      chmod 0700 "$cache"
-      export KONAE_FUNCTIONS_WASM_CACHE="$cache"
-      export KONAE_FUNCTIONS_PREPARER="${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}"
-    elif [ "$KONAE_FUNCTIONS_RUNNER_KIND" = deno ] && [ -z "${KONAE_FUNCTIONS_CGROUP:-}" ]; then
+    if [ "$KONAE_FUNCTIONS_RUNNER_KIND" = deno ] && [ -z "${KONAE_FUNCTIONS_CGROUP:-}" ]; then
       cgroup_mount=/sys/fs/cgroup
       # A private cgroup namespace puts this process at the namespace root. Docker mounts that
       # root read-only; with CAP_SYS_ADMIN the entrypoint remounts it writable, and setpriv drops
