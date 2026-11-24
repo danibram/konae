@@ -159,7 +159,7 @@ jobs:
               run_tests() {
                 setpriv --reuid="$KERNEL_UID" --regid="$KERNEL_GID" --clear-groups --bounding-set=-all,+setuid,+setgid,+kill \
                   --inh-caps=+setuid,+setgid,+kill --ambient-caps=+setuid,+setgid,+kill --no-new-privs \
-                  env HOME=/tmp KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
+                  env HOME=/tmp KONAE_FUNCTIONS_RUNNER_KIND=deno KONAE_FUNCTIONS_UID=65534 KONAE_FUNCTIONS_GID=65534 \
                   KONAE_TEST_FUNCTION_WORKER="$RUNNER_BIN" KONAE_TEST_FUNCTION_CGROUP="$cg/delegated" \
                   "$TEST_BINARY" "$@" --ignored --test-threads=1
               }

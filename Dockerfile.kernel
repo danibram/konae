@@ -46,7 +46,7 @@ RUN test -n "$FUNCTIONS_RUNNER_SHA256" \
   && mv "/usr/local/lib/konae/functions-prepare-${FUNCTIONS_PREPARER_SHA256}" /usr/local/lib/konae/functions-prepare
 COPY ops/kernel-entrypoint.sh /usr/local/bin/kernel
 RUN chmod 755 /usr/local/bin/kernel
-ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/kernel KONAE_KERNEL_PORT=8787 KONAE_FUNCTIONS_UID=10002 KONAE_FUNCTIONS_GID=10002
+ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/kernel KONAE_KERNEL_PORT=8787 KONAE_FUNCTIONS_PREPARER=/usr/local/lib/konae/functions-prepare KONAE_FUNCTIONS_UID=10002 KONAE_FUNCTIONS_GID=10002
 EXPOSE 8787
 HEALTHCHECK --interval=10s --timeout=2s --start-period=5s CMD curl -fs http://127.0.0.1:8787/_konae/health || exit 1
 ENTRYPOINT ["/usr/local/bin/kernel"]

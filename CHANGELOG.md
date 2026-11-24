@@ -8,6 +8,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ### Changed
 
+- StarlingMonkey now serves server functions by default. Installations can select deno_core with `KONAE_FUNCTIONS_RUNNER_KIND=deno`.
 - Server Actions and HTTP routes check app sessions on worker threads with read-only SQLite connections. HTTP routes use the same approach for API keys. Requests without a session token skip the session lookup.
 - Usage groups counters for up to 2 ms before writing them in the background. A mutation that declares a Signal still waits for confirmation that the Signal was written.
 

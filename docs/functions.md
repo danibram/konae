@@ -175,7 +175,10 @@ Run installation commands from the folder containing `konae.json`. Use `npm ci -
 
 ```sh
 konae build --dir .
-KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner \
+mkdir -p .konae/wasm-cache
+KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner-wasm \
+KONAE_FUNCTIONS_PREPARER=/absolute/path/to/konae-functions-prepare \
+KONAE_FUNCTIONS_WASM_CACHE="$PWD/.konae/wasm-cache" \
 KONAE_FUNCTIONS_DEVELOPMENT=1 konae dev --dir .
 ```
 
@@ -185,17 +188,22 @@ From a Konae checkout, use its CLI script and Kernel binary as a pair. Build the
 KONAE_REPO=/path/to/konae
 APP_DIR=/path/to/my-app
 bun "$KONAE_REPO/scripts/konae.ts" build --dir "$APP_DIR"
+mkdir -p "$APP_DIR/.konae/wasm-cache"
 KONAE_KERNEL_BIN="$KONAE_REPO/kernel-rs/target/debug/kernel" \
-KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner \
+KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner-wasm \
+KONAE_FUNCTIONS_PREPARER=/absolute/path/to/konae-functions-prepare \
+KONAE_FUNCTIONS_WASM_CACHE="$APP_DIR/.konae/wasm-cache" \
 KONAE_FUNCTIONS_DEVELOPMENT=1 \
 bun "$KONAE_REPO/scripts/konae.ts" dev --dir "$APP_DIR"
 ```
 
-The runner and Kernel must come from the same build. Local development mode uses RSS polling and does not apply Linux cgroup, identity, Landlock or seccomp isolation. On a deployment, the operator configures `KONAE_FUNCTIONS_RUNNER` and a writable delegated cgroup v2 subtree through `KONAE_FUNCTIONS_CGROUP`, with the separate worker UID/GID and Linux namespaces described in [Operate an installation](./operate.md#typescript-function-workers). Never use development mode as the deployment boundary. The editor preview does not execute functions.
+Use the runner, preparer and Kernel from the same build. StarlingMonkey is the default. To serve with deno_core, set `KONAE_FUNCTIONS_RUNNER_KIND=deno` and point `KONAE_FUNCTIONS_RUNNER` at the deno binary. When a preparer is installed, both runners use its initialization check in the Validation Gate, in `konae dev` and at publish. A standalone deno installation without the helper can serve functions. Its online Gate reports preparation as unchecked.
 
-The runner exposes `DOMException`, `Event`, `EventTarget`, `CustomEvent`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `ReadableStream`, `WritableStream`, `TransformStream`, `AbortController`, `AbortSignal`, `Blob`, `File`, `Headers`, `FormData`, `Request`, `Response`, `structuredClone`, `queueMicrotask`, `console` and standard JavaScript built-ins. It provides no Web Crypto, network `fetch`, timers, `AbortSignal.timeout()`, `performance.now()` or Cache API. The Kernel owns response framing. A function can return a bounded UTF-8 response stream. Hono routing and ETag with a supplied digest work. Hono streaming helpers that set framing headers need adaptation.
+Local development uses RSS polling. For production worker isolation and requirements for each runner, see [Operate an installation](./operate.md#typescript-function-workers). The editor preview does not execute functions.
 
-A function's top-level code runs during the build. Each request starts from the same snapshot. Read the clock inside `handle` for request time and use Server Actions for durable state. The Kernel can stop execution at its deadline without delivering an abort event to the handler.
+Functions expose the Web Request and Response APIs, request-scoped timers and supported Web Crypto operations. WebAssembly and the Cache API are absent. Calling `fetch` or `AbortSignal.timeout()` refuses with `unsupported_runtime_api`. Use a Call Action for outbound HTTP. Return a Web `Response` or the runner refuses with `invalid_response`. The Kernel owns response framing. Hono routing and ETag with a supplied digest work. Hono streaming helpers that set framing headers need adaptation.
+
+Top-level clock reads use the Unix epoch. Read the clock inside `handle` for request time and use Server Actions for durable state. The Kernel cancels timed-out requests at the runner boundary. The handler's `request.signal` is a Web signal, but Kernel cancellation does not dispatch an abort event to it.
 
 Once `konae dev` reports the app URL, set `APP_URL` to that exact printed URL, including its local hostname, then call the mount:
 

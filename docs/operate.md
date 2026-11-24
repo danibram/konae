@@ -81,11 +81,13 @@ The defaults suit one machine. Before another machine can reach the installation
 
 ### TypeScript function workers
 
-The product images package both runners and the matching Wasm preparation helper. `KONAE_FUNCTIONS_RUNNER_KIND=wasm` selects the StarlingMonkey runner and preparer. An unset kind keeps deno_core policy and its packaged runner at `/usr/local/lib/konae/functions-runner-deno`. `scripts/build-functions-runner.sh <amd64|arm64> <output-directory>` builds all three executables; image builds check each SHA-256 before installing them. The release workflow stores them in one architecture-specific artifact, then uses that artifact to build both images.
+The product images package both runners and the matching Wasm preparer. StarlingMonkey is the default. Set `KONAE_FUNCTIONS_RUNNER_KIND=deno` to select deno_core. If the installation sets `KONAE_FUNCTIONS_RUNNER` explicitly, update that path when you switch engines. `scripts/build-functions-runner.sh <amd64|arm64> <output-directory>` builds all three executables; image builds check each SHA-256 before installing them. The release workflow stores them in one architecture-specific artifact, then uses that artifact to build both images.
 
 The Kernel and runner speak `konae-functions-ipc/3`. The Kernel and preparer use the `konae-functions-wasm/1` preparation ABI. Keep all three binaries from the same image build. The runner handshake rejects an engine or protocol mismatch before Invoke. The Kernel latches a mismatch as `worker_protocol_mismatch`. Restart the service after upgrading to retire hot workers and load the matching binaries.
 
-Generated export Compose sets the absolute runner and helper paths, the Wasm runner kind and a cache directory under the installation volume. The entrypoint creates the cache before dropping to the Kernel UID. The cache holds only validated, read-only native component objects. Keep it out of app folders.
+The images set the preparer path and put the Wasm cache at `$KONAE_DATA_DIR/.konae/wasm-cache`. The entrypoint creates the cache before dropping to the Kernel UID. The cache holds validated native component objects and stays outside app folders. On a manual installation, set `KONAE_FUNCTIONS_PREPARER` to the matching binary and `KONAE_FUNCTIONS_WASM_CACHE` to an existing directory owned by the Kernel user. Function-free installations can start without a runner, preparer or cache.
+
+Startup checks each published function app. An app that fails preparation keeps its pages and other routes. Its functions return 503 and the Kernel logs the preparation refusal. If a native cache entry goes missing after startup, the first cold request returns 503 and queues repair. Retry after the cache is ready.
 
 The Wasm worker uses Docker's default seccomp and AppArmor profiles. The Kernel retains `CAP_SETUID`, `CAP_SETGID` and `CAP_KILL`; the worker clears supplementary groups and capabilities, sets `no_new_privs`, and receives finite rlimits. The 24 GiB address-space limit covers four 4 GiB Wasmtime pool reservations, four 32 MiB guard regions and process headroom. Wasmtime enforces linear memory and epoch interruption. The Kernel polls worker RSS and refuses the worker if it cannot read a live worker's RSS. Deadline handling kills and reaps the process group before reusing its slot. Wasm does not require cgroup delegation or a private cgroup namespace.
 
@@ -111,10 +113,10 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_EXECUTION_MODE` | `live` | Set to `test` for a loopback Kernel that records test effects and disables installation copies. Test mode requires a loopback `KONAE_BIND`. |
 | `KONAE_BIND` | `127.0.0.1` (`0.0.0.0` in both images) | Address the Kernel listens on. |
 | `KONAE_DATA_DIR` | `/data` (`/kernel` in the `kernel` image, `data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory. See [Data directory and copies](#data-directory-and-copies). |
-| `KONAE_FUNCTIONS_RUNNER` | unset | Absolute path to the packaged function worker. |
-| `KONAE_FUNCTIONS_RUNNER_KIND` | `deno` | Set to `wasm` when `KONAE_FUNCTIONS_RUNNER` names the StarlingMonkey runner. The Kernel prepares published bundles before release planning, release apply and app-folder startup. |
-| `KONAE_FUNCTIONS_PREPARER` | unset | Absolute path to the packaged Rust component preparer. Required for Wasm. |
-| `KONAE_FUNCTIONS_WASM_CACHE` | unset | Absolute path to the operator-owned native component cache. Generated Compose puts it under the installation volume. |
+| `KONAE_FUNCTIONS_RUNNER` | The packaged runner for the selected kind, when installed | Absolute path to the operator-installed function worker. |
+| `KONAE_FUNCTIONS_RUNNER_KIND` | `wasm` | Selects StarlingMonkey. Set to `deno` for deno_core. An installed preparer checks function initialization for both runners. |
+| `KONAE_FUNCTIONS_PREPARER` | `/usr/local/lib/konae/functions-prepare` when installed | Absolute path to the matching Rust preparer. Required to serve function apps with Wasm. |
+| `KONAE_FUNCTIONS_WASM_CACHE` | `$KONAE_DATA_DIR/.konae/wasm-cache` in the images | Absolute path to the operator-owned native component cache. |
 | `KONAE_FUNCTIONS_WASM_CACHE_BYTES` | `4294967296` | Maximum native cache size and in-flight reservation budget. |
 | `KONAE_FUNCTIONS_CGROUP` | unset | Writable cgroup v2 subtree for strict deno_core workers. |
 | `KONAE_FUNCTIONS_UID` / `KONAE_FUNCTIONS_GID` | `10002` in both images | Separate worker identity. The Kernel refuses to start the configured runner if either value matches its own identity or the required capabilities are missing. |
