@@ -13,6 +13,9 @@ import { functionsBuildSupport } from "../kernel/functions";
 
 import { generateActionContract, renderActionContractMarkdown } from "./action-contract";
 import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
+import { renderFunctionContextTypes } from "./action-types";
+import { parseFunctions } from "../kernel/functions";
+import { actionsModuleBody } from "../sdk/functions";
 import type { PackageComponentName } from "./portable-package";
 import { readTar } from "./tar";
 import { version } from "../../package.json";
@@ -102,9 +105,10 @@ export function secretNames(actionsSource: string): string[] {
  * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
  * both local build doors run.
  */
-export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string; nodeCompat: string; nodeCompatProviders: string; parserSource: string; parserLicense: string; hasFunctions?: boolean }): FolderEntry[] {
+export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; functionsSource?: string; actionsModuleSource?: string; runtime: string; staticArtifact: string; localBuilder: string; nodeCompat: string; nodeCompatProviders: string; parserSource: string; parserLicense: string; hasFunctions?: boolean }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
+  const functions = input.functionsSource === undefined ? undefined : parseFunctions(input.functionsSource);
   return [
     { path: "compose.yaml", contents: composeFile(settings, input.hasFunctions === true) },
     { path: ".env.example", contents: envExample(settings, input.hasFunctions === true) },
@@ -112,9 +116,10 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
     { path: "AGENTS.md", contents: agentsGuide(settings, secretNames(input.actionsSource)) },
     { path: "action-contract.md", contents: renderActionContractMarkdown(contract) },
     { path: ACTION_TYPES_FILE, contents: renderActionTypes(contract) },
+    ...(functions ? [{ path: "functions.d.ts", contents: renderFunctionContextTypes(contract, functions) }] : []),
     { path: "package.json", contents: packageManifest(settings) },
     { path: "tsconfig.json", contents: tsconfig },
-    { path: "scripts/build.mjs", contents: buildScript },
+    { path: "scripts/build.mjs", contents: buildScript.replace("__ACTIONS_MODULE_SOURCE__", JSON.stringify(input.actionsModuleSource ?? actionsModuleBody())) },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
     { path: "scripts/local-builder.mjs", contents: input.localBuilder },
     { path: "scripts/node-compat.js", contents: input.nodeCompat },
@@ -227,7 +232,7 @@ const tsconfig = `${JSON.stringify({
     skipLibCheck: true,
     noEmit: true,
   },
-  include: ["app/src", ACTION_TYPES_FILE],
+  include: ["app/src", "app/functions", ACTION_TYPES_FILE, "functions.d.ts"],
 }, null, 2)}\n`;
 
 function agentsGuide(settings: AppSettings, secrets: string[]) {
@@ -318,6 +323,7 @@ const dist = path.join(root, 'dist');
 const development = process.argv.includes('--dev');
 const settings = JSON.parse(await readFile(path.join(root, 'konae.json'), 'utf8'));
 const runtime = await readFile(path.join(root, 'scripts/runtime.js'), 'utf8');
+const actionsModuleSource = __ACTIONS_MODULE_SOURCE__;
 const paths = await walk('');
 const sources = await Promise.all(paths.map(async (file) => [file, await readFile(path.join(app, file), 'utf8').catch(() => '')]));
 const actionsSource = await readFile(path.join(app, 'actions.json'), 'utf8').catch(() => '');
@@ -328,7 +334,7 @@ const functions = functionSource === undefined ? undefined : parseFunctions(func
 const functionContext = { files: paths, modules: settings.modules, actions: JSON.parse(actionsSource || '{"actions":{}}').actions ?? {} };
 if (functions) validateFunctions(functions, functionContext);
 if (functions) validateFunctionSources(functions, Object.fromEntries(sources));
-if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
+if (paths.some((file) => (file.startsWith('src/') || file.startsWith('functions/')) && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,
   read: async (file) => {
@@ -351,7 +357,7 @@ const artifact = await assembleStaticArtifact({
 let serverArtifact;
 if (functions && Object.keys(functions.functions).length) {
   validateFunctions(functions, { ...functionContext, staticPaths: Object.keys(artifact.files) });
-  serverArtifact = await bundleFunctions(app, functions, development);
+  serverArtifact = await bundleFunctions(app, functions, null, development, actionsModuleSource);
   validateServerArtifact(functions, serverArtifact);
 }
 const server = path.join(root, 'server');
