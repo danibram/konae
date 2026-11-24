@@ -58,11 +58,21 @@ function clearAllTimers() {
   timerRecords.clear();
 }
 
-globalThis.fetch = () => {
-  if (!running) refuseInitializationEffect('fetch');
+function unsupportedApi(api) {
+  if (!running) refuseInitializationEffect(api);
   opWorkerFailure('unsupported_runtime_api', null);
   throw new TypeError('unsupported_runtime_api');
-};
+}
+
+export function restrictAbortSignalTimeout(signalClass) {
+  Object.defineProperty(signalClass, 'timeout', {
+    value: () => unsupportedApi('AbortSignal.timeout'),
+    writable: false,
+    configurable: false,
+  });
+}
+
+globalThis.fetch = () => unsupportedApi('fetch');
 globalThis.setTimeout = (callback, delay, ...args) => scheduleTimer('setTimeout', callback, delay, ...args);
 globalThis.setInterval = (callback, delay, ...args) => scheduleTimer('setInterval', callback, delay, ...args);
 globalThis.clearTimeout = handle => clearTimer('clearTimeout', handle);

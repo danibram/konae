@@ -431,7 +431,8 @@ fn both_runners_follow_the_portable_web_contract() {
         ("/invalid-response", "invalid_response"),
     ] {
         let mut instance = worker(&bundles, timeout);
-        let error = invoke(&mut instance, input(path, "alice"), timeout).unwrap_err();
+        let error = invoke(&mut instance, input(path, "alice"), timeout)
+            .expect_err(&format!("{path} succeeded"));
         assert_eq!(
             konae_functions_executor::error_code(&error),
             code,
