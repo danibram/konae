@@ -469,26 +469,22 @@ fn record(
     trace: &TraceBuffer,
 ) -> Response {
     let now = Instant::now();
-    crate::usage::function_latency(
-        &state.data_root,
-        &deployment.id,
-        FunctionTiming {
-            name,
-            version: deployment.artifact_version.clone(),
-            budget: budget.deadline().duration_since(started),
-            total: now.duration_since(started),
-            queue: timed.queue,
-            initialization: timed.initialization,
-            execution: timed.execution,
-            cold: timed.cold,
-            timed_out: now >= budget.deadline(),
-            outcome: timed.outcome,
-            error_code: timed.error_code.clone(),
-            error_detail: timed.error_detail,
-        },
-    );
     let status = timed.response.status().as_u16();
     trace.set_root_error(timed.error_code.as_deref());
+    let timing = FunctionTiming {
+        name,
+        version: deployment.artifact_version.clone(),
+        budget: budget.deadline().duration_since(started),
+        total: now.duration_since(started),
+        queue: timed.queue,
+        initialization: timed.initialization,
+        execution: timed.execution,
+        cold: timed.cold,
+        timed_out: now >= budget.deadline(),
+        outcome: timed.outcome,
+        error_code: timed.error_code,
+        error_detail: timed.error_detail,
+    };
     if timed.outcome == FunctionOutcome::Replayed {
         let _ = trace.push(TraceRecord {
             parent: Some(0),
@@ -502,7 +498,7 @@ fn record(
             rows_written: None,
             reply_bytes: None,
             sqlite_us: None,
-            error_code: Some(function_data::IDEMPOTENCY_REPLAY_CODE.to_owned()),
+            error_code: Some(function_data::IDEMPOTENCY_REPLAY_CODE),
         });
     }
     let outcome = match timed.outcome {
@@ -515,44 +511,8 @@ fn record(
     };
     let data_root = state.data_root.clone();
     let deployment_id = deployment.id.clone();
-    let version = deployment.artifact_version.clone();
     let local = state.execution_mode.is_test();
-    trace.set_completion_hook(Arc::new(move |completed| {
-        let sqlite_by_sequence = completed
-            .records
-            .iter()
-            .filter_map(|row| {
-                row.sqlite_us
-                    .and_then(|duration| row.sequence.map(|sequence| (sequence, duration)))
-            })
-            .collect::<std::collections::HashMap<_, _>>();
-        let action_timings = completed
-            .records
-            .iter()
-            .filter(|row| row.name == "konae.action" && row.action_name.is_some())
-            .map(|row| crate::usage::FunctionActionTiming {
-                action: row.action_name.clone().expect("resolved action name"),
-                version: version.clone(),
-                origin: row.origin.unwrap_or("function").to_owned(),
-                duration: Duration::from_micros(row.duration_us),
-                sqlite: Duration::from_micros(
-                    row.sequence
-                        .and_then(|sequence| sqlite_by_sequence.get(&sequence).copied())
-                        .unwrap_or(0),
-                ),
-                rows_read: row.rows_read,
-                rows_written: row.rows_written,
-                reply_bytes: row.reply_bytes,
-                error_code: row.error_code.clone(),
-            })
-            .collect::<Vec<_>>();
-        crate::usage::function_action_latencies(&data_root, &deployment_id, action_timings);
-        if local {
-            crate::usage::function_trace(&data_root, &deployment_id, completed);
-        } else {
-            trace::submit_completed(completed);
-        }
-    }));
+    crate::usage::function_capture(data_root, deployment_id, timing, trace.clone(), local);
     trace.finish(status, outcome);
     let mut response = timed.response;
     trace::attach_response(&mut response, trace);
@@ -898,7 +858,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                     error_code: bundles_result
                         .as_ref()
                         .err()
-                        .map(|_| "function.artifact-changed".to_owned()),
+                        .map(|_| "function.artifact-changed"),
                 });
                 let bundles = match bundles_result {
                     Ok(bundles) => bundles,
@@ -928,7 +888,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                     ipc_sequence = ipc_sequence.saturating_add(1);
                     if operation != "action" {
                         let _ = action_trace.push(TraceRecord { parent: Some(0), name: "konae.action", start_us: action_trace.elapsed_us(), duration_us: 0,
-                            action_name: Some("<unknown>".into()), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.operation-forbidden".into()) });
+                            action_name: Some("<unknown>"), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.operation-forbidden".into()) });
                         return Err("function.operation-forbidden".into());
                     }
                     if request_method == "POST" && !action_body.complete() {
@@ -1003,7 +963,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                     }
                     let Some(action) = args["name"].as_str() else {
                         let _ = action_trace.push(TraceRecord { parent: Some(0), name: "konae.action", start_us: action_trace.elapsed_us(), duration_us: 0,
-                            action_name: Some("<unknown>".into()), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.input-invalid".into()) });
+                            action_name: Some("<unknown>"), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.input-invalid".into()) });
                         return Err("function.input-invalid".into());
                     };
                     match invocation.as_mut().unwrap().action_traced(action, args.get("input").unwrap_or(&Value::Null), &action_trace, ipc_sequence) {
@@ -1023,7 +983,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                     name: "konae.function.worker",
                     start_us: action_trace.elapsed_us().saturating_sub(worker_us),
                     duration_us: worker_us,
-                    action_name: Some(if run.cold { "cold" } else { "warm" }.into()),
+                    action_name: Some(if run.cold { "cold" } else { "warm" }),
                     origin: None,
                     sequence: None,
                     rows_read: None,
@@ -1048,7 +1008,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         .output
                         .as_ref()
                         .err()
-                        .map(|error| konae_functions_executor::error_code(error).to_owned()),
+                        .map(|error| konae_functions_executor::error_code(error)),
                 });
                 if run.cold {
                     let _ = action_trace.push(TraceRecord {

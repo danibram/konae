@@ -352,18 +352,15 @@ impl Invocation {
             return Err(error.clone());
         }
         let started = std::time::Instant::now();
+        let trace_start_us = trace.map(TraceBuffer::elapsed_us);
         let resolved = self.allowed.contains(name) && self.program.actions.contains_key(name);
         let span_index = trace.map(|trace| {
             trace.push(TraceRecord {
                 parent: Some(0),
                 name: "konae.action",
-                start_us: trace.elapsed_us(),
+                start_us: trace_start_us.unwrap_or_default(),
                 duration_us: 0,
-                action_name: Some(if resolved {
-                    name.to_owned()
-                } else {
-                    "<unknown>".into()
-                }),
+                action_name: Some(if resolved { name } else { "<unknown>" }),
                 origin: Some("function"),
                 sequence: Some(sequence),
                 rows_read: None,
@@ -384,10 +381,7 @@ impl Invocation {
                         .get("changes")
                         .and_then(Value::as_u64)
                         .map(|n| n.min(u32::MAX as u64) as u32);
-                    let bytes = serde_json::to_vec(answer)
-                        .ok()
-                        .map(|value| value.len().min(u32::MAX as usize) as u32);
-                    (read, written, bytes)
+                    (read, written, None)
                 });
             let code = result.as_ref().err().map(|error| match error.code {
                 "function.invocation-closed" => "function.invocation-closed",
@@ -407,20 +401,16 @@ impl Invocation {
                     TraceRecord {
                         parent: Some(0),
                         name: "konae.action",
-                        start_us: trace.elapsed_us().saturating_sub(duration_us),
+                        start_us: trace_start_us.unwrap_or_default(),
                         duration_us,
-                        action_name: Some(if resolved {
-                            name.to_owned()
-                        } else {
-                            "<unknown>".into()
-                        }),
+                        action_name: Some(if resolved { name } else { "<unknown>" }),
                         origin: Some("function"),
                         sequence: Some(sequence),
                         rows_read,
                         rows_written,
                         reply_bytes,
                         sqlite_us: None,
-                        error_code: code.map(str::to_owned),
+                        error_code: code,
                     },
                 );
             }
@@ -511,10 +501,7 @@ impl Invocation {
                 rows_written: None,
                 reply_bytes: None,
                 sqlite_us: Some(sqlite_us),
-                error_code: result
-                    .as_ref()
-                    .err()
-                    .map(|_| "function.action-failed".to_owned()),
+                error_code: result.as_ref().err().map(|_| "function.action-failed"),
             });
         }
         self.budget.check()?;
@@ -640,14 +627,14 @@ impl Invocation {
                 name: "konae.transaction",
                 start_us: trace.elapsed_us().saturating_sub(duration_us),
                 duration_us,
-                action_name: Some(outcome.into()),
+                action_name: Some(outcome),
                 origin: None,
                 sequence: None,
                 rows_read: None,
                 rows_written: None,
                 reply_bytes: None,
                 sqlite_us: None,
-                error_code: error_code.map(str::to_owned),
+                error_code,
             });
         }
         self.transaction_recorded = true;

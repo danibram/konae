@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
@@ -53,6 +53,8 @@ const SIGNALS_PAGE: i64 = 100;
 const QUEUE: usize = 16_384;
 const BATCH: usize = 1_024;
 const BATCH_WINDOW: Duration = Duration::from_millis(2);
+const MAX_FUNCTION_TRACE_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_FUNCTION_TRACE_READS: usize = 100;
 
 /// An operation of the runtime endpoint that the Kernel authorized.
 pub enum Operation {
@@ -125,10 +127,13 @@ enum Message {
         at: u64,
         timings: Vec<FunctionActionTiming>,
     },
-    FunctionTrace {
-        folder: PathBuf,
+    FunctionCapture {
+        data_root: PathBuf,
+        deployment_id: String,
         at: u64,
-        record: crate::functions::trace::CompletedTrace,
+        timing: FunctionTiming,
+        trace: crate::functions::trace::TraceBuffer,
+        local: bool,
     },
     Flush(SyncSender<()>),
 }
@@ -350,15 +355,24 @@ pub fn function_action_latencies(
     });
 }
 
-pub(crate) fn function_trace(
-    data_root: &Path,
-    deployment_id: &str,
-    record: crate::functions::trace::CompletedTrace,
+pub(crate) fn function_capture(
+    data_root: PathBuf,
+    deployment_id: String,
+    timing: FunctionTiming,
+    trace: crate::functions::trace::TraceBuffer,
+    local: bool,
 ) {
-    enqueue(Message::FunctionTrace {
-        folder: folder(data_root, deployment_id),
+    if !timing.valid() {
+        DROPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    enqueue(Message::FunctionCapture {
+        data_root,
+        deployment_id,
         at: super::now_ms(),
-        record,
+        timing,
+        trace,
+        local,
     });
 }
 
@@ -388,6 +402,9 @@ pub fn read_function_traces(
         })
         .collect::<Vec<_>>();
     traces.sort_by_key(|trace| trace["at"].as_i64().unwrap_or_default());
+    if traces.len() > MAX_FUNCTION_TRACE_READS {
+        traces.drain(..traces.len() - MAX_FUNCTION_TRACE_READS);
+    }
     Ok(traces)
 }
 
@@ -455,13 +472,27 @@ struct Batch {
     function_traces: Vec<(u64, Value)>,
 }
 
+struct PendingFunctionTrace {
+    folder: PathBuf,
+    at: u64,
+    version: String,
+    trace: crate::functions::trace::TraceBuffer,
+    local: bool,
+}
+
 fn writer(receiver: Receiver<Message>) {
-    while let Ok(first) = receiver.recv() {
+    let mut pending_traces = Vec::new();
+    loop {
+        let first = match receiver.recv_timeout(BATCH_WINDOW) {
+            Ok(message) => Some(message),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         let mut batches: HashMap<PathBuf, Batch> = HashMap::new();
         let mut flush = None;
         let mut signal_waiting = false;
         let deadline = std::time::Instant::now() + BATCH_WINDOW;
-        let mut next = Some(first);
+        let mut next = first;
         let mut taken = 0;
         while let Some(message) = next.take() {
             match message {
@@ -485,7 +516,7 @@ fn writer(receiver: Receiver<Message>) {
                     properties,
                     committed,
                 } => {
-                    let batch = batches.entry(folder).or_default();
+                    let batch = batches.entry(folder.clone()).or_default();
                     batch.signals.push((at, name, properties));
                     batch.commits.extend(committed);
                     signal_waiting = true;
@@ -537,12 +568,29 @@ fn writer(receiver: Receiver<Message>) {
                         .function_action_timings
                         .extend(timings.into_iter().map(|timing| (at, timing)));
                 }
-                Message::FunctionTrace { folder, at, record } => {
-                    batches
-                        .entry(folder)
-                        .or_default()
-                        .function_traces
-                        .push((at, record.local_json(at)));
+                Message::FunctionCapture {
+                    data_root,
+                    deployment_id,
+                    at,
+                    timing,
+                    trace,
+                    local,
+                } => {
+                    let folder = folder(&data_root, &deployment_id);
+                    let batch = batches.entry(folder.clone()).or_default();
+                    let version = timing.version.clone();
+                    batch.function_timings.push((at, timing));
+                    if let Some(completed) = trace.completed() {
+                        record_completed_trace(batch, at, &version, completed, local);
+                    } else {
+                        pending_traces.push(PendingFunctionTrace {
+                            folder,
+                            at,
+                            version,
+                            trace,
+                            local,
+                        });
+                    }
                 }
                 Message::Flush(done) => {
                     flush = Some(done);
@@ -560,6 +608,21 @@ fn writer(receiver: Receiver<Message>) {
                 };
             }
         }
+        let mut still_pending = Vec::with_capacity(pending_traces.len());
+        for pending in pending_traces.drain(..) {
+            if let Some(completed) = pending.trace.completed() {
+                record_completed_trace(
+                    batches.entry(pending.folder).or_default(),
+                    pending.at,
+                    &pending.version,
+                    completed,
+                    pending.local,
+                );
+            } else {
+                still_pending.push(pending);
+            }
+        }
+        pending_traces = still_pending;
         for (folder, batch) in batches {
             let result = write(&folder, &batch, super::now_ms());
             for receipt in batch.commits {
@@ -573,6 +636,24 @@ fn writer(receiver: Receiver<Message>) {
         if let Some(done) = flush {
             let _ = done.try_send(());
         }
+    }
+}
+
+fn record_completed_trace(
+    batch: &mut Batch,
+    at: u64,
+    version: &str,
+    trace: crate::functions::trace::CompletedTrace,
+    local: bool,
+) {
+    batch.function_action_timings.extend(
+        trace
+            .action_timings(version)
+            .into_iter()
+            .map(|sample| (at, sample)),
+    );
+    if local {
+        batch.function_traces.push((at, trace.local_json(at)));
     }
 }
 
@@ -821,28 +902,40 @@ fn write_function_traces(data_folder: &Path, traces: &[(u64, Value)], now: u64) 
     let directory = app.join(".konae");
     std::fs::create_dir_all(&directory)?;
     let path = directory.join("function-traces.jsonl");
-    let mut kept = std::fs::read_to_string(&path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|entry| {
-            entry["at"]
-                .as_u64()
-                .is_some_and(|at| at >= now.saturating_sub(86_400_000))
-        })
-        .collect::<Vec<_>>();
-    kept.extend(traces.iter().map(|(_, value)| value.clone()));
-    kept.sort_by_key(|entry| entry["at"].as_u64().unwrap_or_default());
-    if kept.len() > 100 {
-        kept.drain(..kept.len() - 100);
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        for (_, trace) in traces {
+            serde_json::to_writer(&mut file, trace)?;
+            file.write_all(b"\n")?;
+        }
+        file.flush()?;
     }
-    let mut bytes = Vec::new();
-    for entry in kept {
-        serde_json::to_writer(&mut bytes, &entry)?;
-        bytes.push(b'\n');
+    if std::fs::metadata(&path)?.len() > MAX_FUNCTION_TRACE_FILE_BYTES {
+        let mut kept = std::fs::read_to_string(&path)?
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|entry| {
+                entry["at"]
+                    .as_u64()
+                    .is_some_and(|at| at >= now.saturating_sub(86_400_000))
+            })
+            .collect::<Vec<_>>();
+        kept.sort_by_key(|entry| entry["at"].as_u64().unwrap_or_default());
+        if kept.len() > MAX_FUNCTION_TRACE_READS {
+            kept.drain(..kept.len() - MAX_FUNCTION_TRACE_READS);
+        }
+        let mut bytes = Vec::new();
+        for entry in kept {
+            serde_json::to_writer(&mut bytes, &entry)?;
+            bytes.push(b'\n');
+        }
+        std::fs::write(directory.join("function-traces.jsonl.tmp"), bytes)?;
+        std::fs::rename(directory.join("function-traces.jsonl.tmp"), path)?;
     }
-    std::fs::write(directory.join("function-traces.jsonl.tmp"), bytes)?;
-    std::fs::rename(directory.join("function-traces.jsonl.tmp"), path)?;
     Ok(())
 }
 
@@ -1541,23 +1634,23 @@ mod tests {
         let data = root.join("app/data");
         std::fs::create_dir_all(&data).unwrap();
         let now = 1_800_000_000_000u64;
-        let traces = (0..105)
+        let traces = (0..205)
             .map(|index| {
                 (
                     now + index,
-                    json!({"at": now + index, "traceId": format!("{index:032x}")}),
+                    json!({"at": now + index, "traceId": format!("{index:032x}"), "padding": "x".repeat(21_000)}),
                 )
             })
             .collect::<Vec<_>>();
-        write_function_traces(&data, &traces, now + 104).unwrap();
+        write_function_traces(&data, &traces, now + 204).unwrap();
         let text = std::fs::read_to_string(root.join("app/.konae/function-traces.jsonl")).unwrap();
         let records = text
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(records.len(), 100);
-        assert_eq!(records[0]["at"], now + 5);
-        assert_eq!(records[99]["at"], now + 104);
+        assert_eq!(records[0]["at"], now + 105);
+        assert_eq!(records[99]["at"], now + 204);
         std::fs::remove_dir_all(root).unwrap();
     }
 

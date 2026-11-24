@@ -1,21 +1,22 @@
 use axum::http::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use std::{
-    sync::{
-        Arc, Mutex, OnceLock, RwLock,
-        mpsc::{SyncSender, TrySendError},
-    },
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
 pub(super) const TRACEPARENT: &str = "traceparent";
 pub(super) const MAX_RECORDS: usize = 160;
+const MAX_INTERNED_NAMES: usize = MAX_RECORDS;
+const MAX_NAME_BYTES: usize = 100;
+const NO_NAME: u8 = u8::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TraceContext {
     pub trace_id: [u8; 16],
     pub parent_id: [u8; 8],
     pub sampled: bool,
+    response_seed: Option<[u8; 8]>,
 }
 
 impl TraceContext {
@@ -35,26 +36,31 @@ impl TraceContext {
 
     pub fn new() -> Self {
         let trace_id = *uuid::Uuid::new_v4().as_bytes();
-        let parent_id: [u8; 8] = uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap();
+        let parent_id = trace_id[..8].try_into().unwrap();
+        let response_seed = Some(trace_id[8..].try_into().unwrap());
         Self {
             trace_id,
             parent_id,
             sampled: false,
+            response_seed,
         }
     }
 
     pub(crate) fn child(&self) -> [u8; 8] {
-        uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()
+        self.response_seed
+            .unwrap_or_else(|| uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap())
     }
 
     pub(crate) fn header(&self, span_id: [u8; 8]) -> HeaderValue {
-        let text = format!(
-            "00-{}-{}-{:02x}",
-            hex(&self.trace_id),
-            hex(&span_id),
-            u8::from(self.sampled)
-        );
-        HeaderValue::from_str(&text).expect("traceparent contains only lowercase hex")
+        let mut bytes = [0; 55];
+        bytes[..3].copy_from_slice(b"00-");
+        hex_into(&mut bytes[3..35], &self.trace_id);
+        bytes[35] = b'-';
+        hex_into(&mut bytes[36..52], &span_id);
+        bytes[52] = b'-';
+        bytes[53] = b'0';
+        bytes[54] = if self.sampled { b'1' } else { b'0' };
+        HeaderValue::from_bytes(&bytes).expect("traceparent contains only lowercase hex")
     }
 }
 
@@ -73,6 +79,7 @@ fn parse(value: &str) -> Option<TraceContext> {
         trace_id,
         parent_id,
         sampled: flags & 1 != 0,
+        response_seed: None,
     })
 }
 
@@ -108,40 +115,192 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct TraceRecord {
+fn hex_into(output: &mut [u8], bytes: &[u8]) {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    debug_assert_eq!(output.len(), bytes.len() * 2);
+    for (index, byte) in bytes.iter().enumerate() {
+        output[index * 2] = DIGITS[(byte >> 4) as usize];
+        output[index * 2 + 1] = DIGITS[(byte & 15) as usize];
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TraceRecord<'a> {
     pub parent: Option<u8>,
     pub name: &'static str,
     pub start_us: u64,
     pub duration_us: u64,
-    pub action_name: Option<String>,
+    pub action_name: Option<&'a str>,
     pub origin: Option<&'static str>,
     pub sequence: Option<u16>,
     pub rows_read: Option<u32>,
     pub rows_written: Option<u32>,
     pub reply_bytes: Option<u32>,
     pub sqlite_us: Option<u64>,
-    pub error_code: Option<String>,
+    pub error_code: Option<&'a str>,
+}
+
+#[derive(Clone, Copy)]
+struct InternedName {
+    bytes: [u8; MAX_NAME_BYTES],
+    len: u8,
+}
+
+impl InternedName {
+    const EMPTY: Self = Self {
+        bytes: [0; MAX_NAME_BYTES],
+        len: 0,
+    };
+
+    fn new(value: &str) -> Self {
+        let mut len = value.len().min(MAX_NAME_BYTES);
+        while !value.is_char_boundary(len) {
+            len -= 1;
+        }
+        let mut name = Self::EMPTY;
+        name.bytes[..len].copy_from_slice(&value.as_bytes()[..len]);
+        name.len = len as u8;
+        name
+    }
+
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize]).expect("interned UTF-8 name")
+    }
+}
+
+#[derive(Clone, Copy)]
+struct StoredRecord {
+    parent: Option<u8>,
+    name: &'static str,
+    start_us: u64,
+    duration_us: u64,
+    action_name: u8,
+    origin: Option<&'static str>,
+    sequence: Option<u16>,
+    rows_read: Option<u32>,
+    rows_written: Option<u32>,
+    reply_bytes: Option<u32>,
+    sqlite_us: Option<u64>,
+    error_code: u8,
+}
+
+impl StoredRecord {
+    const EMPTY: Self = Self {
+        parent: None,
+        name: "",
+        start_us: 0,
+        duration_us: 0,
+        action_name: NO_NAME,
+        origin: None,
+        sequence: None,
+        rows_read: None,
+        rows_written: None,
+        reply_bytes: None,
+        sqlite_us: None,
+        error_code: NO_NAME,
+    };
+
+    fn new(record: TraceRecord<'_>, action_name: u8, error_code: u8) -> Self {
+        Self {
+            parent: record.parent,
+            name: record.name,
+            start_us: record.start_us,
+            duration_us: record.duration_us,
+            action_name,
+            origin: record.origin,
+            sequence: record.sequence,
+            rows_read: record.rows_read,
+            rows_written: record.rows_written,
+            reply_bytes: record.reply_bytes,
+            sqlite_us: record.sqlite_us,
+            error_code,
+        }
+    }
+}
+
+pub(super) struct Recorder {
+    records: [StoredRecord; MAX_RECORDS],
+    record_count: usize,
+    names: [InternedName; MAX_INTERNED_NAMES],
+    name_count: usize,
+    truncated: bool,
+}
+
+impl Recorder {
+    fn new() -> Self {
+        Self {
+            records: [StoredRecord::EMPTY; MAX_RECORDS],
+            record_count: 0,
+            names: [InternedName::EMPTY; MAX_INTERNED_NAMES],
+            name_count: 0,
+            truncated: false,
+        }
+    }
+
+    fn intern(&mut self, value: Option<&str>) -> u8 {
+        let Some(value) = value else { return NO_NAME };
+        for (index, name) in self.names[..self.name_count].iter().enumerate() {
+            if name.as_str() == value {
+                return index as u8;
+            }
+        }
+        if self.name_count == MAX_INTERNED_NAMES {
+            self.truncated = true;
+            return NO_NAME;
+        }
+        let id = self.name_count as u8;
+        self.names[self.name_count] = InternedName::new(value);
+        self.name_count += 1;
+        id
+    }
+
+    fn push(&mut self, record: TraceRecord<'_>) -> Option<u8> {
+        if self.record_count >= MAX_RECORDS - 2 {
+            self.truncated = true;
+            return None;
+        }
+        let action_name = self.intern(record.action_name);
+        let error_code = self.intern(record.error_code);
+        let index = self.record_count as u8;
+        self.records[self.record_count] = StoredRecord::new(record, action_name, error_code);
+        self.record_count += 1;
+        Some(index)
+    }
+
+    fn update(&mut self, index: u8, record: TraceRecord<'_>) {
+        if index as usize >= self.record_count {
+            return;
+        }
+        let action_name = self.intern(record.action_name);
+        let error_code = self.intern(record.error_code);
+        self.records[index as usize] = StoredRecord::new(record, action_name, error_code);
+    }
+
+    fn name(&self, id: u8) -> Option<&str> {
+        (id != NO_NAME)
+            .then(|| self.names.get(id as usize).map(InternedName::as_str))
+            .flatten()
+    }
 }
 
 #[derive(Clone)]
-pub(super) struct TraceBuffer(Arc<Inner>);
+pub(crate) struct TraceBuffer(Arc<Inner>);
 
 struct Inner {
     started: Instant,
     context: TraceContext,
     runner_kind: &'static str,
     response_span: [u8; 8],
-    records: Mutex<Vec<TraceRecord>>,
-    truncated: Mutex<bool>,
+    records: Mutex<Recorder>,
     completion: Mutex<CompletionState>,
-    hook: Mutex<Option<Arc<dyn Fn(CompletedTrace) + Send + Sync>>>,
+    #[cfg(test)]
+    hook: Mutex<Option<Box<dyn FnOnce(CompletedTrace) + Send>>>,
 }
 
 #[derive(Default)]
 struct CompletionState {
     pending_native: usize,
-    http: Option<(u16, String)>,
+    http: Option<(u16, &'static str)>,
     completed: bool,
 }
 
@@ -152,22 +311,26 @@ impl TraceBuffer {
             context,
             runner_kind,
             response_span: context.child(),
-            records: Mutex::new(vec![TraceRecord {
-                parent: None,
-                name: "konae.http.server",
-                start_us: 0,
-                duration_us: 0,
-                action_name: None,
-                origin: None,
-                sequence: None,
-                rows_read: None,
-                rows_written: None,
-                reply_bytes: None,
-                sqlite_us: None,
-                error_code: None,
-            }]),
-            truncated: Mutex::new(false),
+            records: Mutex::new({
+                let mut recorder = Recorder::new();
+                recorder.push(TraceRecord {
+                    parent: None,
+                    name: "konae.http.server",
+                    start_us: 0,
+                    duration_us: 0,
+                    action_name: None,
+                    origin: None,
+                    sequence: None,
+                    rows_read: None,
+                    rows_written: None,
+                    reply_bytes: None,
+                    sqlite_us: None,
+                    error_code: None,
+                });
+                recorder
+            }),
             completion: Mutex::new(CompletionState::default()),
+            #[cfg(test)]
             hook: Mutex::new(None),
         }))
     }
@@ -179,47 +342,30 @@ impl TraceBuffer {
         self.0.started.elapsed().as_micros().min(u64::MAX as u128) as u64
     }
     pub fn set_root_error(&self, code: Option<&str>) {
-        if let Some(root) = self
-            .0
-            .records
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .first_mut()
-        {
-            root.error_code = code.map(str::to_owned);
-        }
-    }
-
-    pub fn push(&self, record: TraceRecord) -> Option<u8> {
         let mut records = self
             .0
             .records
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if records.len() < MAX_RECORDS - 2 {
-            let index = records.len() as u8;
-            records.push(record);
-            Some(index)
-        } else {
-            *self
-                .0
-                .truncated
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = true;
-            None
+        if records.record_count > 0 {
+            records.records[0].error_code = records.intern(code);
         }
     }
 
-    pub fn update(&self, index: u8, record: TraceRecord) {
-        if let Some(slot) = self
-            .0
+    pub(super) fn push(&self, record: TraceRecord<'_>) -> Option<u8> {
+        self.0
             .records
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .get_mut(index as usize)
-        {
-            *slot = record;
-        }
+            .push(record)
+    }
+
+    pub(super) fn update(&self, index: u8, record: TraceRecord<'_>) {
+        self.0
+            .records
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .update(index, record);
     }
 
     pub fn retain_native(&self) {
@@ -239,7 +385,8 @@ impl TraceBuffer {
         drop(state);
         self.try_complete();
     }
-    pub fn set_completion_hook(&self, hook: Arc<dyn Fn(CompletedTrace) + Send + Sync>) {
+    #[cfg(test)]
+    pub fn set_completion_hook(&self, hook: Box<dyn FnOnce(CompletedTrace) + Send>) {
         *self
             .0
             .hook
@@ -248,119 +395,149 @@ impl TraceBuffer {
         self.try_complete();
     }
     pub fn finish(&self, status: u16, outcome: &'static str) {
-        if let Some(root) = self
-            .0
-            .records
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .first_mut()
         {
-            root.duration_us = self.elapsed_us();
+            let mut records = self
+                .0
+                .records
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if records.record_count > 0 {
+                records.records[0].duration_us = self.elapsed_us();
+            }
         }
         self.0
             .completion
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .http = Some((status, outcome.to_owned()));
+            .http = Some((status, outcome));
         self.try_complete();
     }
     fn try_complete(&self) {
-        let (status, outcome) = {
-            let mut state = self
-                .0
-                .completion
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if state.completed || state.pending_native != 0 {
-                return;
-            }
-            let Some(http) = state.http.clone() else {
-                return;
-            };
-            let hook_ready = self
-                .0
-                .hook
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_some();
-            if !hook_ready {
-                return;
-            }
-            state.completed = true;
-            http
-        };
-        let mut records = self
+        let mut state = self
             .0
-            .records
+            .completion
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let completed = CompletedTrace {
-            context: self.0.context,
-            runner_kind: self.0.runner_kind,
-            response_span: self.0.response_span,
-            records: std::mem::take(&mut *records),
-            truncated: *self
-                .0
-                .truncated
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()),
-            status,
-            outcome,
-        };
-        drop(records);
-        if let Some(hook) = self
+        if state.completed || state.pending_native != 0 {
+            return;
+        }
+        if state.http.is_none() {
+            return;
+        }
+        #[cfg(test)]
+        let Some(hook) = self
             .0
             .hook
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()
-        {
-            hook(completed);
-        }
+            .take()
+        else {
+            return;
+        };
+        #[cfg(test)]
+        let (status, outcome) = state.http.expect("completed HTTP status");
+        state.completed = true;
+        drop(state);
+        #[cfg(test)]
+        let completed = CompletedTrace {
+            inner: Arc::clone(&self.0),
+            status,
+            outcome,
+        };
+        #[cfg(test)]
+        hook(completed);
     }
 }
 
-#[derive(Clone, Debug)]
+impl TraceBuffer {
+    pub(crate) fn completed(&self) -> Option<CompletedTrace> {
+        let state = self
+            .0
+            .completion
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !state.completed {
+            return None;
+        }
+        let (status, outcome) = state.http?;
+        Some(CompletedTrace {
+            inner: Arc::clone(&self.0),
+            status,
+            outcome,
+        })
+    }
+}
+
 pub(crate) struct CompletedTrace {
-    pub(super) context: TraceContext,
-    pub(super) runner_kind: &'static str,
-    pub(super) response_span: [u8; 8],
-    pub(super) records: Vec<TraceRecord>,
-    pub(super) truncated: bool,
+    inner: Arc<Inner>,
     pub(super) status: u16,
-    pub(super) outcome: String,
+    pub(super) outcome: &'static str,
 }
 
 impl CompletedTrace {
     pub(crate) fn local_json(&self, at: u64) -> Value {
-        let spans = self.records.iter().map(|row| json!({
-            "parent": row.parent, "name": row.name, "startUs": row.start_us, "durationUs": row.duration_us,
-            "action": row.action_name, "origin": row.origin, "sequence": row.sequence,
-            "rowsRead": row.rows_read, "rowsWritten": row.rows_written, "replyBytes": row.reply_bytes,
-            "sqliteUs": row.sqlite_us, "errorCode": row.error_code,
-        })).collect::<Vec<_>>();
-        json!({"at":at,"traceId":hex(&self.context.trace_id),"spanId":hex(&self.response_span),"runnerKind":self.runner_kind,"status":self.status,"outcome":self.outcome,"truncated":self.truncated,"spans":spans})
+        let records = self
+            .inner
+            .records
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let spans = records.records[..records.record_count]
+            .iter()
+            .map(|row| json!({
+                "parent": row.parent, "name": row.name, "startUs": row.start_us, "durationUs": row.duration_us,
+                "action": records.name(row.action_name), "origin": row.origin, "sequence": row.sequence,
+                "rowsRead": row.rows_read, "rowsWritten": row.rows_written, "replyBytes": row.reply_bytes,
+                "sqliteUs": row.sqlite_us, "errorCode": records.name(row.error_code),
+            }))
+            .collect::<Vec<_>>();
+        json!({"at":at,"traceId":hex(&self.inner.context.trace_id),"spanId":hex(&self.inner.response_span),"runnerKind":self.inner.runner_kind,"status":self.status,"outcome":self.outcome,"truncated":records.truncated,"spans":spans})
     }
-}
 
-static COMPLETED_SINK: OnceLock<RwLock<Option<SyncSender<CompletedTrace>>>> = OnceLock::new();
-
-#[allow(dead_code)]
-pub(super) fn set_completed_sink(sink: SyncSender<CompletedTrace>) {
-    *COMPLETED_SINK
-        .get_or_init(|| RwLock::new(None))
-        .write()
-        .unwrap_or_else(|error| error.into_inner()) = Some(sink);
-}
-
-pub(super) fn submit_completed(trace: CompletedTrace) {
-    if let Some(sink) = COMPLETED_SINK
-        .get()
-        .and_then(|value| value.read().ok()?.clone())
-    {
-        match sink.try_send(trace) {
-            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+    pub(crate) fn action_timings(&self, version: &str) -> Vec<crate::usage::FunctionActionTiming> {
+        let storage = self
+            .inner
+            .records
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let records = &storage.records[..storage.record_count];
+        let mut timings = Vec::new();
+        for record in records
+            .iter()
+            .filter(|record| record.name == "konae.action")
+        {
+            let Some(action) = storage.name(record.action_name) else {
+                continue;
+            };
+            if action == "<unknown>" {
+                continue;
+            }
+            let sqlite = records
+                .iter()
+                .find(|child| child.name == "konae.sqlite" && child.sequence == record.sequence);
+            timings.push(crate::usage::FunctionActionTiming {
+                action: action.to_owned(),
+                version: version.to_owned(),
+                origin: record.origin.unwrap_or("function").to_owned(),
+                duration: std::time::Duration::from_micros(record.duration_us),
+                sqlite: std::time::Duration::from_micros(
+                    sqlite.and_then(|child| child.sqlite_us).unwrap_or(0),
+                ),
+                rows_read: record.rows_read,
+                rows_written: record.rows_written,
+                reply_bytes: record.reply_bytes,
+                error_code: storage.name(record.error_code).map(str::to_owned),
+            });
         }
+        timings
+    }
+
+    #[cfg(test)]
+    fn is_truncated(&self) -> bool {
+        self.inner
+            .records
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .truncated
     }
 }
 
@@ -466,14 +643,14 @@ mod function_trace_tests {
         }
         let trace_id = trace.0.context.trace_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        trace.set_completion_hook(Arc::new(move |completed| {
+        trace.set_completion_hook(Box::new(move |completed| {
             let _ = sender.send(completed);
         }));
         trace.finish(403, "refused");
         let completed = receiver.recv().unwrap();
         let value = completed.local_json(1_800_000_000_000);
         assert_eq!(value["spans"].as_array().unwrap().len(), MAX_RECORDS - 2);
-        assert!(completed.truncated);
+        assert!(completed.is_truncated());
         assert_eq!(value["status"], 403);
         assert_eq!(value["runnerKind"], "deno");
         let text = value.to_string();
@@ -488,7 +665,7 @@ mod function_trace_tests {
         let trace = TraceBuffer::new(TraceContext::new(), Instant::now(), "deno");
         trace.retain_native();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        trace.set_completion_hook(Arc::new(move |completed| {
+        trace.set_completion_hook(Box::new(move |completed| {
             let _ = sender.send(completed);
         }));
         trace.finish(409, "mutation_outcome_unknown");
@@ -511,10 +688,62 @@ mod function_trace_tests {
         let completed = receiver.recv().unwrap();
         assert_eq!(completed.status, 409);
         assert!(
-            completed
-                .records
+            completed.local_json(0)["spans"]
+                .as_array()
+                .unwrap()
                 .iter()
-                .any(|record| record.name == "konae.transaction")
+                .any(|record| record["name"] == "konae.transaction")
         );
+    }
+
+    #[test]
+    fn action_summaries_keep_resolved_names_and_match_sqlite_children() {
+        let trace = TraceBuffer::new(TraceContext::new(), Instant::now(), "wasm");
+        let long_action = format!("sample.{}", "a".repeat(70));
+        for (sequence, action, duration, rows) in [
+            (1, long_action.as_str(), 28, Some(2)),
+            (2, "<unknown>", 9, None),
+        ] {
+            let _ = trace.push(TraceRecord {
+                parent: Some(0),
+                name: "konae.action",
+                start_us: 10,
+                duration_us: duration,
+                action_name: Some(action),
+                origin: Some("function"),
+                sequence: Some(sequence),
+                rows_read: rows,
+                rows_written: None,
+                reply_bytes: Some(16),
+                sqlite_us: None,
+                error_code: None,
+            });
+        }
+        let _ = trace.push(TraceRecord {
+            parent: Some(1),
+            name: "konae.sqlite",
+            start_us: 12,
+            duration_us: 7,
+            action_name: None,
+            origin: None,
+            sequence: Some(1),
+            rows_read: None,
+            rows_written: None,
+            reply_bytes: None,
+            sqlite_us: Some(7),
+            error_code: None,
+        });
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        trace.set_completion_hook(Box::new(move |completed| {
+            let _ = sender.send(completed);
+        }));
+        trace.finish(200, "ok");
+        let completed = receiver.recv().unwrap();
+        let timings = completed.action_timings("fixture-version");
+        assert_eq!(timings.len(), 1);
+        assert_eq!(timings[0].action, long_action);
+        assert_eq!(timings[0].duration.as_micros(), 28);
+        assert_eq!(timings[0].sqlite.as_micros(), 7);
+        assert_eq!(timings[0].rows_read, Some(2));
     }
 }
