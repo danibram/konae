@@ -277,6 +277,40 @@ fn invoke_selects_the_named_bundle() {
     }
 }
 
+#[cfg(feature = "starling-runner")]
+#[test]
+fn six_distinct_components_share_one_worker() {
+    let names = [
+        "orders",
+        "customers",
+        "inventory",
+        "shipments",
+        "invoices",
+        "returns",
+    ];
+    let sources = names
+        .map(|name| format!("export function handle() {{ return new Response('{name}'); }}"));
+    let entries: Vec<_> = names
+        .into_iter()
+        .zip(sources.iter().map(String::as_str))
+        .collect();
+    let bundle = Bundle::with_sources(&entries);
+    let mut worker = worker(&bundle, Duration::from_secs(2));
+    let pid = worker.pid().unwrap();
+    for name in names.into_iter().chain(["orders", "orders"]) {
+        let output = invoke_function(
+            &mut worker,
+            name,
+            input("/", "alice"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(200, output.status);
+        assert_eq!(name, output.body);
+        assert_eq!(Some(pid), worker.pid());
+    }
+}
+
 #[test]
 fn static_import_is_refused_before_module_evaluation() {
     let bundle = Bundle::new(

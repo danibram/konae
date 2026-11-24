@@ -6,7 +6,12 @@ use konae_functions_executor::{
 };
 use serde_json::Value;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    os::{
+        fd::FromRawFd,
+        unix::fs::{FileExt, MetadataExt},
+    },
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, UNIX_EPOCH},
 };
@@ -18,6 +23,7 @@ use wasmtime::{
     Engine, Store, UpdateDeadline,
 };
 
+const MAX_COMPONENT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RANDOM_BYTES: u64 = 1 << 20;
 const ALLOWED_COMPONENT_IMPORTS: [&str; 15] = [
     "konae:worker/host",
@@ -116,17 +122,97 @@ fn link_worker_imports(linker: &mut Linker<Bridge>) -> Result<()> {
     Ok(())
 }
 
+pub struct PreparedComponents {
+    descriptors: BTreeMap<String, ComponentDescriptor>,
+    loaded: Option<((u64, u64), InstancePre<Bridge>)>,
+}
+
+struct ComponentDescriptor {
+    file: File,
+    identity: (u64, u64),
+    size: u64,
+}
+
+impl ComponentDescriptor {
+    fn open(fd: u32) -> Result<Self> {
+        let raw = i32::try_from(fd)?;
+        let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+        ensure!(
+            flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY,
+            "component descriptor is not read-only"
+        );
+        let file = unsafe { File::from_raw_fd(raw) };
+        let metadata = file.metadata()?;
+        let size = metadata.len();
+        ensure!(
+            metadata.is_file() && size > 0 && size <= MAX_COMPONENT_BYTES,
+            "invalid prepared component descriptor"
+        );
+        Ok(Self {
+            file,
+            identity: (metadata.dev(), metadata.ino()),
+            size,
+        })
+    }
+
+    fn read(&self) -> Result<Vec<u8>> {
+        let mut bytes = vec![0; self.size as usize];
+        self.file.read_exact_at(&mut bytes, 0)?;
+        ensure!(
+            self.file.metadata()?.len() == self.size,
+            "prepared component size changed"
+        );
+        Ok(bytes)
+    }
+}
+
+impl PreparedComponents {
+    pub fn open(components: BTreeMap<String, u32>) -> Result<Self> {
+        let descriptors = components
+            .into_iter()
+            .map(|(name, fd)| Ok((name, ComponentDescriptor::open(fd)?)))
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            descriptors,
+            loaded: None,
+        })
+    }
+
+    pub fn load(&mut self, compiler: &Compiler, name: Option<&str>) -> Result<&InstancePre<Bridge>> {
+        let descriptor = match name {
+            Some(name) => self
+                .descriptors
+                .get(name)
+                .ok_or_else(|| WorkerError::new("invalid_function_name"))?,
+            None => self
+                .descriptors
+                .values()
+                .next()
+                .ok_or_else(|| WorkerError::new("invalid_init"))?,
+        };
+        if self
+            .loaded
+            .as_ref()
+            .is_none_or(|(identity, _)| *identity != descriptor.identity)
+        {
+            // Drop the old image before allocating space to read its replacement.
+            self.loaded = None;
+            let bytes = descriptor.read()?;
+            let component = Invocation::pack_prepared(compiler, &bytes)?;
+            self.loaded = Some((descriptor.identity, component));
+        }
+        Ok(&self.loaded.as_ref().unwrap().1)
+    }
+}
+
 pub struct Invocation {
     instance: Instance,
     store: Store<Bridge>,
 }
 
 impl Invocation {
-    pub fn pack_prepared(compiler: &Compiler, bytes: &[u8]) -> Result<InstancePre<Bridge>> {
-        ensure!(
-            !bytes.is_empty() && bytes.len() <= 512 * 1024 * 1024,
-            "Invalid prepared component size"
-        );
+    fn pack_prepared(compiler: &Compiler, bytes: &[u8]) -> Result<InstancePre<Bridge>> {
+        // The Kernel verifies the native file in the operator's cache before passing its descriptor.
         let component = unsafe { Component::deserialize(&compiler.engine, bytes) }
             .context("Load the prepared StarlingMonkey component")?;
         let imports = component
