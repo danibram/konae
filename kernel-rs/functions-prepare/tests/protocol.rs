@@ -49,7 +49,7 @@ fn prepare_emits_a_component_and_hashes_the_exact_bytes() {
         String::from_utf8_lossy(&result.stderr)
     );
     let reply: Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(reply["status"], "ok");
+    assert_eq!(reply["status"], "ok", "{reply}");
     assert_eq!(reply["manifest"]["abi"], "konae-functions-wasm/1");
     assert_eq!(
         reply["manifest"]["inputSha256"],

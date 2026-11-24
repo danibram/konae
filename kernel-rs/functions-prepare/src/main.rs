@@ -603,23 +603,6 @@ mod tests {
     use std::os::unix::process::CommandExt;
 
     #[test]
-    fn prepares_starlingmonkey_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("bundle.mjs");
-        let output = dir.path().join("component.wasm");
-        fs::write(
-            &input,
-            "export function handle() { return new Response('ok'); }",
-        )
-        .unwrap();
-
-        let (status, manifest, diagnostic) = prepare_bundle(&input, &output).unwrap();
-        assert_eq!(status, "ok", "{diagnostic:?}");
-        let sha = hex(Sha256::digest(fs::read(output).unwrap()).as_slice());
-        assert_eq!(manifest.unwrap().component_sha256, sha);
-    }
-
-    #[test]
     fn scratch_limit_counts_files_across_the_directory() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("one"), [0u8; 7]).unwrap();
