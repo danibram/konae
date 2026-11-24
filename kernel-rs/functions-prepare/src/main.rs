@@ -27,6 +27,9 @@ const INPUT_LIMIT: u64 = 64 * 1024 * 1024;
 const OUTPUT_LIMIT: u64 = 64 * 1024 * 1024;
 const SCRATCH_LIMIT: u64 = 256 * 1024 * 1024;
 const WIZER_MEMORY_LIMIT: u64 = 1536 * 1024 * 1024;
+// Wasmtime reserves 4 GiB plus guards for the StarlingMonkey linear memory.
+#[cfg(target_os = "linux")]
+const WIZER_ADDRESS_SPACE_LIMIT: u64 = 6 * 1024 * 1024 * 1024;
 const STDOUT_LIMIT: usize = 8 * 1024;
 const STDERR_LIMIT: usize = 4 * 1024;
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -272,12 +275,13 @@ fn prepare_bundle(
         dir.display()
     )?;
     loop {
-        if let Some(limit) = exceeded_limit(child.id(), dir, SCRATCH_LIMIT, WIZER_MEMORY_LIMIT)? {
+        let limit = exceeded_limit(child.id(), dir, SCRATCH_LIMIT, WIZER_MEMORY_LIMIT);
+        if !matches!(limit, Ok(None)) {
             let _ = child.kill();
             let _ = child.wait();
             let _ = out_reader.join();
             let _ = err_reader.join();
-            return Ok(("build_limit", None, Some(limit.to_owned())));
+            return Ok(("build_limit", None, limit?.map(str::to_owned)));
         }
         if start.elapsed() > DEADLINE {
             let _ = child.kill();
@@ -476,12 +480,9 @@ fn exceeded_limit(
             "preparation scratch space exceeds the configured byte limit",
         ));
     }
-    #[cfg(target_os = "macos")]
     if process_memory_usage(pid)?.is_some_and(|usage| usage > memory_limit) {
         return Ok(Some("Wizer exceeded the configured memory limit"));
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (pid, memory_limit);
     Ok(None)
 }
 
@@ -497,14 +498,31 @@ fn apply_child_limits() -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         let memory = libc::rlimit {
-            rlim_cur: WIZER_MEMORY_LIMIT,
-            rlim_max: WIZER_MEMORY_LIMIT,
+            rlim_cur: WIZER_ADDRESS_SPACE_LIMIT,
+            rlim_max: WIZER_ADDRESS_SPACE_LIMIT,
         };
         if unsafe { libc::setrlimit(libc::RLIMIT_AS, &memory) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn process_memory_usage(pid: u32) -> Result<Option<u64>> {
+    let status = match fs::read_to_string(format!("/proc/{pid}/status")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        status => status?,
+    };
+    let Some(rss) = status.lines().find_map(|line| line.strip_prefix("VmRSS:")) else {
+        return Ok(None);
+    };
+    let kibibytes = rss
+        .split_whitespace()
+        .next()
+        .context("Wizer RSS has no value")?
+        .parse::<u64>()?;
+    Ok(Some(kibibytes.saturating_mul(1024)))
 }
 
 #[cfg(target_os = "macos")]
@@ -579,6 +597,7 @@ fn check_init(snapshot: &[u8]) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::os::unix::process::CommandExt;
 
     #[test]
@@ -611,38 +630,40 @@ mod tests {
     }
 
     #[test]
+    fn polls_child_memory() {
+        let mut child = Command::new("/bin/sleep").arg("5").spawn().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let limit = loop {
+            let limit = exceeded_limit(child.id(), scratch.path(), u64::MAX, 1);
+            if !matches!(limit, Ok(None)) || start.elapsed() > Duration::from_secs(1) {
+                break limit;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(
+            limit.unwrap(),
+            Some("Wizer exceeded the configured memory limit")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn child_address_space_limit_is_applied() {
-        #[cfg(target_os = "macos")]
-        {
-            let mut command = std::process::Command::new("/bin/sh");
-            command.args(["-c", "sleep 5"]);
-            unsafe {
-                command.pre_exec(apply_child_limits);
-            }
-            let mut child = command.spawn().unwrap();
-            let scratch = tempfile::tempdir().unwrap();
-            assert_eq!(
-                exceeded_limit(child.id(), scratch.path(), u64::MAX, 1).unwrap(),
-                Some("Wizer exceeded the configured memory limit")
-            );
-            let _ = child.kill();
-            let _ = child.wait();
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "ulimit -v"]);
+        unsafe {
+            command.pre_exec(apply_child_limits);
         }
-        #[cfg(target_os = "linux")]
-        {
-            let mut command = std::process::Command::new("/bin/sh");
-            command.args(["-c", "ulimit -v"]);
-            unsafe {
-                command.pre_exec(apply_child_limits);
-            }
-            let output = command.output().unwrap();
-            assert!(output.status.success());
-            let kibibytes: u64 = String::from_utf8(output.stdout)
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap();
-            assert_eq!(kibibytes, WIZER_MEMORY_LIMIT / 1024);
-        }
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let kibibytes: u64 = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(kibibytes, WIZER_ADDRESS_SPACE_LIMIT / 1024);
     }
 }
