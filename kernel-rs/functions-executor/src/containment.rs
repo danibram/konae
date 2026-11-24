@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub enum MemoryPolicy {
     DevelopmentPolling,
     LinuxCgroup { delegated_root: PathBuf },
+    Wasm,
 }
 
 pub(crate) struct Containment {
@@ -15,6 +16,7 @@ impl Containment {
     pub(crate) fn prepare(policy: MemoryPolicy, bytes: usize, generation: &str) -> Result<Self> {
         match policy {
             MemoryPolicy::DevelopmentPolling => Ok(Self { path: None }),
+            MemoryPolicy::Wasm => Ok(Self { path: None }),
             MemoryPolicy::LinuxCgroup { delegated_root } => {
                 Self::cgroup(delegated_root, bytes, generation)
             }
@@ -313,15 +315,14 @@ mod tests {
 
     #[test]
     fn dropping_an_abort_handle_does_not_clean_up_the_worker_cgroup() {
-        let path =
-            std::env::temp_dir().join(format!(
-                "konae-cgroup-handle-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|elapsed| elapsed.as_nanos())
-                    .unwrap_or_default()
-            ));
+        let path = std::env::temp_dir().join(format!(
+            "konae-cgroup-handle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default()
+        ));
         std::fs::create_dir(&path).unwrap();
         std::fs::write(path.join("cgroup.kill"), "0").unwrap();
         let containment = Containment {

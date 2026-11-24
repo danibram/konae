@@ -25,6 +25,7 @@ const SHUTDOWN: Duration = Duration::from_millis(10);
 struct Config {
     executable: PathBuf,
     policy: MemoryPolicy,
+    wasm: bool,
 }
 
 struct Slot {
@@ -100,7 +101,32 @@ impl Runtime {
         deadline: Duration,
         idle: Duration,
     ) -> Self {
-        Self::new(Some(Config { executable, policy }), deadline, idle)
+        Self::new(
+            Some(Config {
+                executable,
+                policy,
+                wasm: std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm"),
+            }),
+            deadline,
+            idle,
+        )
+    }
+
+    fn configured_wasm(
+        executable: PathBuf,
+        policy: MemoryPolicy,
+        deadline: Duration,
+        idle: Duration,
+    ) -> Self {
+        Self::new(
+            Some(Config {
+                executable,
+                policy,
+                wasm: true,
+            }),
+            deadline,
+            idle,
+        )
     }
 
     fn new(config: Option<Config>, deadline: Duration, idle: Duration) -> Self {
@@ -145,7 +171,13 @@ impl Runtime {
                 let worker = match slot.worker.try_lock() {
                     Ok(guard) => guard
                         .as_ref()
-                        .map(|worker| format!("worker pid={:?} synchronized={}", worker.pid(), worker.is_synchronized()))
+                        .map(|worker| {
+                            format!(
+                                "worker pid={:?} synchronized={}",
+                                worker.pid(),
+                                worker.is_synchronized()
+                            )
+                        })
                         .unwrap_or_else(|| "no worker".into()),
                     Err(_) => "worker mutex held".into(),
                 };
@@ -464,9 +496,7 @@ impl Lease {
                     progress.cold = true;
                     progress.initialization_started = Some(started);
                 }
-                let spawned = if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref()
-                    == Ok("wasm")
-                {
+                let spawned = if self.config.wasm {
                     Worker::spawn_prepared_with_policy(
                         &self.config.executable,
                         crate::functions::prepared_bundles(bundles)?,
@@ -593,8 +623,26 @@ async fn wait<T>(budget: &Budget, future: impl Future<Output = T>) -> Result<T, 
 mod kernel_environment {
     use super::*;
 
+    pub(super) fn runner_kind(kind: Option<&str>) -> anyhow::Result<bool> {
+        match kind {
+            Some("wasm") => Ok(true),
+            Some("deno") | None => Ok(false),
+            Some(_) => anyhow::bail!("KONAE_FUNCTIONS_RUNNER_KIND must be deno or wasm"),
+        }
+    }
+
     pub(super) fn create() -> anyhow::Result<Runtime> {
+        let kind = match std::env::var("KONAE_FUNCTIONS_RUNNER_KIND") {
+            Ok(kind) => Some(kind),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error.into()),
+        };
+        let wasm = runner_kind(kind.as_deref())?;
         let Some(executable) = std::env::var_os("KONAE_FUNCTIONS_RUNNER") else {
+            anyhow::ensure!(
+                !wasm,
+                "KONAE_FUNCTIONS_RUNNER is required when KONAE_FUNCTIONS_RUNNER_KIND=wasm"
+            );
             return Ok(Runtime::disabled());
         };
         let executable = PathBuf::from(executable);
@@ -610,7 +658,82 @@ mod kernel_environment {
                 "KONAE_FUNCTIONS_RUNNER must be executable"
             );
         }
-        let policy = if std::env::var("KONAE_FUNCTIONS_DEVELOPMENT").as_deref() == Ok("1") {
+        let development = match std::env::var("KONAE_FUNCTIONS_DEVELOPMENT") {
+            Ok(value) if value == "1" => true,
+            Ok(value) if value == "0" => false,
+            Ok(_) => anyhow::bail!("KONAE_FUNCTIONS_DEVELOPMENT must be 0 or 1"),
+            Err(std::env::VarError::NotPresent) => false,
+            Err(error) => return Err(error.into()),
+        };
+        if development {
+            let bind = std::env::var("KONAE_BIND").unwrap_or_else(|_| "127.0.0.1".into());
+            anyhow::ensure!(
+                matches!(bind.as_str(), "127.0.0.1" | "localhost" | "::1"),
+                "KONAE_FUNCTIONS_DEVELOPMENT=1 requires a loopback KONAE_BIND"
+            );
+        }
+        let policy = if wasm {
+            let preparer = std::env::var_os("KONAE_FUNCTIONS_PREPARER")
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "KONAE_FUNCTIONS_PREPARER must name the packaged Wasm preparation helper"
+                    )
+                })?;
+            let cache = std::env::var_os("KONAE_FUNCTIONS_WASM_CACHE")
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "KONAE_FUNCTIONS_WASM_CACHE must name the operator-owned Wasm cache"
+                    )
+                })?;
+            anyhow::ensure!(
+                preparer.is_absolute() && preparer.is_file(),
+                "KONAE_FUNCTIONS_PREPARER must name an absolute executable file"
+            );
+            anyhow::ensure!(
+                cache.is_absolute(),
+                "KONAE_FUNCTIONS_WASM_CACHE must be absolute"
+            );
+            let cache_metadata = std::fs::symlink_metadata(&cache).map_err(|_| {
+                anyhow::anyhow!(
+                    "KONAE_FUNCTIONS_WASM_CACHE must be an existing operator-owned directory"
+                )
+            })?;
+            anyhow::ensure!(
+                cache_metadata.is_dir(),
+                "KONAE_FUNCTIONS_WASM_CACHE must be an existing directory, not a symlink"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                anyhow::ensure!(
+                    cache_metadata.uid() == unsafe { libc::geteuid() }
+                        && cache_metadata.permissions().mode() & 0o022 == 0,
+                    "KONAE_FUNCTIONS_WASM_CACHE must be owned by the Kernel user and not writable by group or others"
+                );
+            }
+            if !development {
+                #[cfg(not(target_os = "linux"))]
+                anyhow::bail!("the Wasm production worker policy requires Linux");
+                #[cfg(target_os = "linux")]
+                konae_functions_executor::validate_linux_worker_identity()
+                    .map_err(|_| anyhow::anyhow!("KONAE_FUNCTIONS_UID and KONAE_FUNCTIONS_GID must name a separate non-root worker identity, and the Kernel must hold CAP_KILL, CAP_SETUID and CAP_SETGID"))?;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                anyhow::ensure!(
+                    preparer.metadata()?.permissions().mode() & 0o111 != 0,
+                    "KONAE_FUNCTIONS_PREPARER must be executable"
+                );
+            }
+            if development {
+                MemoryPolicy::DevelopmentPolling
+            } else {
+                MemoryPolicy::Wasm
+            }
+        } else if development {
             MemoryPolicy::DevelopmentPolling
         } else if let Some(root) = std::env::var_os("KONAE_FUNCTIONS_CGROUP") {
             konae_functions_executor::validate_linux_worker_identity()
@@ -628,12 +751,13 @@ mod kernel_environment {
                 "KONAE_FUNCTIONS_CGROUP is required when KONAE_FUNCTIONS_RUNNER is set, unless KONAE_FUNCTIONS_DEVELOPMENT=1"
             )
         };
-        Ok(Runtime::configured(
-            executable,
-            policy,
-            env_duration("KONAE_FUNCTIONS_TIMEOUT_MS", 1000)?,
-            env_duration("KONAE_FUNCTIONS_IDLE_MS", 60_000)?,
-        ))
+        let deadline = env_duration("KONAE_FUNCTIONS_TIMEOUT_MS", 1000)?;
+        let idle = env_duration("KONAE_FUNCTIONS_IDLE_MS", 60_000)?;
+        Ok(if wasm {
+            Runtime::configured_wasm(executable, policy, deadline, idle)
+        } else {
+            Runtime::configured(executable, policy, deadline, idle)
+        })
     }
 
     fn env_duration(name: &str, default: u64) -> anyhow::Result<Duration> {
@@ -649,6 +773,19 @@ mod kernel_environment {
             "{name} must be between 1 and 86400000"
         );
         Ok(Duration::from_millis(milliseconds))
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::kernel_environment::runner_kind;
+
+    #[test]
+    fn runner_kind_defaults_to_deno_and_rejects_unknown_values() {
+        assert_eq!(runner_kind(None).unwrap(), false);
+        assert_eq!(runner_kind(Some("deno")).unwrap(), false);
+        assert_eq!(runner_kind(Some("wasm")).unwrap(), true);
+        assert!(runner_kind(Some("other")).is_err());
     }
 }
 

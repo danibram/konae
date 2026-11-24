@@ -22,5 +22,9 @@ pub fn starling() -> wasmtime::Config {
     // libunwind can spend more than a second unregistering a StarlingMonkey image on macOS.
     #[cfg(target_os = "macos")]
     config.native_unwind_info(false);
+    // Wasmtime writes anonymous memory images to a memfd on Linux.
+    // Workers run with a zero file-size limit.
+    #[cfg(target_os = "linux")]
+    config.memory_init_cow(false);
     config
 }

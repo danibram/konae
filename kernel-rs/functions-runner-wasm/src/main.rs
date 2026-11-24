@@ -62,6 +62,9 @@ fn native_target() -> Result<()> {
     digest.update(b"epoch-interruption;pooling;256MiB-memory;component-model");
     #[cfg(target_os = "macos")]
     digest.update(b";native-unwind-info=off");
+    if cfg!(target_os = "linux") {
+        digest.update(b";memory-init-cow=false");
+    }
     digest.update(std::env::consts::ARCH.as_bytes());
     digest.update(std::env::consts::OS.as_bytes());
     digest.update(env!("CARGO_PKG_VERSION").as_bytes());
@@ -107,30 +110,47 @@ enum Command {
 }
 
 fn worker() -> Result<()> {
-    if std::env::var("KONAE_INTERNAL_FUNCTIONS_SANDBOX").as_deref() == Ok("linux-v1") {
-        bail!("the Wasm spike requires the executor development policy");
+    let sandbox = std::env::var("KONAE_INTERNAL_FUNCTIONS_SANDBOX").unwrap_or_default();
+    if sandbox == "linux-v1" {
+        bail!("the Wasm runner requires the Wasm launch policy");
+    }
+    #[cfg(target_os = "linux")]
+    if sandbox != "wasm-v1" && sandbox != "disabled" {
+        bail!("the Wasm runner requires the Wasm launch policy");
     }
     let mut input = io::stdin();
     #[cfg(feature = "starling-runner")]
     let (abi, generation, limits, components) = match protocol::read_parent(&mut input)? {
-        ParentMessage::InitPrepared { abi, generation, limits, components } => (abi, generation, limits, components),
+        ParentMessage::InitPrepared {
+            abi,
+            generation,
+            limits,
+            components,
+        } => (abi, generation, limits, components),
         _ => bail!("init_prepared_required"),
     };
     #[cfg(feature = "quickjs-runner")]
     let (abi, generation, limits, bundles) = match protocol::read_parent(&mut input)? {
-        ParentMessage::Init { abi, generation, limits, bundles } => (abi, generation, limits, bundles),
+        ParentMessage::Init {
+            abi,
+            generation,
+            limits,
+            bundles,
+        } => (abi, generation, limits, bundles),
         _ => bail!("init_required"),
     };
     let validation = if abi != protocol::ABI {
         Some("worker_protocol_mismatch")
-    } else if !limits.validate()
-        || {
-            #[cfg(feature = "starling-runner")]
-            { !valid_components(&components) }
-            #[cfg(feature = "quickjs-runner")]
-            { !valid_bundles(&bundles) }
+    } else if !limits.validate() || {
+        #[cfg(feature = "starling-runner")]
+        {
+            !valid_components(&components)
         }
-    {
+        #[cfg(feature = "quickjs-runner")]
+        {
+            !valid_bundles(&bundles)
+        }
+    } {
         Some("invalid_init")
     } else {
         None
@@ -347,7 +367,9 @@ fn valid_components(components: &std::collections::BTreeMap<String, u32>) -> boo
         && components.iter().all(|(name, fd)| {
             !name.is_empty()
                 && name.len() <= 64
-                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
                 && *fd > 2
                 && descriptors.insert(*fd)
         })

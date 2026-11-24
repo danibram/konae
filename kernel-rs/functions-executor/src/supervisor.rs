@@ -9,7 +9,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     io::{Read, Write},
-    os::{fd::{AsRawFd, RawFd}, unix::{fs::MetadataExt, process::CommandExt}},
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::{fs::MetadataExt, process::CommandExt},
+    },
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -22,6 +25,8 @@ use std::{
 };
 
 const CANCEL_GRACE: Duration = Duration::from_millis(100);
+#[cfg(target_os = "linux")]
+const WASM_ADDRESS_SPACE_LIMIT: i64 = 24 * 1024 * 1024 * 1024;
 
 enum WorkerInit {
     Sources(BTreeMap<String, String>),
@@ -195,6 +200,7 @@ pub struct Worker {
     shutdown_invoked: bool,
     containment: Containment,
     oom_kills_at_spawn: Option<u64>,
+    require_rss: bool,
 }
 impl Worker {
     pub fn spawn_with_policy(
@@ -204,13 +210,31 @@ impl Worker {
         limits: WorkerLimits,
         policy: MemoryPolicy,
     ) -> Result<Self> {
+        Self::spawn_with_expected_engine(
+            executable,
+            bundles,
+            budget,
+            limits,
+            policy,
+            crate::protocol::EngineKind::Deno,
+        )
+    }
+
+    pub fn spawn_with_expected_engine(
+        executable: &Path,
+        bundles: &BTreeMap<String, String>,
+        budget: &impl ExecutionBudget,
+        limits: WorkerLimits,
+        policy: MemoryPolicy,
+        expected_engine: crate::protocol::EngineKind,
+    ) -> Result<Self> {
         Self::spawn_initialized(
             executable,
             WorkerInit::Sources(bundles.clone()),
             budget,
             limits,
             policy,
-            None,
+            Some(expected_engine),
         )
     }
 
@@ -253,15 +277,25 @@ impl Worker {
                 let mut fds = BTreeSet::new();
                 for (name, file) in components {
                     anyhow::ensure!(
-                        !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+                        !name.is_empty()
+                            && name.len() <= 64
+                            && name
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
                         fail("invalid_init")
                     );
                     let fd = file.as_raw_fd();
                     anyhow::ensure!(fd > 2 && fds.insert(fd), fail("invalid_init"));
                     let metadata = file.metadata()?;
-                    anyhow::ensure!(metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() }, fail("invalid_init"));
+                    anyhow::ensure!(
+                        metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() },
+                        fail("invalid_init")
+                    );
                     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-                    anyhow::ensure!(flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY, fail("invalid_init"));
+                    anyhow::ensure!(
+                        flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY,
+                        fail("invalid_init")
+                    );
                 }
                 components.keys().cloned().collect()
             }
@@ -269,8 +303,9 @@ impl Worker {
         remaining(budget)?;
         let generation = nonce()?;
         let strict_linux = matches!(policy, MemoryPolicy::LinuxCgroup { .. });
+        let wasm_linux = matches!(policy, MemoryPolicy::Wasm);
         #[cfg(target_os = "linux")]
-        let worker_identity = if strict_linux {
+        let worker_identity = if strict_linux || wasm_linux {
             Some(worker_identity()?)
         } else {
             None
@@ -284,7 +319,13 @@ impl Worker {
             .env_clear()
             .env(
                 "KONAE_INTERNAL_FUNCTIONS_SANDBOX",
-                if strict_linux { "linux-v1" } else { "disabled" },
+                if strict_linux {
+                    "linux-v1"
+                } else if wasm_linux {
+                    "wasm-v1"
+                } else {
+                    "disabled"
+                },
             )
             .current_dir("/")
             .stdin(Stdio::piped())
@@ -292,24 +333,61 @@ impl Worker {
             .stderr(Stdio::piped())
             .process_group(0);
         if let WorkerInit::Prepared(components) = &init {
-            let inherited: Vec<RawFd> = components.values().map(AsRawFd::as_raw_fd).collect();
+            let mut inherited: Vec<RawFd> = components.values().map(AsRawFd::as_raw_fd).collect();
+            inherited.sort_unstable();
             unsafe {
                 child_command.pre_exec(move || {
                     for fd in &inherited {
                         let flags = libc::fcntl(*fd, libc::F_GETFD);
-                        if flags < 0 || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        if flags < 0
+                            || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                        {
                             return Err(std::io::Error::last_os_error());
                         }
                     }
+                    let close_from = |start: u32, end: u32| -> std::io::Result<()> {
+                        if start > end {
+                            return Ok(());
+                        }
+                        #[cfg(target_os = "linux")]
+                        if libc::syscall(libc::SYS_close_range, start, end, 0) == 0 {
+                            return Ok(());
+                        }
+                        let mut limit = std::mem::MaybeUninit::<libc::rlimit>::zeroed();
+                        if libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        let end = end
+                            .min(limit.assume_init().rlim_cur.min(1_048_576) as u32)
+                            .saturating_sub(1);
+                        for fd in start..=end {
+                            if libc::close(fd as RawFd) != 0 {
+                                let error = std::io::Error::last_os_error();
+                                if error.raw_os_error() != Some(libc::EBADF) {
+                                    return Err(error);
+                                }
+                            }
+                        }
+                        Ok(())
+                    };
+                    let mut start = 3u32;
+                    for fd in &inherited {
+                        let fd = *fd as u32;
+                        close_from(start, fd.saturating_sub(1))?;
+                        start = fd.saturating_add(1);
+                    }
+                    close_from(start, u32::MAX)?;
                     Ok(())
                 });
             }
         }
         #[cfg(target_os = "linux")]
         if let Some((uid, gid)) = worker_identity {
-            child_command
-                .env("KONAE_INTERNAL_FUNCTIONS_UID", uid.to_string())
-                .env("KONAE_INTERNAL_FUNCTIONS_GID", gid.to_string());
+            if !wasm_linux {
+                child_command
+                    .env("KONAE_INTERNAL_FUNCTIONS_UID", uid.to_string())
+                    .env("KONAE_INTERNAL_FUNCTIONS_GID", gid.to_string());
+            }
             let supervisor_pid = std::process::id() as i32;
             unsafe {
                 child_command.pre_exec(move || {
@@ -323,13 +401,66 @@ impl Worker {
                         return Err(std::io::Error::last_os_error());
                     }
                     libc::close(oom_fd);
-                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    if wasm_linux {
+                        if libc::setgroups(0, std::ptr::null()) != 0
+                            || libc::setresgid(gid, gid, gid) != 0
+                            || libc::setresuid(uid, uid, uid) != 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        #[repr(C)]
+                        struct CapHeader {
+                            version: u32,
+                            pid: i32,
+                        }
+                        #[repr(C)]
+                        #[derive(Clone, Copy)]
+                        struct CapData {
+                            effective: u32,
+                            permitted: u32,
+                            inheritable: u32,
+                        }
+                        let caps = [CapData {
+                            effective: 0,
+                            permitted: 0,
+                            inheritable: 0,
+                        }; 2];
+                        let header = CapHeader {
+                            version: 0x2008_0522,
+                            pid: 0,
+                        };
+                        if libc::syscall(libc::SYS_capset, &header, caps.as_ptr()) != 0
+                            || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        for (resource, soft, hard) in [
+                            (libc::RLIMIT_CORE, 0, 0),
+                            (libc::RLIMIT_NOFILE, 64, 64),
+                            (libc::RLIMIT_FSIZE, 0, 0),
+                            (
+                                libc::RLIMIT_AS,
+                                WASM_ADDRESS_SPACE_LIMIT,
+                                WASM_ADDRESS_SPACE_LIMIT,
+                            ),
+                        ] {
+                            let limit = libc::rlimit {
+                                rlim_cur: soft as libc::rlim_t,
+                                rlim_max: hard as libc::rlim_t,
+                            };
+                            if libc::setrlimit(resource, &limit) != 0 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                        }
+                        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+                            || libc::getppid() != supervisor_pid
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    } else if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+                        || libc::getppid() != supervisor_pid
+                    {
                         return Err(std::io::Error::last_os_error());
-                    }
-                    if libc::getppid() != supervisor_pid {
-                        return Err(std::io::Error::other(
-                            "worker supervisor exited before PDEATHSIG setup",
-                        ));
                     }
                     Ok(())
                 });
@@ -413,6 +544,7 @@ impl Worker {
             shutdown_invoked: false,
             containment,
             oom_kills_at_spawn,
+            require_rss: wasm_linux,
         };
         let initialized = (|| {
             let init_message = match &init {
@@ -451,11 +583,14 @@ impl Worker {
                 }
             };
             match ready {
-                ChildMessage::Ready { abi, generation, engine }
-                    if abi == protocol::ABI
-                        && generation == worker.generation
-                        && engine.is_some()
-                        && expected_engine.is_none_or(|expected| engine == Some(expected)) =>
+                ChildMessage::Ready {
+                    abi,
+                    generation,
+                    engine,
+                } if abi == protocol::ABI
+                    && generation == worker.generation
+                    && engine.is_some()
+                    && expected_engine.is_none_or(|expected| engine == Some(expected)) =>
                 {
                     Ok(())
                 }
@@ -493,6 +628,8 @@ impl Worker {
             if rss > self.limits.rss_bytes {
                 return Err(self.crash_error("worker_memory_limit"));
             }
+        } else if self.require_rss {
+            return Err(self.crash_error("worker_memory_limit"));
         }
         Ok(())
     }
@@ -948,12 +1085,12 @@ fn worker_identity() -> Result<(libc::uid_t, libc::gid_t)> {
     let uid = std::env::var("KONAE_FUNCTIONS_UID")
         .ok()
         .and_then(|value| value.parse::<libc::uid_t>().ok())
-        .filter(|uid| *uid != u32::MAX && *uid != unsafe { libc::geteuid() })
+        .filter(|uid| *uid != 0 && *uid != u32::MAX && *uid != unsafe { libc::geteuid() })
         .ok_or_else(unavailable)?;
     let gid = std::env::var("KONAE_FUNCTIONS_GID")
         .ok()
         .and_then(|value| value.parse::<libc::gid_t>().ok())
-        .filter(|gid| *gid != u32::MAX && *gid != unsafe { libc::getegid() })
+        .filter(|gid| *gid != 0 && *gid != u32::MAX && *gid != unsafe { libc::getegid() })
         .ok_or_else(unavailable)?;
     let status = std::fs::read_to_string("/proc/self/status").map_err(|_| unavailable())?;
     let effective = status
@@ -961,7 +1098,7 @@ fn worker_identity() -> Result<(libc::uid_t, libc::gid_t)> {
         .find_map(|line| line.strip_prefix("CapEff:\t"))
         .and_then(|value| u64::from_str_radix(value, 16).ok())
         .ok_or_else(unavailable)?;
-    let required = (1u64 << 6) | (1u64 << 7);
+    let required = (1u64 << 5) | (1u64 << 6) | (1u64 << 7);
     if effective & required != required {
         return Err(unavailable());
     }

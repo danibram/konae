@@ -1,6 +1,7 @@
 # The Kernel alone: the `kernel` binary, which serves the app folders under
 # /kernel/apps. An exported app folder's compose.yaml runs this image on the
 # folder. Konae's own image is Dockerfile.konae.
+FROM functions-runner AS functions-runner
 FROM rust:1.91-bookworm AS build
 
 WORKDIR /src
@@ -29,10 +30,20 @@ RUN apt-get update \
   && mkdir -p /kernel/apps /usr/local/lib/konae
 COPY --from=build /src/target/release/kernel /usr/local/lib/konae/kernel
 ARG FUNCTIONS_RUNNER_SHA256
-COPY --from=functions-runner /konae-functions-runner /usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}
+ARG FUNCTIONS_DENO_RUNNER_SHA256
+ARG FUNCTIONS_PREPARER_SHA256
+COPY --from=functions-runner /konae-functions-runner-wasm /usr/local/lib/konae/functions-runner-wasm-${FUNCTIONS_RUNNER_SHA256}
+COPY --from=functions-runner /konae-functions-runner-deno /usr/local/lib/konae/functions-runner-deno-${FUNCTIONS_DENO_RUNNER_SHA256}
+COPY --from=functions-runner /konae-functions-prepare /usr/local/lib/konae/functions-prepare-${FUNCTIONS_PREPARER_SHA256}
 RUN test -n "$FUNCTIONS_RUNNER_SHA256" \
-  && printf '%s  %s\n' "$FUNCTIONS_RUNNER_SHA256" "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" | sha256sum --check --status \
-  && mv "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" /usr/local/lib/konae/functions-runner
+  && test -n "$FUNCTIONS_DENO_RUNNER_SHA256" \
+  && test -n "$FUNCTIONS_PREPARER_SHA256" \
+  && printf '%s  %s\n' "$FUNCTIONS_RUNNER_SHA256" "/usr/local/lib/konae/functions-runner-wasm-${FUNCTIONS_RUNNER_SHA256}" | sha256sum --check --status \
+  && printf '%s  %s\n' "$FUNCTIONS_DENO_RUNNER_SHA256" "/usr/local/lib/konae/functions-runner-deno-${FUNCTIONS_DENO_RUNNER_SHA256}" | sha256sum --check --status \
+  && printf '%s  %s\n' "$FUNCTIONS_PREPARER_SHA256" "/usr/local/lib/konae/functions-prepare-${FUNCTIONS_PREPARER_SHA256}" | sha256sum --check --status \
+  && mv "/usr/local/lib/konae/functions-runner-wasm-${FUNCTIONS_RUNNER_SHA256}" /usr/local/lib/konae/functions-runner-wasm \
+  && mv "/usr/local/lib/konae/functions-runner-deno-${FUNCTIONS_DENO_RUNNER_SHA256}" /usr/local/lib/konae/functions-runner-deno \
+  && mv "/usr/local/lib/konae/functions-prepare-${FUNCTIONS_PREPARER_SHA256}" /usr/local/lib/konae/functions-prepare
 COPY ops/kernel-entrypoint.sh /usr/local/bin/kernel
 RUN chmod 755 /usr/local/bin/kernel
 ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/kernel KONAE_KERNEL_PORT=8787 KONAE_FUNCTIONS_UID=10002 KONAE_FUNCTIONS_GID=10002
