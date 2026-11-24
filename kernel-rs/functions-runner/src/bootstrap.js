@@ -58,7 +58,6 @@
   KonaeDate.now = currentTime;
   globalThis.Date = KonaeDate;
   globalThis.fetch = () => reject('unsupported_runtime_api');
-  delete globalThis.WebAssembly;
   const nativeRandom = Math.random;
   Math.random = () => {
     if (!requestActive && !retirementActive) reject('unsupported_runtime_api');
