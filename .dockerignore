@@ -2,6 +2,7 @@
 .audit/
 .env*
 .konae/
+.konae-export-functions.*/
 data/
 dist/
 node_modules/

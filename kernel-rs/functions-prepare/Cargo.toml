@@ -30,6 +30,7 @@ tempfile = "3.27.0"
 wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "runtime", "cranelift"] }
 
 [profile.release]
-lto = true
+# Fat LTO on Linux arm64 corrupts branch tables before Wizer runs.
+lto = "off"
 codegen-units = 1
 strip = true
