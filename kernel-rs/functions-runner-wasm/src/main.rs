@@ -61,6 +61,9 @@ fn native_target() -> Result<()> {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     digest.update(b"epoch-interruption;pooling;256MiB-memory;component-model");
+    if cfg!(target_os = "linux") {
+        digest.update(b";memory-init-cow=false");
+    }
     digest.update(std::env::consts::ARCH.as_bytes());
     digest.update(std::env::consts::OS.as_bytes());
     digest.update(env!("CARGO_PKG_VERSION").as_bytes());
