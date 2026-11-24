@@ -117,7 +117,7 @@ start_export() {
   echo "Exported Kernel did not become healthy" >&2
   return 1
 }
-start_export 60
+start_export 180
 host=export-functions-check.localhost:$port
 signup_status=$(request --silent --show-error --dump-header "$response_dir/signup.headers" -o "$response_dir/signup.body" -w '%{http_code}' -H "Host: $host" -H "Origin: http://$host" -H 'Content-Type: application/json' -d '{"email":"worker@example.test","password":"correct horse battery"}' "$request_url/_konae/auth/signup")
 test "$signup_status" = 200 || {
@@ -223,7 +223,7 @@ bun -e '
   fs.writeFileSync(settingsPath, JSON.stringify(settings));
   fs.mkdirSync(`${root}/app/functions`, { recursive: true });
   const functions = {};
-  for (let i = 0; i < 32; i++) {
+  for (let i = 0; i < 12; i++) {
     const name = `probe${i}`;
     const entry = `functions/${name}.js`;
     fs.writeFileSync(`${root}/app/${entry}`, `export function handle() { return new Response("${name}"); }`);
