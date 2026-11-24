@@ -30,3 +30,53 @@ The first lazy-loading build still needed a median 1,226 ms per switch over 24 d
 After recompiling the same portable fixture, the same 24 switches took a median 140 ms and a maximum 394 ms in a run without `vmmap`. All 28 invocations returned 200. The highest sampled RSS was 3.05 MiB at Ready and 107.28 MiB during requests.
 
 The repeat with `vmmap` measured zero component executable mappings at Ready and one 18.16 MiB component executable mapping after every request, for all four function counts. The guest had 9.06 MiB of accessible linear memory after each request. The native file with unwind records disabled weighed 46.57 MiB.
+
+## File verification before worker launch
+
+The first `konae dev` run with the fixed worker and all 18 spike functions returned 504 `deadline_exceeded` on every route. Usage recorded zero handler time. The Kernel spent most of the budget before Ready reading and verifying about 846 MiB of native files.
+
+I timed the same 64 KiB file reads and SHA-256 computation as the Kernel against the prepared cache. A single reader took 1,103 ms and 841 ms. Two readers took 487 ms. Four readers took 195 ms and 283 ms. The Kernel now uses up to four readers for apps with more than four functions. It checks each alias and hashes each open file before passing that same read-only descriptor to the worker. Small apps still verify their files in order.
+
+The first two requests in the run with parallel verification timed out before worker initialization. The first request was parsing all JavaScript bundles again. The Kernel now checks their hashes against the metadata it already validated at publish or startup. The release and startup paths still parse every bundle. The request path still checks the manifest, file layout and all bundle digests.
+
+## Node compatibility over HTTP
+
+I built the 18-function Node compatibility spike with `bun spikes/node-compat/build.mjs "$spike"`. The Rust helper prepared the development bundles. The fixed runner's `--compile-component` produced the native files. I primed a private cache and started `bun scripts/konae.ts dev --dir "$spike/cli"` with the fixed Kernel and StarlingMonkey binaries. The Kernel checked the prepared cache and kept the default 1 s deadline.
+
+I sent one GET per route after startup and compared each successful response body with the spike's expected value. The first request had a fresh worker. Each subsequent route used its component for the first time. After `/api/jose` timed out, the Kernel launched a second worker for `/api/bufferEvents`.
+
+| GET path | HTTP | First request, ms |
+| --- | ---: | ---: |
+| `/api/zod` | 200 | 318.05 |
+| `/api/hono` | 200 | 26.83 |
+| `/api/dateFns` | 200 | 23.76 |
+| `/api/uuid` | 200 | 22.02 |
+| `/api/nanoid` | 200 | 28.24 |
+| `/api/jose` | 504 | 1,002.45 |
+| `/api/bufferEvents` | 200 | 254.20 |
+| `/api/stream` | 200 | 26.80 |
+| `/api/createHash` | 200 | 25.06 |
+| `/api/dependencyMode` | 200 | 24.09 |
+| `/api/web` | 200 | 29.53 |
+| `/api/modules` | 200 | 22.64 |
+| `/api/bareBuiltin` | 200 | 20.19 |
+| `/api/npmProcess` | 200 | 21.74 |
+| `/api/commonJsEvents` | 200 | 22.97 |
+| `/api/dynamicBuiltin` | 200 | 39.59 |
+| `/api/reexportBuiltin` | 200 | 36.93 |
+| `/api/typeOnlyBuiltin` | 200 | 33.30 |
+
+On separate starts of the same 18-function app, `/api/web` returned 200 as the first function request in 933.42 ms. An earlier cold attempt returned 504 in 1,016.50 ms, with 842 ms recorded in worker initialization. The first request to `/api/jose` on its own fresh start returned 504 in 1,005.21 ms.
+
+`GET /api/jose` returned `{"code":"deadline_exceeded","error":"The function exceeded its execution budget."}`. The Kernel recorded the timeout during the invocation. I ran the exact prepared JOSE component three times on each worker build through direct IPC without a parent deadline. All six replies were 200 with `{"ES256":"konae","RS256":"konae"}`. They used 1.54 to 1.87 seconds of process CPU per call on this Mac, measured with `proc_pid_rusage` and the Mach timebase. A five-second stack sample placed the main thread in guest code under `Invocation::invoke`. The 18-route acceptance check still needs JOSE to finish within 1 s.
+
+## Six resources over HTTP
+
+I opened the same app folder with the Kernel binary on each runner. Six TypeScript handlers read orders, customers, inventory, shipments, invoices and returns. Each uses an anonymous named Server Action with a `LIMIT 10` query against its own SQLite table. The six first requests and 24 further requests returned 200 on each runner. For example, `GET /api/orders` returned `{"resource":"orders","rows":[{"id":1,"label":"orders-1"}]}`.
+
+I took the idle sample one second after the sequential first requests. The load sent four sweeps of the six routes with two concurrent clients. There were two worker processes under load in both runs. The combined peak sums worker RSS within a single sample and can count shared pages for both workers. The timings include HTTP and SQLite.
+
+| Runner | Idle RSS, MiB | Peak RSS per worker, MiB | Peak combined RSS, MiB | Cold first GET, ms | 24 GETs elapsed / slowest GET, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| deno_core | 16.84 | 21.97 | 42.83 | 204.70 | 228.98 / 69.42 |
+| StarlingMonkey | 107.52 | 107.75 | 214.88 | 192.59 | 595.67 / 162.85 |
