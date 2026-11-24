@@ -197,7 +197,7 @@ KONAE_FUNCTIONS_DEVELOPMENT=1 \
 bun "$KONAE_REPO/scripts/konae.ts" dev --dir "$APP_DIR"
 ```
 
-Use the runner, preparer and Kernel from the same build. StarlingMonkey is the default. To serve with deno_core, set `KONAE_FUNCTIONS_RUNNER_KIND=deno` and point `KONAE_FUNCTIONS_RUNNER` at the deno binary. When a preparer is installed, both runners use its initialization check in the Validation Gate, in `konae dev` and at publish. A standalone deno installation without the helper can serve functions. Its online Gate reports preparation as unchecked.
+Use the runner, preparer and Kernel from the same build. StarlingMonkey is the default. To serve with deno_core, set `KONAE_FUNCTIONS_RUNNER_KIND=deno` and point `KONAE_FUNCTIONS_RUNNER` at the deno binary. When a preparer is installed, both runners use its initialization check in the Validation Gate, in `konae dev` and at publish. A standalone deno installation without the helper can serve functions. Its candidate check reports preparation as unchecked.
 
 Local development uses RSS polling. For production worker isolation and requirements for each runner, see [Operate an installation](./operate.md#typescript-function-workers). The editor preview does not execute functions.
 
