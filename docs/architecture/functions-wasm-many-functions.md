@@ -87,3 +87,20 @@ I took the idle sample one second after the sequential first requests. The load 
 | --- | ---: | ---: | ---: | ---: | ---: |
 | deno_core | 16.84 | 21.97 | 42.83 | 204.70 | 228.98 / 69.42 |
 | StarlingMonkey | 107.52 | 107.75 | 214.88 | 192.59 | 595.67 / 162.85 |
+
+## Streaming before and after the request Web APIs
+
+The shared Mac's trunk gate expired the 60 s budget in `body_chunks_keep_their_bytes_under_the_default_heap` after 29,884,416 bytes. I compared the first parent of the merge, `1ddce22f`, with `e162cc7f`. This includes the runner and preparer changes from `78af201b` and `c3831834`. The N3 tip, `089b6c86`, changes only the Kernel's validation and shared cases. Both release binaries used the same StarlingMonkey engine and Wasmtime 38.0.4. I prepared each component with the helper from its revision and used the same executor to run both.
+
+I timestamped each call to the parent's body reader and measured the interval between successive 64 KiB chunks. That interval includes IPC, delivery to the guest and work the handler performs before asking for more. Each run started a fresh worker, sent 256 chunks and verified the response's length, first and last byte, and checksum. I interleaved five runs per side and mode after the builds and other suites in this worktree finished. The 11-core Mac was shared. Aggregate CPU idle during the checksum runs ranged from 38% to 61%. I used the worker's task CPU counters to distinguish its CPU time from elapsed time.
+
+| Mode | Before, median chunk interval (range), ms | After, median chunk interval (range), ms | Before / after, worker CPU per chunk, ms |
+| --- | ---: | ---: | ---: |
+| Read and count bytes | 0.212 (0.204 to 0.220) | 0.206 (0.198 to 0.220) | 0.252 / 0.237 |
+| Read and checksum every byte | 27.164 (27.058 to 27.645) | 27.163 (26.938 to 29.325) | 27.006 / 26.992 |
+
+The ranges describe the median chunk interval from each run. The bytes-only handler removes the per-byte checksum loop and keeps the same request stream. The checksum loop dominates both builds. The measurements show no per-chunk slowdown from the Web API changes.
+
+With the original fixture and its 60 s budget, both workers checked all 100,000,000 bytes and returned `{"total":100000000,"first":0,"last":245,"checksum":4078523648}`. The run before N3 took 41.40 s elapsed and 40.72 s of worker CPU. The run after N3 took 40.60 s elapsed and 40.16 s of worker CPU. The Mac reported 66% and 72% aggregate idle during those runs.
+
+To isolate the effect of CPU availability, I repeated the full transfer with only the benchmark worker paused for 160 ms after each 40 ms run window. The pre-N3 worker returned `deadline_exceeded` after 23,592,960 bytes at 60.005 s. The post-N3 worker did the same after 21,757,952 bytes at 60.004 s. The two runs reproduce the failure by withholding execution time. The checksum needs about 41 s of worker CPU against the 60 s wall deadline. The comparison supports host load as the cause of the gate failure and calls for no change to the streaming path.
