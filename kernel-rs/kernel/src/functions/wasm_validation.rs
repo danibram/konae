@@ -192,7 +192,7 @@ fn host_interface_matches(types: TypesRef<'_>) -> bool {
         return false;
     };
     let exports = &types[instance].exports;
-    exports.len() == 4
+    exports.len() == 6
         && function_matches(
             types,
             exports.get("op-worker-call"),
@@ -207,11 +207,18 @@ fn host_interface_matches(types: TypesRef<'_>) -> bool {
         )
         && function_matches(
             types,
+            exports.get("op-worker-response-chunk"),
+            &[(&["bytes"], "bytes")],
+            Some("bool"),
+        )
+        && function_matches(
+            types,
             exports.get("op-worker-failure"),
             &[(&["code"], "string"), (&["detail"], "option-string")],
             None,
         )
         && function_matches(types, exports.get("now-ms"), &[], Some("f64"))
+        && function_matches(types, exports.get("random-seed"), &[], Some("u64"))
 }
 
 fn runner_exports_match(types: TypesRef<'_>) -> bool {
@@ -276,6 +283,7 @@ fn value_matches(types: TypesRef<'_>, actual: ComponentValType, expected: &str) 
         (P(PrimitiveValType::U32), "u32") => true,
         (P(PrimitiveValType::Bool), "bool") => true,
         (P(PrimitiveValType::F64), "f64") => true,
+        (P(PrimitiveValType::U64), "u64") => true,
         (T(id), "bytes") => matches!(
             types[id],
             ComponentDefinedType::List(P(PrimitiveValType::U8))
@@ -417,17 +425,27 @@ mod tests {
         host.export("op-worker-body-read", ComponentTypeRef::Func(3));
         host.ty()
             .function()
+            .params([("bytes", EncodedValType::Type(0))])
+            .result(Some(EncodedPrimitive::Bool.into()));
+        host.export("op-worker-response-chunk", ComponentTypeRef::Func(4));
+        host.ty()
+            .function()
             .params([
                 ("code", EncodedValType::Primitive(EncodedPrimitive::String)),
                 ("detail", EncodedValType::Type(1)),
             ])
             .result(None);
-        host.export("op-worker-failure", ComponentTypeRef::Func(4));
+        host.export("op-worker-failure", ComponentTypeRef::Func(5));
         host.ty()
             .function()
             .params(std::iter::empty::<(&str, EncodedValType)>())
             .result(Some(EncodedPrimitive::F64.into()));
-        host.export("now-ms", ComponentTypeRef::Func(5));
+        host.export("now-ms", ComponentTypeRef::Func(6));
+        host.ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(Some(EncodedPrimitive::U64.into()));
+        host.export("random-seed", ComponentTypeRef::Func(7));
 
         let mut types = ComponentTypeSection::new();
         types.ty().instance(&host);
@@ -443,6 +461,8 @@ mod tests {
                 "now-ms",
                 "op-worker-failure",
                 "op-worker-failure",
+                "op-worker-body-read",
+                "random-seed",
             ]
         } else {
             [
@@ -450,6 +470,8 @@ mod tests {
                 "op-worker-call",
                 "op-worker-failure",
                 "op-worker-failure",
+                "op-worker-body-read",
+                "random-seed",
             ]
         };
         for name in source_names {

@@ -26,47 +26,78 @@ impl Bundle {
     fn path(&self) -> &Path {
         self.0.path()
     }
+
+    fn sources(&self) -> impl Iterator<Item = std::path::PathBuf> {
+        fs::read_dir(self.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "mjs"))
+    }
 }
+
+const RUNNER: &str = env!("CARGO_BIN_EXE_konae-functions-runner-wasm");
 
 fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
-    let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
-    #[cfg(feature = "starling-runner")]
-    let launcher = starling_launcher(bundle, runner);
-    #[cfg(feature = "starling-runner")]
-    let runner = launcher.as_path();
-    spawn_worker_with_limits(bundle, runner, timeout, WorkerLimits::default()).unwrap()
-}
-
-fn spawn_worker(bundle: &Bundle, runner: &Path, timeout: Duration) -> anyhow::Result<Worker> {
-    spawn_worker_with_limits(bundle, runner, timeout, WorkerLimits::default())
+    worker_with_limits(bundle, timeout, WorkerLimits::default())
 }
 
 fn worker_with_limits(bundle: &Bundle, timeout: Duration, limits: WorkerLimits) -> Worker {
-    let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
     #[cfg(feature = "starling-runner")]
-    let launcher = starling_launcher(bundle, runner);
-    #[cfg(feature = "starling-runner")]
-    let runner = launcher.as_path();
-    spawn_worker_with_limits(bundle, runner, timeout, limits).unwrap()
+    {
+        let components = bundle
+            .sources()
+            .map(|source| {
+                let native = source.with_extension("cwasm");
+                if !native.exists() {
+                    let portable = source.with_extension("wasm");
+                    let reply = prepare(&source, &portable);
+                    assert_eq!(reply["status"], "ok", "{reply}");
+                    let output = std::process::Command::new(RUNNER)
+                        .arg("--compile-component")
+                        .arg(&native)
+                        .stdin(fs::File::open(portable).unwrap())
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                (function_name(&source), fs::File::open(native).unwrap())
+            })
+            .collect();
+        let runner = starling_launcher(bundle);
+        Worker::spawn_prepared_with_policy(
+            &runner,
+            components,
+            &Budget::new(timeout),
+            limits,
+            MemoryPolicy::DevelopmentPolling,
+        )
+        .unwrap()
+    }
+    #[cfg(feature = "quickjs-runner")]
+    {
+        spawn_source_worker(bundle, timeout, limits).unwrap()
+    }
 }
 
-fn spawn_worker_with_limits(
+fn function_name(path: &Path) -> String {
+    path.file_stem().unwrap().to_string_lossy().into_owned()
+}
+
+fn spawn_source_worker(
     bundle: &Bundle,
-    runner: &Path,
     timeout: Duration,
     limits: WorkerLimits,
 ) -> anyhow::Result<Worker> {
-    let bundles = fs::read_dir(bundle.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "mjs"))
-        .map(|path| {
-            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-            (name, fs::read_to_string(path).unwrap())
-        })
+    let bundles = bundle
+        .sources()
+        .map(|path| (function_name(&path), fs::read_to_string(path).unwrap()))
         .collect();
     Worker::spawn_with_policy(
-        runner,
+        Path::new(RUNNER),
         &bundles,
         &Budget::new(timeout),
         limits,
@@ -76,46 +107,12 @@ fn spawn_worker_with_limits(
 
 #[cfg(feature = "starling-runner")]
 #[test]
-fn runtime_cache_miss_does_not_run_the_builder() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
-
+fn runtime_requires_prepared_components() {
     let bundle = Bundle::new("export function handle() { return new Response('ok'); }");
-    let cache = bundle.path().join("empty");
-    fs::create_dir(&cache).unwrap();
-    let builder = bundle.path().join("builder");
-    let marker = bundle.path().join("build-started");
-    symlink(
-        env!("CARGO_BIN_EXE_konae-functions-runner-wasm"),
-        bundle.path().join("runner"),
-    )
-    .unwrap();
-    fs::write(
-        &builder,
-        "#!/bin/sh\n: > \"$(dirname \"$0\")/build-started\"\nexec /bin/sleep 30\n",
-    )
-    .unwrap();
-    let launcher = bundle.path().join("launch");
-    fs::write(
-        &launcher,
-        r#"#!/bin/sh
-cd "$(dirname "$0")" || exit 1
-export KONAE_STARLING_CACHE="$PWD/empty"
-export KONAE_STARLING_BUILDER="$PWD/builder"
-exec ./runner "$@"
-"#,
-    )
-    .unwrap();
-    for script in [&launcher, &builder] {
-        fs::set_permissions(script, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let deadline = Duration::from_secs(2);
-    let outcome = spawn_worker(&bundle, &launcher, deadline)
-        .and_then(|mut worker| invoke(&mut worker, input("/", ""), deadline));
-    assert!(
-        !marker.exists(),
-        "Worker invoked the builder on a cache miss: {outcome:?}"
-    );
-    let error = outcome.unwrap_err();
+    let outcome = spawn_source_worker(&bundle, Duration::from_secs(2), WorkerLimits::default());
+    let error = outcome
+        .err()
+        .expect("StarlingMonkey accepted an unprepared bundle");
     assert_ne!(
         konae_functions_executor::error_code(&error),
         "deadline_exceeded"
@@ -123,51 +120,42 @@ exec ./runner "$@"
 }
 
 #[cfg(feature = "starling-runner")]
-fn starling_launcher(bundle: &Bundle, runner: &Path) -> std::path::PathBuf {
-    use std::{env, os::unix::fs::PermissionsExt, process::Command};
+fn prepare(source: &Path, portable: &Path) -> Value {
+    let helper = std::env::var_os("KONAE_FUNCTIONS_PREPARER")
+        .expect("Set KONAE_FUNCTIONS_PREPARER to the built Rust helper");
+    let output = std::process::Command::new(helper)
+        .args(["prepare", "--input"])
+        .arg(source)
+        .arg("--output")
+        .arg(portable)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
 
-    let cache = env::var("KONAE_STARLING_CACHE").expect("Set KONAE_STARLING_CACHE for the tests");
-    let variable_names = [
-        "KONAE_STARLING_CACHE",
-        "KONAE_STARLING_BUILDER",
-        "KONAE_STARLING_TOOLS",
-        "KONAE_STARLING_WASMTIME",
-        "KONAE_STARLING_NODE",
-        "KONAE_STARLING_TEST_SEED",
-        "PATH",
-    ];
+#[cfg(feature = "starling-runner")]
+fn starling_launcher(bundle: &Bundle) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(seed) = std::env::var_os("KONAE_STARLING_TEST_SEED") else {
+        return RUNNER.into();
+    };
+    let seed: u64 = seed.to_str().unwrap().parse().unwrap();
     let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
-    for entry in fs::read_dir(bundle.path()).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|extension| extension != "mjs") {
-            continue;
-        }
-        let prepared = Command::new(runner)
-            .arg("--prepare")
-            .arg(path)
-            .output()
-            .unwrap();
-        let rejected = !prepared.status.success()
-            && String::from_utf8_lossy(&prepared.stderr).contains("function_import_forbidden");
-        assert!(
-            prepared.status.success() || rejected,
-            "{}",
-            String::from_utf8_lossy(&prepared.stderr)
-        );
-    }
-    let mut script = String::from("#!/bin/sh\n");
-    for name in variable_names {
-        if let Ok(value) = env::var(name) {
-            script.push_str(&format!("export {name}={}\n", quote(&value)));
-        }
-    }
-    assert!(Path::new(&cache).is_absolute());
-    script.push_str(&format!(
-        "exec {} \"$@\"\n",
-        quote(runner.to_str().unwrap())
-    ));
     let launcher = bundle.path().join("worker");
-    fs::write(&launcher, script).unwrap();
+    fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nexport KONAE_STARLING_TEST_SEED={seed}\nexec {} \"$@\"\n",
+            quote(RUNNER)
+        ),
+    )
+    .unwrap();
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
     launcher
 }
@@ -294,14 +282,23 @@ fn static_import_is_refused_before_module_evaluation() {
     let bundle = Bundle::new(
         "import './unused.mjs'; globalThis.marker = true; export function handle() { return new Response('ran'); }",
     );
-    let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
-    let output = std::process::Command::new(runner)
-        .arg("--prepare")
-        .arg(bundle.path().join("orders.mjs"))
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("function_import_forbidden"));
+    #[cfg(feature = "starling-runner")]
+    {
+        let portable = bundle.path().join("orders.wasm");
+        let reply = prepare(&bundle.path().join("orders.mjs"), &portable);
+        assert_eq!(reply["status"], "bundle_contract");
+        assert!(!portable.exists());
+    }
+    #[cfg(feature = "quickjs-runner")]
+    {
+        let error = spawn_source_worker(&bundle, Duration::from_secs(2), WorkerLimits::default())
+            .err()
+            .expect("QuickJS accepted an import");
+        assert_eq!(
+            konae_functions_executor::error_code(&error),
+            "function_import_forbidden"
+        );
+    }
 }
 
 #[test]

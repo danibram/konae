@@ -443,6 +443,7 @@ pub fn worker_main() -> Result<()> {
     bridge.send(&ChildMessage::Ready {
         abi: protocol::ABI.into(),
         generation: generation.clone(),
+        engine: Some(protocol::EngineKind::Deno),
     })?;
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_all()
