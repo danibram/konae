@@ -45,16 +45,16 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-runner_dir=${KONAE_FUNCTIONS_RUNNER_CONTEXT:-$scratch/runner}
-if [ -z "${KONAE_FUNCTIONS_RUNNER_CONTEXT:-}" ]; then
-  sh "$root/scripts/build-functions-runner.sh" "$arch" "$runner_dir"
+image=${KONAE_EXPORT_CHECK_IMAGE:-$tag-kernel}
+if [ -n "${KONAE_EXPORT_CHECK_IMAGE:-}" ]; then
+  docker image inspect "$image" >/dev/null
 else
-  test -x "$runner_dir/konae-functions-runner-wasm" && test -x "$runner_dir/konae-functions-runner-deno" && test -x "$runner_dir/konae-functions-prepare" || {
-    echo "KONAE_FUNCTIONS_RUNNER_CONTEXT must contain both runners and the preparation helper" >&2
-    exit 1
-  }
+  runner_dir=${KONAE_FUNCTIONS_RUNNER_CONTEXT:-$scratch/runner}
+  if [ -z "${KONAE_FUNCTIONS_RUNNER_CONTEXT:-}" ]; then
+    sh "$root/scripts/build-functions-runner.sh" "$arch" "$runner_dir"
+  fi
+  sh "$root/scripts/build-functions-images.sh" "$runner_dir" "$tag"
 fi
-sh "$root/scripts/build-functions-images.sh" "$runner_dir" "$tag"
 
 mkdir "$scratch/source" "$scratch/exported"
 bun "$root/scripts/konae.ts" init --dir "$scratch/source" --name "Export function check"
@@ -83,7 +83,7 @@ export function handle() {
 }
 EOF
 bun "$root/scripts/konae.ts" export --dir "$scratch/source" --out "$scratch/exported"
-sed "s|^KONAE_KERNEL_IMAGE=.*|KONAE_KERNEL_IMAGE=$tag-kernel|" "$scratch/exported/.env.example" > "$scratch/exported/.env"
+sed "s|^KONAE_KERNEL_IMAGE=.*|KONAE_KERNEL_IMAGE=$image|" "$scratch/exported/.env.example" > "$scratch/exported/.env"
 request_url="http://127.0.0.1:$port"
 response_dir="$scratch"
 if [ "$runner_kind" = deno ]; then
