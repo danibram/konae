@@ -548,11 +548,16 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
     } else {
         "deno"
     };
-    let trace = TraceBuffer::new(
-        TraceContext::from_headers(request.headers(), state.execution_mode.is_test()),
-        started,
-        runner_kind,
-    );
+    let mut trace_context = TraceContext::from_headers(request.headers(), false);
+    trace_context.sampled = state
+        .otlp
+        .as_ref()
+        .map(|exporter| exporter.should_sample(&trace_context.trace_id))
+        .unwrap_or(state.execution_mode.is_test());
+    let trace = TraceBuffer::new(trace_context, started, runner_kind);
+    if let Some(exporter) = state.otlp.clone().filter(|_| trace_context.sampled) {
+        trace.set_export_hook(Arc::new(move |completed| exporter.enqueue(completed)));
+    }
     let budget = Budget::until(started + state.functions.deadline);
     let _cancel = Cancel(budget.clone());
     let deadline = tokio::time::Instant::from_std(budget.deadline());

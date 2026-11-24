@@ -2,10 +2,10 @@ use axum::http::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use std::{
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-pub(super) const TRACEPARENT: &str = "traceparent";
+pub(crate) const TRACEPARENT: &str = "traceparent";
 pub(super) const MAX_RECORDS: usize = 160;
 const MAX_INTERNED_NAMES: usize = MAX_RECORDS;
 const MAX_NAME_BYTES: usize = 100;
@@ -81,6 +81,25 @@ fn parse(value: &str) -> Option<TraceContext> {
         sampled: flags & 1 != 0,
         response_seed: None,
     })
+}
+
+pub(crate) fn child_traceparent(value: &str) -> Option<String> {
+    let context = parse(value)?;
+    Some(context.header(context.child()).to_str().ok()?.to_owned())
+}
+
+pub(crate) fn traceparent_id(value: &str) -> Option<[u8; 16]> {
+    Some(parse(value)?.trace_id)
+}
+
+pub(crate) fn traceparent_sampled(value: &str) -> Option<bool> {
+    Some(parse(value)?.sampled)
+}
+
+pub(crate) fn normalize_traceparent(value: &str, sampled: bool) -> Option<String> {
+    let mut context = parse(value)?;
+    context.sampled = sampled;
+    Some(context.header(context.parent_id).to_str().ok()?.to_owned())
 }
 
 fn decode<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
@@ -293,6 +312,7 @@ struct Inner {
     response_span: [u8; 8],
     records: Mutex<Recorder>,
     completion: Mutex<CompletionState>,
+    export_hook: Mutex<Option<Arc<dyn Fn(CompletedTrace) + Send + Sync>>>,
     #[cfg(test)]
     hook: Mutex<Option<Box<dyn FnOnce(CompletedTrace) + Send>>>,
 }
@@ -330,6 +350,7 @@ impl TraceBuffer {
                 recorder
             }),
             completion: Mutex::new(CompletionState::default()),
+            export_hook: Mutex::new(None),
             #[cfg(test)]
             hook: Mutex::new(None),
         }))
@@ -385,6 +406,14 @@ impl TraceBuffer {
         drop(state);
         self.try_complete();
     }
+    pub(crate) fn set_export_hook(&self, hook: Arc<dyn Fn(CompletedTrace) + Send + Sync>) {
+        *self
+            .0
+            .export_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(hook);
+        self.try_complete();
+    }
     #[cfg(test)]
     pub fn set_completion_hook(&self, hook: Box<dyn FnOnce(CompletedTrace) + Send>) {
         *self
@@ -424,28 +453,43 @@ impl TraceBuffer {
         if state.http.is_none() {
             return;
         }
+        let export_hook = self
+            .0
+            .export_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
         #[cfg(test)]
-        let Some(hook) = self
+        let test_hook = self
             .0
             .hook
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .take()
-        else {
+            .take();
+        #[cfg(not(test))]
+        let test_hook: Option<Box<dyn FnOnce(CompletedTrace) + Send>> = None;
+        if export_hook.is_none() && test_hook.is_none() {
+            #[cfg(not(test))]
+            {
+                state.completed = true;
+            }
             return;
-        };
-        #[cfg(test)]
+        }
         let (status, outcome) = state.http.expect("completed HTTP status");
         state.completed = true;
         drop(state);
-        #[cfg(test)]
         let completed = CompletedTrace {
             inner: Arc::clone(&self.0),
             status,
             outcome,
         };
+        if let Some(hook) = export_hook {
+            hook(completed.clone());
+        }
         #[cfg(test)]
-        hook(completed);
+        if let Some(hook) = test_hook {
+            hook(completed);
+        }
     }
 }
 
@@ -475,6 +519,76 @@ pub(crate) struct CompletedTrace {
 }
 
 impl CompletedTrace {
+    pub(crate) fn span_count(&self) -> usize {
+        self.inner
+            .records
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .record_count
+    }
+
+    pub(crate) fn queued_bytes(&self) -> usize {
+        std::mem::size_of::<Inner>() + std::mem::size_of::<Self>()
+    }
+
+    pub(crate) fn otlp_spans(&self) -> Vec<Value> {
+        use sha2::{Digest, Sha256};
+        let records = self
+            .inner
+            .records
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let trace_id = hex(&self.inner.context.trace_id);
+        let start = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .saturating_sub(self.inner.started.elapsed());
+        let base_ns = start.as_nanos();
+        let span_ids = (0..records.record_count)
+            .map(|index| {
+                let mut hash = Sha256::new();
+                hash.update(self.inner.context.trace_id);
+                hash.update((index as u64).to_be_bytes());
+                let digest = hash.finalize();
+                let id: [u8; 8] = if index == 0 {
+                    self.inner.response_span
+                } else {
+                    digest[..8].try_into().unwrap()
+                };
+                hex(&id)
+            })
+            .collect::<Vec<_>>();
+        records.records[..records.record_count].iter().enumerate().map(|(index, row)| {
+            let parent = row.parent.map(|parent| span_ids[parent as usize].clone()).or_else(|| {
+                self.inner.context.response_seed.is_none().then(|| hex(&self.inner.context.parent_id))
+            });
+            let mut attributes = vec![
+                json!({"key":"konae.runner.kind","value":{"stringValue":self.inner.runner_kind}}),
+                json!({"key":"http.response.status_code","value":{"intValue":self.status.to_string()}}),
+            ];
+            if let Some(action) = records.name(row.action_name) { attributes.push(json!({"key":"konae.action.name","value":{"stringValue":action}})); }
+            if let Some(origin) = row.origin { attributes.push(json!({"key":"konae.action.origin","value":{"stringValue":origin}})); }
+            if let Some(code) = records.name(row.error_code) { attributes.push(json!({"key":"konae.error.code","value":{"stringValue":code}})); }
+            for (key, value) in [("konae.db.rows_read", row.rows_read), ("konae.db.rows_written", row.rows_written), ("konae.action.reply_bytes", row.reply_bytes)] {
+                if let Some(value) = value { attributes.push(json!({"key":key,"value":{"intValue":value.to_string()}})); }
+            }
+            if let Some(value) = row.sqlite_us { attributes.push(json!({"key":"konae.db.duration_us","value":{"intValue":value.to_string()}})); }
+            let begin = base_ns.saturating_add(row.start_us as u128 * 1_000);
+            let end = begin.saturating_add(row.duration_us as u128 * 1_000);
+            let mut span = json!({"traceId":trace_id,"spanId":span_ids[index],"name":row.name,"kind":1,"flags":if self.inner.context.sampled {1} else {0},"startTimeUnixNano":begin.to_string(),"endTimeUnixNano":end.to_string(),"attributes":attributes,"status":{"code":if self.outcome == "ok" {1} else {2}}});
+            if let Some(parent) = parent { span["parentSpanId"] = json!(parent); }
+            span
+        }).collect()
+    }
+
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            status: self.status,
+            outcome: self.outcome,
+        }
+    }
+
     pub(crate) fn local_json(&self, at: u64) -> Value {
         let records = self
             .inner
@@ -745,5 +859,90 @@ mod function_trace_tests {
         assert_eq!(timings[0].duration.as_micros(), 28);
         assert_eq!(timings[0].sqlite.as_micros(), 7);
         assert_eq!(timings[0].rows_read, Some(2));
+    }
+
+    #[test]
+    fn otlp_spans_keep_parentage_and_only_export_recorded_fields() {
+        let mut context = parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").unwrap();
+        context.sampled = true;
+        let trace = TraceBuffer::new(context, Instant::now(), "wasm");
+        let _ = trace.push(TraceRecord {
+            parent: Some(0),
+            name: "konae.action",
+            start_us: 5,
+            duration_us: 12,
+            action_name: Some("probe.read"),
+            origin: Some("function"),
+            sequence: Some(1),
+            rows_read: Some(1),
+            rows_written: None,
+            reply_bytes: Some(18),
+            sqlite_us: None,
+            error_code: None,
+        });
+        let _ = trace.push(TraceRecord {
+            parent: Some(1),
+            name: "konae.sqlite",
+            start_us: 8,
+            duration_us: 2,
+            action_name: None,
+            origin: None,
+            sequence: Some(1),
+            rows_read: Some(1),
+            rows_written: None,
+            reply_bytes: None,
+            sqlite_us: Some(2),
+            error_code: None,
+        });
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        trace.set_completion_hook(Box::new(move |completed| {
+            let _ = sender.send(completed);
+        }));
+        trace.finish(200, "ok");
+        let completed = receiver.recv().unwrap();
+        let spans = completed.otlp_spans();
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0]["parentSpanId"], hex(&context.parent_id));
+        assert_eq!(spans[1]["parentSpanId"], spans[0]["spanId"]);
+        assert_eq!(spans[2]["parentSpanId"], spans[1]["spanId"]);
+        assert!(
+            spans
+                .iter()
+                .all(|span| span["traceId"] == hex(&context.trace_id))
+        );
+        let json = serde_json::to_string(&spans).unwrap();
+        for field in [
+            "probe.read",
+            "konae.sqlite",
+            "konae.db.rows_read",
+            "startTimeUnixNano",
+        ] {
+            assert!(json.contains(field));
+        }
+        for private in [
+            "fixture-input",
+            "row-value",
+            "authorization-value",
+            "exception message",
+        ] {
+            assert!(!json.contains(private));
+        }
+    }
+
+    #[test]
+    fn trace_context_call_attempts_keep_trace_id_and_make_fresh_span_ids() {
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let first = child_traceparent(parent).unwrap();
+        let retry = child_traceparent(parent).unwrap();
+        let unsampled = normalize_traceparent(parent, false).unwrap();
+        assert_eq!(traceparent_sampled(parent), Some(true));
+        assert_eq!(traceparent_sampled(&unsampled), Some(false));
+        assert!(first.starts_with("00-4bf92f3577b34da6a3ce929d0e0e4736-"));
+        assert_ne!(&first[36..52], &retry[36..52]);
+        assert!(first.ends_with("-01"));
+        assert_eq!(
+            unsampled,
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+        );
     }
 }

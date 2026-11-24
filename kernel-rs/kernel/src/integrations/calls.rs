@@ -661,6 +661,7 @@ fn connection(data_root: &Path) -> Result<Connection> {
         ("request_body", "TEXT"),
         ("request_headers", "TEXT"),
         ("response_body", "BLOB"),
+        ("traceparent", "TEXT"),
     ] {
         let exists: bool = connection
             .query_row(
@@ -921,6 +922,10 @@ pub async fn submit_synthetic_response(state: &AppState, app_id: &str, id: &str,
 /// Queues a call whose caller and inputs `invoke_action` has checked, and
 /// answers `{ callId, queued: true }`.
 pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, input: &Value) -> Response {
+    enqueue_with_traceparent(state, deployment, name, input, None).await
+}
+
+pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment, name: &str, input: &Value, traceparent: Option<&str>) -> Response {
     if let Err(refused) = crate::modules::require_on(&deployment.modules, "calls") { return crate::refusal_error(&refused); }
     let data_root = state.data_root.clone();
     let deployment_id = deployment.id.clone();
@@ -928,6 +933,16 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
     let input = input.clone();
     let limit = per_minute();
     let execution_mode = if state.execution_mode.is_test() { "test" } else { "live" };
+    let traceparent = if execution_mode == "live" {
+        traceparent.and_then(|value| {
+            let trace_id = crate::functions::trace::traceparent_id(value)?;
+            let sampled = state.otlp.as_ref().map_or_else(
+                || crate::functions::trace::traceparent_sampled(value).unwrap_or(false),
+                |exporter| exporter.should_sample(&trace_id),
+            );
+            crate::functions::trace::normalize_traceparent(value, sampled)
+        })
+    } else { None };
     let queued = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let db = connection(&data_root)?;
         let at = now();
@@ -941,9 +956,9 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
         }
         let id = format!("call_{}", Uuid::new_v4().simple());
         db.execute(
-            "INSERT INTO calls (id, deployment, action, input, state, attempts, next_attempt_at, execution_mode, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?5, ?5)",
-            rusqlite::params![id, deployment_id, action, input.to_string(), at, execution_mode],
+            "INSERT INTO calls (id, deployment, action, input, state, attempts, next_attempt_at, execution_mode, traceparent, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?5, ?5)",
+            rusqlite::params![id, deployment_id, action, input.to_string(), at, execution_mode, traceparent],
         )?;
         db.execute(
             "DELETE FROM calls WHERE deployment = ?1 AND state <> 'pending' AND id NOT IN
@@ -971,6 +986,7 @@ struct Claimed {
     action: String,
     input: Value,
     attempts: i64,
+    traceparent: Option<String>,
 }
 
 fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
@@ -982,7 +998,7 @@ fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
            SELECT id FROM calls WHERE state = 'pending' AND execution_mode = 'live' AND next_attempt_at <= ?2
              AND (leased_until IS NULL OR leased_until < ?2)
            ORDER BY next_attempt_at LIMIT ?3)
-         RETURNING id, deployment, action, input, attempts",
+         RETURNING id, deployment, action, input, attempts, traceparent",
     )?;
     let rows = statement
         .query_map(rusqlite::params![at + LEASE_MS, at, BATCH], |row| {
@@ -992,6 +1008,7 @@ fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
                 action: row.get(2)?,
                 input: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or(json!({})),
                 attempts: row.get(4)?,
+                traceparent: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1326,7 +1343,7 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
     let extra_headers = request_headers(&call, &job.input);
     let mut attempt = Attempt { method: Some(call.method.clone()), url: Some(url.to_string()), ..Default::default() };
     let mut retry = false;
-    match send(state, &deployment, &call, &url, &body, &extra_headers).await {
+    match send(state, &deployment, &call, &url, &body, &extra_headers, job.traceparent.as_deref()).await {
         Ok((status, answer)) => {
             attempt.status = Some(status);
             attempt.answer = answer;
@@ -1355,6 +1372,7 @@ async fn send(
     url: &url::Url,
     body: &[u8],
     extra_headers: &[(String, String)],
+    traceparent: Option<&str>,
 ) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
     let target = target(state, url).await?;
     let secret = match &call.auth {
@@ -1379,6 +1397,12 @@ async fn send(
         }
         (Some(Auth::Key { .. }), Some(secret)) => headers.push(("authorization".into(), format!("Bearer {secret}"))),
         _ => {}
+    }
+    if let Some(traceparent) = traceparent {
+        headers.retain(|(name, _)| !name.eq_ignore_ascii_case("traceparent"));
+        if let Some(attempt_traceparent) = crate::functions::trace::child_traceparent(traceparent) {
+            headers.push(("traceparent".into(), attempt_traceparent));
+        }
     }
     match target {
         Target::App(app) => Ok(send_in_process(state, deployment, &app, &call.method, &path, &query, &headers, body).await?),
@@ -1822,6 +1846,31 @@ mod tests {
                 "bindings": [{"source": "input", "key": "status", "type": "number", "nullable": true},
                              {"source": "input", "key": "error", "type": "string", "nullable": true}]}
         }})
+    }
+
+    #[test]
+    fn pending_outbox_trace_context_survives_reopen_and_retry_claims() {
+        let root = std::env::temp_dir().join(format!("konae-call-trace-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let db = connection(&root).unwrap();
+        db.execute(
+            "INSERT INTO calls (id, deployment, action, input, state, next_attempt_at, traceparent, created_at, updated_at) VALUES ('pending', 'app', 'send', '{}', 'pending', 0, ?1, 1, 1)",
+            [parent],
+        ).unwrap();
+        drop(db);
+        drop(connection(&root).unwrap());
+        let first = claim(&root).unwrap().pop().unwrap();
+        assert_eq!(first.traceparent.as_deref(), Some(parent));
+        connection(&root).unwrap().execute("UPDATE calls SET leased_until = 0, next_attempt_at = 0 WHERE id = 'pending'", []).unwrap();
+        let retry = claim(&root).unwrap().pop().unwrap();
+        assert_eq!(retry.traceparent, first.traceparent);
+        assert_eq!(retry.attempts, first.attempts + 1);
+        let first_attempt = crate::functions::trace::child_traceparent(first.traceparent.as_deref().unwrap()).unwrap();
+        let retry_attempt = crate::functions::trace::child_traceparent(retry.traceparent.as_deref().unwrap()).unwrap();
+        assert_eq!(crate::functions::trace::traceparent_id(&first_attempt), crate::functions::trace::traceparent_id(parent));
+        assert_ne!(&first_attempt[36..52], &retry_attempt[36..52]);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
