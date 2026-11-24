@@ -467,14 +467,9 @@ impl Lease {
                 let spawned = if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref()
                     == Ok("wasm")
                 {
-                    let prepared = crate::functions::prepared_bundles(bundles)?;
-                    let descriptors = prepared
-                        .into_iter()
-                        .map(|(name, path)| Ok((name, std::fs::File::open(path)?)))
-                        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
                     Worker::spawn_prepared_with_policy(
                         &self.config.executable,
-                        descriptors,
+                        crate::functions::prepared_bundles(bundles)?,
                         budget,
                         WorkerLimits::default(),
                         self.config.policy.clone(),

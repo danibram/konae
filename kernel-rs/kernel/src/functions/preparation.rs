@@ -1,7 +1,7 @@
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::MetadataExt,
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Seek, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, OnceLock},
@@ -99,40 +99,47 @@ pub fn prepare_bundles(bundles: &std::collections::BTreeMap<String, String>) -> 
 }
 
 /// Resolves cache entries without invoking either compiler.
-pub fn prepared_bundles(bundles: &std::collections::BTreeMap<String, String>) -> Result<std::collections::BTreeMap<String, PathBuf>> {
+pub fn prepared_bundles(
+    bundles: &std::collections::BTreeMap<String, String>,
+) -> Result<std::collections::BTreeMap<String, File>> {
     let runner = required_executable("KONAE_FUNCTIONS_RUNNER")?;
     let helper = required_executable("KONAE_FUNCTIONS_PREPARER")?;
-    let cache = PathBuf::from(std::env::var_os("KONAE_FUNCTIONS_WASM_CACHE")
-        .context("KONAE_FUNCTIONS_WASM_CACHE must name the operator-owned Wasm cache")?);
-    ensure!(cache.is_absolute(), "KONAE_FUNCTIONS_WASM_CACHE must be absolute");
+    let cache = cache_directory()?;
+    check_cache_directory(&cache)?;
     let identity: HelperIdentity = json_command(&helper, &["identity"], PREPARE_LIMIT)?;
     let target: NativeTarget = json_command(&runner, &["--native-target"], PREPARE_LIMIT)?;
-    let mut prepared = std::collections::BTreeMap::new();
-    for (name, source) in bundles {
-        let alias = alias_key(source, &identity, &target);
-        let alias_path = cache.join(format!(".alias-{alias}"));
-        let filename = fs::read_to_string(&alias_path).with_context(|| format!("Prepared Wasm component for {name} is missing; prepare the app before serving"))?;
-        let filename = filename.trim();
-        ensure!(filename.len() == 70 && filename.ends_with(".cwasm") && filename[..64].bytes().all(|b| b.is_ascii_hexdigit()), "Invalid prepared component cache alias");
-        let component = cache.join(filename);
-        let metadata = fs::symlink_metadata(&component)?;
-        ensure!(metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o022 == 0, "Unsafe prepared component cache entry");
-        prepared.insert(name.clone(), component);
-    }
-    ensure!(prepared.len() == bundles.len(), "Prepared Wasm component set is incomplete");
-    Ok(prepared)
+    bundles.iter().map(|(name, source)| {
+        let key = alias_key(source, &identity, &target);
+        let (_, file) = cached_object(&cache, &key)?
+            .with_context(|| format!("Prepared Wasm component for {name} is missing or corrupt; prepare the app before serving"))?;
+        Ok((name.clone(), file))
+    }).collect()
 }
 
 fn prepare_bundles_blocking(bundles: &std::collections::BTreeMap<String, String>) -> Result<std::collections::BTreeMap<String, PathBuf>> {
     let runner = required_executable("KONAE_FUNCTIONS_RUNNER")?;
     let helper = required_executable("KONAE_FUNCTIONS_PREPARER")?;
-    let cache = PathBuf::from(
-        std::env::var_os("KONAE_FUNCTIONS_WASM_CACHE")
-            .context("KONAE_FUNCTIONS_WASM_CACHE must name the operator-owned Wasm cache")?,
-    );
-    ensure!(cache.is_absolute(), "KONAE_FUNCTIONS_WASM_CACHE must be absolute");
+    let cache = cache_directory()?;
     fs::create_dir_all(&cache).context("Create the operator-owned Wasm cache")?;
     prepare_blocking(&runner, &helper, &cache, bundles)
+}
+
+fn cache_directory() -> Result<PathBuf> {
+    let cache = PathBuf::from(std::env::var_os("KONAE_FUNCTIONS_WASM_CACHE")
+        .context("KONAE_FUNCTIONS_WASM_CACHE must name the operator-owned Wasm cache")?);
+    ensure!(cache.is_absolute(), "KONAE_FUNCTIONS_WASM_CACHE must be absolute");
+    Ok(cache)
+}
+
+fn check_cache_directory(cache: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(cache)?;
+    ensure!(
+        metadata.is_dir()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o022 == 0,
+        "Unsafe Wasm cache directory"
+    );
+    Ok(())
 }
 
 fn required_executable(name: &str) -> Result<PathBuf> {
@@ -154,6 +161,7 @@ fn prepare_blocking(
     bundles: &std::collections::BTreeMap<String, String>,
 ) -> Result<std::collections::BTreeMap<String, PathBuf>> {
     let _cache_serial = CACHE_PREPARATION_LOCK.lock().unwrap();
+    check_cache_directory(cache)?;
     let lock_path = cache.join(".prepare.lock");
     let lock_file = OpenOptions::new().read(true).write(true).create(true).open(lock_path)?;
     ensure!(unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&lock_file), libc::LOCK_EX) } == 0, "Could not lock the Wasm preparation cache");
@@ -172,6 +180,13 @@ fn prepare_blocking(
     let mut prepared = std::collections::BTreeMap::new();
     let mut active_pin = pin_prepared(&prepared);
     for (name, source) in bundles {
+        let alias = alias_key(source, &identity, &target);
+        if let Some((path, _)) = cached_object(cache, &alias)? {
+            prepared.insert(name.clone(), path);
+            active_pin = pin_prepared(&prepared);
+            continue;
+        }
+
         let staging = Staging::new(cache)?;
         let input = staging.write(name, source.as_bytes())?;
         let output = staging.path.join("component.wasm");
@@ -201,8 +216,6 @@ fn prepare_blocking(
         );
         let input_sha256 = format!("{:x}", Sha256::digest(source.as_bytes()));
         verify_component(&manifest, &input_sha256, &component)?;
-        let alias = alias_key(source, &identity, &target);
-
         let mut key_hash = Sha256::new();
         for value in [
             &input_sha256,
@@ -217,12 +230,6 @@ fn prepare_blocking(
         }
         let key = format!("{:x}", key_hash.finalize());
         let installed = cache.join(format!("{key}.cwasm"));
-        if installed.is_file() {
-            install_alias(cache, &alias, &installed)?;
-            prepared.insert(name.clone(), installed);
-            active_pin = pin_prepared(&prepared);
-            continue;
-        }
         let native = staging.path.join("component.cwasm");
         let cache_limit = cache_limit()?;
         let reservation = (component.len() as u64)
@@ -233,17 +240,11 @@ fn prepare_blocking(
         compile_component(runner, &native, &component)?;
         let native_size = fs::metadata(&native)?.len();
         ensure_cache_room(cache, native_size, cache_limit)?;
-        let file = OpenOptions::new().read(true).open(&native)?;
+        let mut file = File::open(&native)?;
+        let digest = native_digest(&mut file)?.context("Invalid native component size")?;
         file.sync_all()?;
-        match fs::rename(&native, &installed) {
-            Ok(()) => {}
-            Err(_error) if installed.is_file() => {
-                let _ = fs::remove_file(native);
-            }
-            Err(error) => return Err(error.into()),
-        }
-        let _ = error_if_empty(&installed)?;
-        install_alias(cache, &alias, &installed)?;
+        fs::rename(&native, &installed)?;
+        install_alias(cache, &alias, &installed, &digest)?;
         prepared.insert(name.clone(), installed);
         active_pin = pin_prepared(&prepared);
     }
@@ -287,7 +288,7 @@ fn ensure_cache_room(cache: &Path, reserve: u64, limit: u64) -> Result<()> {
         for entry in fs::read_dir(cache)? {
             let entry = entry?;
             if entry.file_name().to_string_lossy().starts_with(".alias-")
-                && fs::read_to_string(entry.path()).is_ok_and(|target| target.trim() == filename)
+                && fs::read_to_string(entry.path()).is_ok_and(|target| target.split_whitespace().next() == Some(filename.as_str()))
             {
                 fs::remove_file(entry.path())?;
             }
@@ -314,7 +315,73 @@ fn alias_key(source: &str, identity: &HelperIdentity, target: &NativeTarget) -> 
     format!("{:x}", hash.finalize())
 }
 
-fn install_alias(cache: &Path, key: &str, object: &Path) -> Result<()> {
+fn cached_object(cache: &Path, key: &str) -> Result<Option<(PathBuf, File)>> {
+    let Some(alias) = open_cache_file(&cache.join(format!(".alias-{key}")))? else {
+        return Ok(None);
+    };
+    let mut record = Vec::new();
+    alias.take(256).read_to_end(&mut record)?;
+    let Ok(record) = std::str::from_utf8(&record) else {
+        return Ok(None);
+    };
+    let Some((filename, digest)) = record.trim_end().split_once(' ') else {
+        return Ok(None);
+    };
+    if !filename.strip_suffix(".cwasm").is_some_and(valid_digest) || !valid_digest(digest) {
+        return Ok(None);
+    }
+    let path = cache.join(filename);
+    let Some(mut file) = open_cache_file(&path)? else {
+        return Ok(None);
+    };
+    if native_digest(&mut file)?.as_deref() != Some(digest) {
+        return Ok(None);
+    }
+    Ok(Some((path, file)))
+}
+
+fn open_cache_file(path: &Path) -> Result<Option<File>> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o022 == 0,
+        "Unsafe prepared component cache entry"
+    );
+    Ok(Some(file))
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn native_digest(file: &mut File) -> Result<Option<String>> {
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut reader = (&mut *file).take(NATIVE_RESERVATION_LIMIT + 1);
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    let bytes = NATIVE_RESERVATION_LIMIT + 1 - reader.limit();
+    file.rewind()?;
+    Ok((bytes > 0 && bytes <= NATIVE_RESERVATION_LIMIT)
+        .then(|| hex::encode(hash.finish().as_ref())))
+}
+
+fn install_alias(cache: &Path, key: &str, object: &Path, digest: &str) -> Result<()> {
     let filename = object.file_name().context("Prepared object has no name")?;
     let temporary = cache.join(format!(".alias-{key}-{}", uuid::Uuid::new_v4()));
     let destination = cache.join(format!(".alias-{key}"));
@@ -326,17 +393,9 @@ fn install_alias(cache: &Path, key: &str, object: &Path) -> Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(&temporary)?;
-    writeln!(file, "{}", filename.to_string_lossy())?;
+    writeln!(file, "{} {digest}", filename.to_string_lossy())?;
     file.sync_all()?;
     fs::rename(&temporary, &destination)?;
-    Ok(())
-}
-
-fn error_if_empty(path: &Path) -> Result<()> {
-    ensure!(
-        fs::metadata(path)?.len() > 0,
-        "Native component compilation produced an empty file"
-    );
     Ok(())
 }
 
@@ -451,5 +510,31 @@ impl Staging {
 impl Drop for Staging {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cache_alias_returns_only_bytes_matching_its_digest() {
+        let cache = Staging::new(&std::env::temp_dir()).unwrap();
+        let filename = format!("{}.cwasm", "a".repeat(64));
+        let path = cache.path.join(filename);
+        fs::write(&path, b"good").unwrap();
+        let key = "b".repeat(64);
+        let digest = format!("{:x}", Sha256::digest(b"good"));
+        assert!(cached_object(&cache.path, &key).unwrap().is_none());
+
+        install_alias(&cache.path, &key, &path, &digest).unwrap();
+        let (resolved, mut verified) = cached_object(&cache.path, &key).unwrap().unwrap();
+        let mut bytes = Vec::new();
+        verified.read_to_end(&mut bytes).unwrap();
+        assert_eq!(resolved, path);
+        assert_eq!(bytes, b"good");
+
+        fs::write(&path, b"bad!").unwrap();
+        assert!(cached_object(&cache.path, &key).unwrap().is_none());
     }
 }
