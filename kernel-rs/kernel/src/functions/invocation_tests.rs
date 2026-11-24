@@ -115,7 +115,7 @@ fn output(status: u16) -> Output {
         status,
         headers: vec![
             ("content-type".into(), "application/json".into()),
-            ("set-cookie".into(), "seen=1; Path=/; HttpOnly".into()),
+            ("x-app-test".into(), "seen=1".into()),
         ],
         body: if status == 204 {
             String::new()
@@ -181,7 +181,11 @@ fn legacy_response_receipt_is_read_without_migration_or_response_replay() {
     let mut invocation = fixture.run("legacy");
     change(&mut invocation);
     invocation.finish(output(201)).unwrap();
-    let legacy_response = serde_json::to_string(&output(201)).unwrap();
+    let mut legacy = output(201);
+    legacy
+        .headers
+        .push(("set-cookie".into(), "seen=1; Path=/; HttpOnly".into()));
+    let legacy_response = serde_json::to_string(&legacy).unwrap();
     let db = Connection::open(&fixture.path).unwrap();
     db.execute(
         "UPDATE __konae_function_receipts SET response_json=?1 WHERE idempotency_key='legacy'",
@@ -519,6 +523,13 @@ fn invalid_output_does_not_commit() {
             "length",
             Output {
                 headers: vec![("content-length".into(), "999".into())],
+                ..output(200)
+            },
+        ),
+        (
+            "reserved-header",
+            Output {
+                headers: vec![("set-cookie".into(), "test".into())],
                 ..output(200)
             },
         ),
