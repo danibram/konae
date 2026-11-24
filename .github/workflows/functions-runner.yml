@@ -9,14 +9,11 @@ on:
       - kernel-rs/functions-runner/**
       - kernel-rs/functions-runner-wasm/**
       - kernel-rs/functions-prepare/**
-      - kernel-rs/functions-executor/src/supervisor.rs
       - kernel-rs/kernel/src/functions/**
       - kernel-rs/kernel/src/app_folders/folder.rs
       - scripts/build-functions-runner.sh
       - scripts/build-functions-images.sh
       - ops/kernel-entrypoint.sh
-      - Dockerfile.kernel
-      - Dockerfile.konae
       - Dockerfile.functions-runner
       - Dockerfile.kernel
       - Dockerfile.konae
@@ -24,7 +21,6 @@ on:
       - .dockerignore
       - scripts/test-exported-functions-compose.sh
       - docs/operate.md
-      - docs/guides/take-the-app-elsewhere.md
       - src/lib/app-folder.ts
       - src/lib/app-folder.test.ts
       - docs/functions.md
@@ -68,8 +64,16 @@ jobs:
           KONAE_FUNCTIONS_PREPARER: ${{ github.workspace }}/kernel-rs/functions-prepare/target/release/konae-functions-prepare
         run: cargo test --release --locked --manifest-path kernel-rs/functions-runner-wasm/Cargo.toml -- --test-threads=1
 
-  wasm-export-compose:
-    runs-on: ubuntu-24.04
+  export-compose:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: ubuntu-24.04
+            arch: amd64
+          - host: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.host }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -78,8 +82,18 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Build both packaged runners and the Wasm preparer
+        id: package
+        run: scripts/build-functions-runner.sh "${{ matrix.arch }}" "$RUNNER_TEMP/functions-packaged"
       - name: Run exported Wasm app under default Compose security profiles
-        run: scripts/test-exported-functions-compose.sh
+        env:
+          KONAE_FUNCTIONS_RUNNER_CONTEXT: ${{ runner.temp }}/functions-packaged
+        run: scripts/test-exported-functions-compose.sh wasm
+      - name: Run exported deno_core app with development polling
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        env:
+          KONAE_FUNCTIONS_RUNNER_CONTEXT: ${{ runner.temp }}/functions-packaged
+        run: scripts/test-exported-functions-compose.sh deno
 
   strict-linux:
     strategy:
@@ -159,5 +173,3 @@ jobs:
               run_tests real_ || diagnose
               run_tests functions_export_import_executes_the_published_bundle_with_imported_identity || diagnose
             '
-      - name: Build and run an exported function folder, then deny Landlock
-        run: scripts/test-exported-functions-compose.sh
