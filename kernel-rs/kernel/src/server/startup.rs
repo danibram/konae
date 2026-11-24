@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio::sync::RwLock;
 
 use crate::limits::{Guards, trusted_proxies};
@@ -80,6 +80,15 @@ pub async fn start_locked(
     tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
+    if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm") {
+        let deployments = state.deployments.read().await.values().cloned().collect::<Vec<_>>();
+        for deployment in deployments {
+            let artifact = functions::read_artifact(&crate::layout::server(&state.data_root, &deployment.id))?;
+            let prepared = functions::prepare_artifact(artifact.as_ref()).await
+                .with_context(|| format!("Could not prepare functions for app {} before startup", deployment.id))?;
+            state.functions.retain_prepared(&deployment.id, &prepared);
+        }
+    }
     path::load(&state);
     let own_hosts = domain::Rules::of(&state).installation_hosts;
     for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {

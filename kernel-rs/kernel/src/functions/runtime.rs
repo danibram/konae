@@ -51,6 +51,7 @@ pub struct Runtime {
     allocations: Arc<Semaphore>,
     app_slots: usize,
     protocol_failure: Arc<AtomicBool>,
+    prepared_pins: Mutex<HashMap<String, crate::functions::PreparedPin>>,
 }
 
 struct Reservation(Arc<Slot>);
@@ -122,7 +123,15 @@ impl Runtime {
             ))),
             app_slots: env_capacity("KONAE_FUNCTIONS_APP_SLOTS", 2),
             protocol_failure: Arc::new(AtomicBool::new(false)),
+            prepared_pins: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn retain_prepared(&self, reference: &str, paths: &BTreeMap<String, PathBuf>) {
+        self.prepared_pins
+            .lock()
+            .unwrap()
+            .insert(reference.to_owned(), crate::functions::pin_prepared(paths));
     }
 
     /// Test diagnostics: every slot with its pins and whether a worker is present, plus permits.
@@ -455,13 +464,25 @@ impl Lease {
                     progress.cold = true;
                     progress.initialization_started = Some(started);
                 }
-                let spawned = Worker::spawn_with_policy(
-                    &self.config.executable,
-                    bundles,
-                    budget,
-                    WorkerLimits::default(),
-                    self.config.policy.clone(),
-                );
+                let spawned = if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref()
+                    == Ok("wasm")
+                {
+                    Worker::spawn_prepared_with_policy(
+                        &self.config.executable,
+                        crate::functions::prepared_bundles(bundles)?,
+                        budget,
+                        WorkerLimits::default(),
+                        self.config.policy.clone(),
+                    )
+                } else {
+                    Worker::spawn_with_policy(
+                        &self.config.executable,
+                        bundles,
+                        budget,
+                        WorkerLimits::default(),
+                        self.config.policy.clone(),
+                    )
+                };
                 initialization = started.elapsed();
                 match spawned {
                     Ok(worker) => *self.worker = Some(worker),
@@ -961,6 +982,13 @@ export function handle(request, context) {
             idle,
         ))
     }
+    fn prepare_fixture(fixture: &Fixture) {
+        if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() != Ok("wasm") {
+            return;
+        }
+        let source = std::fs::read_to_string(fixture.0.join("example.mjs")).unwrap();
+        crate::functions::prepare_bundles(&BTreeMap::from([("example".into(), source)])).unwrap();
+    }
     async fn run(
         runtime: &Arc<Runtime>,
         key: &str,
@@ -1000,9 +1028,11 @@ export function handle(request, context) {
     #[ignore = "requires KONAE_TEST_FUNCTION_WORKER and starts real child processes"]
     async fn real_worker_reuses_after_handler_error_and_idle_processes() {
         let fixture = Fixture::new();
+        prepare_fixture(&fixture);
         let runtime = real_runtime(Duration::from_millis(200));
         let (first, pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
-        assert_eq!(first.output.unwrap().body, "1:alice");
+        let response = first.output.unwrap();
+        assert_eq!(response.body, "1:alice");
         assert!(first.cold);
         let pid = pid.unwrap();
         let (second, second_pid) = run(&runtime, "app:example:v1", &fixture.0, "bob", "").await;
@@ -1052,6 +1082,7 @@ export function handle(request, context) {
     #[ignore = "requires KONAE_TEST_FUNCTION_WORKER and starts real child processes"]
     async fn real_worker_new_version_and_lru_eviction_reap_before_replacement() {
         let fixture = Fixture::new();
+        prepare_fixture(&fixture);
         let runtime = real_runtime(Duration::from_secs(60));
         let mut pids = Vec::new();
         for version in 0..2 {
@@ -1064,7 +1095,8 @@ export function handle(request, context) {
             )
             .await;
             assert!(result.cold);
-            assert_eq!(result.output.unwrap().body, "1:alice");
+            let response = result.output.unwrap();
+            assert_eq!(response.body, "1:alice");
             pids.push(pid.unwrap());
         }
         assert!(pids.iter().all(|pid| alive(*pid)));

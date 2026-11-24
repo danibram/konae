@@ -104,3 +104,23 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
     replace_database_file(&temp_path, &database_path(state, id))?;
     Ok(json!({"id":backup_id,"sizeBytes":bytes.len()}))
 }
+
+/// Prepares a source backup's published functions before the caller takes app locks.
+pub async fn prepare_backup(state: &AppState, id: &str, backup_id: &str) -> Result<crate::functions::PreparedPin> {
+    if backup_id.is_empty() || backup_id.contains('/') || backup_id.contains("..") {
+        anyhow::bail!("Invalid backup ID.");
+    }
+    let record = copies::history::checked_record(&backup_dir(state, id), backup_id)?;
+    if !record.holds.iter().any(|part| part == import::HOLDS_SOURCES) {
+        return Ok(crate::functions::pin_prepared(&std::collections::BTreeMap::new()));
+    }
+    let release_path = backup_dir(state, id).join(&record.key).join("release.json");
+    if !tokio::fs::try_exists(&release_path).await? {
+        return Ok(crate::functions::pin_prepared(&std::collections::BTreeMap::new()));
+    }
+    let release: Value = serde_json::from_slice(&tokio::fs::read(release_path).await?)?;
+    let artifact: Option<crate::functions::ServerArtifact> =
+        serde_json::from_value(release["serverArtifact"].clone())?;
+    let prepared = crate::functions::prepare_artifact(artifact.as_ref()).await?;
+    Ok(crate::functions::pin_prepared(&prepared))
+}

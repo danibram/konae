@@ -76,6 +76,13 @@ pub struct Capability {
     pub request: u64,
     pub token: String,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineKind {
+    Deno,
+    Starlingmonkey,
+    Quickjs,
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum ParentMessage {
@@ -84,6 +91,12 @@ pub enum ParentMessage {
         bundles: BTreeMap<String, String>,
         generation: String,
         limits: WorkerLimits,
+    },
+    InitPrepared {
+        abi: String,
+        generation: String,
+        limits: WorkerLimits,
+        components: BTreeMap<String, u32>,
     },
     Invoke {
         capability: Capability,
@@ -119,6 +132,8 @@ pub enum ChildMessage {
     Ready {
         abi: String,
         generation: String,
+        #[serde(default)]
+        engine: Option<EngineKind>,
     },
     Operation {
         capability: Capability,

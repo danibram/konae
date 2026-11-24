@@ -1,20 +1,12 @@
 use crate::bridge::Bridge;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use konae_functions_executor::{
     WorkerError,
-    protocol::{
-        BODY_CHUNK_BYTES, Input, MAX_OPERATION_BYTES, MAX_SOURCE_BYTES, Output, WorkerLimits,
-    },
+    protocol::{BODY_CHUNK_BYTES, Input, MAX_OPERATION_BYTES, Output, WorkerLimits},
 };
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde_json::Value;
 use std::{
-    fs,
-    os::unix::{fs::MetadataExt, process::CommandExt},
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use wasmtime::{
@@ -22,10 +14,6 @@ use wasmtime::{
     component::{Component, Instance, InstancePre, Linker, TypedFunc},
 };
 
-const TARGET: &str = env!("KONAE_STARLING_TARGET");
-const STARLING: &str = "0.21.0:b45eb4dda2fed0eaecd4e5581fb26a99e642d001dbf82f3698aba27564a78ea1";
-const WASMTIME: &str = "38.0.4";
-const BUILD_LIMIT: Duration = Duration::from_secs(60);
 static TEST_RANDOM_SEED_INDEX: AtomicU64 = AtomicU64::new(0);
 
 pub struct Compiler {
@@ -108,22 +96,13 @@ pub struct Invocation {
 }
 
 impl Invocation {
-    pub fn pack(
-        compiler: &Compiler,
-        _bridge: Bridge,
-        _limits: &WorkerLimits,
-        source: &str,
-    ) -> Result<InstancePre<Bridge>> {
-        let cache = Cache::new(source)?;
-        let meta = fs::symlink_metadata(&cache.compiled)
-            .context("Prepared StarlingMonkey component is missing")?;
+    pub fn pack_prepared(compiler: &Compiler, bytes: &[u8]) -> Result<InstancePre<Bridge>> {
         ensure!(
-            meta.is_file() && trusted(&meta),
-            "Unsafe component cache entry"
+            !bytes.is_empty() && bytes.len() <= 512 * 1024 * 1024,
+            "Invalid prepared component size"
         );
-        // Only accept native code from the operator-owned cache.
-        let component = unsafe { Component::deserialize_file(&compiler.engine, &cache.compiled) }
-            .context("Load the approved StarlingMonkey component")?;
+        let component = unsafe { Component::deserialize(&compiler.engine, bytes) }
+            .context("Load the prepared StarlingMonkey component")?;
         compiler.linker.instantiate_pre(&component)
     }
 
@@ -231,180 +210,4 @@ fn is_memory_error(error: &anyhow::Error) -> bool {
             || message.starts_with("forcing a memory growth failure")
             || message.starts_with("resource limit exceeded")
     })
-}
-
-struct Cache {
-    source_hash: String,
-    portable: PathBuf,
-    compiled: PathBuf,
-}
-
-impl Cache {
-    fn new(source: &str) -> Result<Self> {
-        let directory = PathBuf::from(
-            std::env::var_os("KONAE_STARLING_CACHE")
-                .context("Set KONAE_STARLING_CACHE to the operator-owned directory")?,
-        );
-        ensure!(
-            directory.is_absolute(),
-            "The component cache path must be absolute"
-        );
-        let meta = fs::symlink_metadata(&directory)?;
-        ensure!(
-            meta.is_dir() && trusted(&meta),
-            "The component cache must be operator-owned"
-        );
-        let source_hash = format!("{:x}", Sha256::digest(source.as_bytes()));
-        let mut version = Sha256::new();
-        for bytes in [
-            STARLING.as_bytes(),
-            WASMTIME.as_bytes(),
-            include_bytes!("../guest/dispatch.js"),
-            include_bytes!("../guest/starling-runtime.js"),
-            include_bytes!("../guest/starling-entry.js"),
-            include_bytes!("../guest/starling.wit"),
-            include_bytes!("../guest/web.js"),
-            include_bytes!("../guest/text.js"),
-            include_bytes!("../guest/abort.js"),
-            include_bytes!("../package-lock.json"),
-            include_bytes!("../measure/starling-component.mjs"),
-            include_bytes!("../measure/starling-component.sh"),
-            include_bytes!("../measure/starling-wat.py"),
-        ] {
-            version.update(Sha256::digest(bytes));
-        }
-        let key = format!("{source_hash}.{:x}", version.finalize());
-        Ok(Self {
-            source_hash,
-            portable: directory.join(format!("{key}.wasm")),
-            compiled: directory.join(format!("{key}.{TARGET}.cwasm")),
-        })
-    }
-}
-
-fn trusted(meta: &fs::Metadata) -> bool {
-    let uid = unsafe { libc::geteuid() };
-    (meta.uid() == uid || meta.uid() == 0) && meta.mode() & 0o022 == 0
-}
-
-fn cached_component(source: &str, build_limit: Duration) -> Result<(Cache, Option<Duration>)> {
-    let cache = Cache::new(source)?;
-    if let Ok(meta) = fs::symlink_metadata(&cache.compiled) {
-        ensure!(
-            meta.is_file() && trusted(&meta),
-            "Unsafe component cache entry"
-        );
-        return Ok((cache, None));
-    }
-    let builder = PathBuf::from(
-        std::env::var_os("KONAE_STARLING_BUILDER")
-            .context("Component cache miss. Prepare this bundle with the configured builder")?,
-    );
-    ensure!(
-        builder.is_absolute(),
-        "The component builder path must be absolute"
-    );
-    let start = Instant::now();
-    let work = tempfile::tempdir_in(cache.compiled.parent().unwrap())?;
-    let input = work.path().join("app.mjs");
-    let portable = work.path().join("app.wasm");
-    let compiled = work.path().join("app.cwasm");
-    fs::write(&input, source)?;
-    if let Ok(meta) = fs::symlink_metadata(&cache.portable) {
-        ensure!(
-            meta.is_file() && trusted(&meta),
-            "Unsafe portable component cache entry"
-        );
-        fs::copy(&cache.portable, &portable)?;
-    }
-    let mut command = Command::new(builder);
-    command.process_group(0);
-    let mut child = command
-        .args([
-            input.as_os_str(),
-            portable.as_os_str(),
-            compiled.as_os_str(),
-        ])
-        .args([STARLING, TARGET])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if start.elapsed() >= build_limit {
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
-            child.wait()?;
-            bail!("StarlingMonkey component build timed out");
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    if status.code() == Some(65) {
-        return Err(WorkerError::new("function_import_forbidden").into());
-    }
-    ensure!(
-        status.success(),
-        "StarlingMonkey builder exited with {status}"
-    );
-    fs::rename(portable, &cache.portable)?;
-    fs::rename(compiled, &cache.compiled)?;
-    Ok((cache, Some(start.elapsed())))
-}
-
-pub fn prepare(path: &Path) -> Result<()> {
-    prepare_with_limit(path, BUILD_LIMIT)
-}
-
-fn prepare_with_limit(path: &Path, build_limit: Duration) -> Result<()> {
-    ensure!(
-        path.metadata()?.len() <= MAX_SOURCE_BYTES as u64,
-        "Bundle is too large"
-    );
-    let source = fs::read_to_string(path)?;
-    ensure!(source.len() <= MAX_SOURCE_BYTES, "Bundle is too large");
-    let (cache, built) = cached_component(&source, build_limit)?;
-    println!(
-        "{}",
-        json!({
-            "source_sha256": cache.source_hash,
-            "build_ms": built.map(|duration| duration.as_secs_f64() * 1000.0),
-            "portable": cache.portable,
-            "portable_bytes": cache.portable.metadata()?.len(),
-            "compiled": cache.compiled,
-            "compiled_bytes": cache.compiled.metadata()?.len(),
-        })
-    );
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nonterminating_module_is_stopped_during_preparation() {
-        let bundle = tempfile::tempdir().unwrap();
-        let cache = bundle.path().join("cache");
-        fs::create_dir(&cache).unwrap();
-        let previous_cache = std::env::var_os("KONAE_STARLING_CACHE");
-        unsafe { std::env::set_var("KONAE_STARLING_CACHE", &cache) };
-        let source = bundle.path().join("loop.mjs");
-        fs::write(
-            &source,
-            "while (true) {} export function handle() { return new Response('unreachable'); }",
-        )
-        .unwrap();
-        let result = prepare_with_limit(&source, Duration::from_secs(15));
-        assert!(result.is_err());
-        assert!(fs::read_dir(cache).unwrap().next().is_none());
-        if let Some(previous_cache) = previous_cache {
-            unsafe { std::env::set_var("KONAE_STARLING_CACHE", previous_cache) };
-        } else {
-            unsafe { std::env::remove_var("KONAE_STARLING_CACHE") };
-        }
-    }
 }
