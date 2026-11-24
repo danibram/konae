@@ -20,7 +20,7 @@ export async function bundleModule(app, entry, development = false) {
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
-export async function bundleFunctions(app, manifest, development = false) {
+export async function bundleFunctions(app, manifest, actionContract, development = false, actionsModuleSource = "export function actions(context) { return context.actions; }\n") {
   app = await realpath(app);
   const bundles = {};
   const packages = JSON.parse(await readFile(path.join(app, "package.json"), "utf8").catch((error) => {
@@ -39,7 +39,10 @@ export async function bundleFunctions(app, manifest, development = false) {
       platform: "browser", format: "esm", target: "es2022", outdir: "out", metafile: true,
       minify: !development, logOverride: { "unsupported-dynamic-import": "error", "unsupported-require-call": "error" },
       inject: [nodeCompatGlobals()], define: { process: "process", global: "globalThis" },
-      plugins: [nodeCompatPlugin(), { name: "npm-node-env", setup(build) {
+      plugins: [nodeCompatPlugin(), { name: "konae-actions", setup(build) {
+        build.onResolve({ filter: /^konae:actions$/ }, () => ({ path: "konae:actions", namespace: "konae-actions" }));
+        build.onLoad({ filter: /.*/, namespace: "konae-actions" }, () => ({ contents: actionsModuleSource, loader: "js" }));
+      } }, { name: "npm-node-env", setup(build) {
         build.onLoad({ filter: /\.[cm]?js$/ }, async (args) => {
           if (!args.path.includes(`${path.sep}node_modules${path.sep}`)) return;
           const source = await readFile(args.path, "utf8");

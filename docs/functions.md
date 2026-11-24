@@ -57,7 +57,7 @@ The no-framework example needs no npm dependencies. The POST example uses only p
 
 The Hono version above matches the package in the runtime fixture. Choose an exact version supported by your app, install it, then commit the package lock. The bundle builder targets browser-platform ESM and rejects `node:` imports, host modules, URL imports, dynamic imports the builder cannot bundle, and packages not listed in dependencies. This is not Node.js or Deno. Do not assume `node:*`, unrestricted `fetch`, or APIs that the Web runtime does not provide. Hono works as an optional bundled package.
 
-The context is supplied on every call. `context.actor.userId` is the account ID authenticated when the Kernel admitted the request, or `null`; it is always present. That actor stays fixed for the invocation. `context.actions.call(name, input)` checks the action's access and bindings against that actor. The handler cannot pass an actor ID, SQL, cookies, or a session credential to that operation. Only `Accept` and `Content-Type` request headers reach the handler. The app folder does not receive a generated `FunctionContext` type.
+The context is supplied on every call. `context.actor.userId` is the account ID authenticated when the Kernel admitted the request, or `null`; it is always present. That actor stays fixed for the invocation. `context.actions.call(name, input)` checks the action's access and bindings against that actor. The handler cannot pass an actor ID, SQL, cookies, or a session credential to that operation. Only `Accept` and `Content-Type` request headers reach the handler. Import `actions` and `FunctionContext` from `konae:actions` to type calls from the function's `functions.json` allowlist.
 
 ### Node compatibility at build time
 
@@ -129,22 +129,21 @@ To add this recipe, turn on `auth` and `actions` alongside `functions` in `konae
   "mount": "/api/orders",
   "methods": ["POST"],
   "access": "authenticated",
-  "actions": ["orders.create"]
+  "actions": ["orders.list", "orders.create"]
 }
 ```
 
-Declare `orders.create` in `actions.json` as an authenticated mutation with one string input named `title`, a maximum length of 120, and no external effects. [Add a Server Action](./guides/add-a-server-action.md) shows the `actions.json` bindings and SQL. The action returns `{ changes, lastInsertId }`.
+Declare `orders.list` as an authenticated query with a `LIMIT`, and declare `orders.create` as an authenticated mutation with one string input named `title`, a maximum length of 120, and no external effects. [Add a Server Action](./guides/add-a-server-action.md) shows the `actions.json` bindings and SQL. The query's row fields and the mutation's `{ changes, lastInsertId }` result come from the Action Contract.
 
 ```ts
-type CreateOrderResult = { changes: number; lastInsertId: number | null };
-type OrderContext = {
-  actor: { userId: string | null };
-  actions: {
-    call(name: "orders.create", input: { title: string }): Promise<CreateOrderResult>;
-  };
-};
+import { actions, type FunctionContext } from "konae:actions";
 
-export async function handle(request: Request, context: OrderContext): Promise<Response> {
+export async function handle(request: Request, context: FunctionContext<"orders">): Promise<Response> {
+  const client = actions(context);
+  if (request.method === "GET") {
+    const rows = await client.call("orders.list");
+    return Response.json({ rows });
+  }
   if (request.method !== "POST") return Response.json({ error: "method_not_allowed" }, { status: 405 });
 
   let input: unknown;
@@ -161,12 +160,12 @@ export async function handle(request: Request, context: OrderContext): Promise<R
     return Response.json({ error: "invalid_title" }, { status: 400 });
   }
 
-  const result = await context.actions.call("orders.create", { title: title.trim() });
+  const result = await client.call("orders.create", { title: title.trim() });
   return Response.json({ orderId: result.lastInsertId, changes: result.changes }, { status: 201 });
 }
 ```
 
-`OrderContext` is a narrow type written for this handler, not a type Konae generates. Keep its action name, input and result aligned with `actions.json` and the action contract. A POST with actions requires the caller to send `Idempotency-Key` with 1 to 128 visible ASCII bytes. The Kernel does not expose that header to the handler. Let action-call rejections reach the Kernel so it can return its canonical refusal and roll back pending changes. Do not turn a refusal into a success response or retry the same intent with a new key.
+`FunctionContext<"orders">` includes only this function's allowed action names. Its inputs and outputs come from `actions.json` and the Action Contract. The helper returns `context.actions`; it does not change the Kernel's allowlist. A POST with actions requires the caller to send `Idempotency-Key` with 1 to 128 visible ASCII bytes. The Kernel does not expose that header to the handler. Let action-call rejections reach the Kernel so it can return its canonical refusal and roll back pending changes. Do not turn a refusal into a success response or retry the same intent with a new key.
 
 ## Build and run
 
