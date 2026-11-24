@@ -58,6 +58,22 @@ fn invoke_function(
 }
 
 #[test]
+fn webcrypto_vectors_match_on_each_invocation() {
+    let source = fixtures::webcrypto_vectors();
+    let timeout = Duration::from_secs(10);
+    let mut worker = worker(&bundle(&source), timeout);
+    for (path, expected) in [
+        ("/vectors", "passed"),
+        ("/reuse", "true"),
+        ("/vectors", "passed"),
+    ] {
+        let reply = invoke(&mut worker, input(path, "alice"), timeout)
+            .unwrap_or_else(|error| panic!("{path}: {error:#}; detail={:?}", konae_functions_executor::error_detail(&error)));
+        assert_eq!(reply.body, expected, "{path}");
+    }
+}
+
+#[test]
 fn handler_throw_reports_text_and_reuses_worker() {
     let bundles = bundle(fixtures::HANDLER_THROW);
     let mut worker = worker(&bundles, Duration::from_secs(2));
@@ -253,6 +269,7 @@ fn top_level_timer_and_crypto_effects_fail_initialization() {
     for source in [
         "setTimeout(() => {}, 0); export function handle() { return new Response('bad'); }",
         "try { crypto.randomUUID(); } catch {} export function handle() { return new Response('bad'); }",
+        "try { await crypto.subtle.digest('SHA-256', new Uint8Array(1)); } catch {} export function handle() {}",
     ] {
         let bundles = bundle(source);
         let mut worker = Worker::spawn_with_policy(

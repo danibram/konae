@@ -668,6 +668,23 @@ fn request_web_apis_use_fresh_clock_entropy_and_cancelled_timers() {
 
 #[cfg(feature = "starling-runner")]
 #[test]
+fn webcrypto_vectors_match_on_each_invocation() {
+    let source = fixtures::webcrypto_vectors();
+    let timeout = Duration::from_secs(10);
+    let mut worker = worker(&Bundle::new(&source), timeout);
+    for (path, expected) in [
+        ("/vectors", "passed"),
+        ("/reuse", "true"),
+        ("/vectors", "passed"),
+    ] {
+        let reply = invoke(&mut worker, input(path, "alice"), timeout)
+            .unwrap_or_else(|error| panic!("{path}: {error:#}; detail={:?}", konae_functions_executor::error_detail(&error)));
+        assert_eq!(reply.body, expected, "{path}");
+    }
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
 fn request_webcrypto_imports_fixture_jwks_and_verifies_signatures() {
     let keys: Value = serde_json::from_str(
         &fs::read_to_string("../../spikes/node-compat/test-jwks.json").unwrap(),
@@ -720,6 +737,7 @@ fn caught_top_level_timer_and_crypto_effects_refuse_preparation() {
         "try { fetch('https://example.com'); } catch {} export function handle() {}",
         "crypto.getRandomValues(new Uint8Array(1)); export function handle() {}",
         "try { crypto.getRandomValues(new Uint8Array(1)); } catch {} export function handle() {}",
+        "try { await crypto.subtle.digest('SHA-256', new Uint8Array(1)); } catch {} export function handle() {}",
     ] {
         let bundle = Bundle::new(source);
         let reply = prepare(
