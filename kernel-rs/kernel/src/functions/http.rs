@@ -1,4 +1,5 @@
 use super::invocation::{Admission, InvocationConfig};
+use super::trace::{self, TraceBuffer, TraceContext, TraceRecord};
 use super::{Function, invocation as function_data, runtime::RunProgress};
 use crate::{
     AppState, Deployment, Operation,
@@ -187,6 +188,14 @@ impl Drop for Cancel {
         self.0.cancel();
     }
 }
+#[derive(Clone)]
+struct ResponseCode(String);
+struct NativeTraceCompletion(TraceBuffer);
+impl Drop for NativeTraceCompletion {
+    fn drop(&mut self) {
+        self.0.native_finished();
+    }
+}
 struct Timed {
     response: Response,
     queue: Duration,
@@ -271,6 +280,10 @@ async fn read_replay_body(body: Body, budget: &Budget) -> Result<(usize, [u8; 32
 }
 impl Timed {
     fn refusal(response: Response, elapsed: Duration) -> Self {
+        let error_code = response
+            .extensions()
+            .get::<ResponseCode>()
+            .map(|value| value.0.clone());
         Self {
             response,
             queue: elapsed,
@@ -278,7 +291,7 @@ impl Timed {
             execution: Duration::ZERO,
             cold: false,
             outcome: FunctionOutcome::Refused,
-            error_code: None,
+            error_code,
             error_detail: None,
         }
     }
@@ -333,11 +346,15 @@ async fn prelookup_receipt(
 }
 
 fn failure(status: u16, code: &str, message: &str) -> Response {
-    (
+    let mut response = (
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         Json(json!({"error":message,"code":code})),
     )
-        .into_response()
+        .into_response();
+    response
+        .extensions_mut()
+        .insert(ResponseCode(code.to_owned()));
+    response
 }
 fn executor_failure(code: &str) -> Response {
     let status = match code {
@@ -449,27 +466,57 @@ fn record(
     budget: &Budget,
     started: Instant,
     timed: Timed,
+    trace: &TraceBuffer,
 ) -> Response {
     let now = Instant::now();
-    crate::usage::function_latency(
-        &state.data_root,
-        &deployment.id,
-        FunctionTiming {
-            name,
-            version: deployment.artifact_version.clone(),
-            budget: budget.deadline().duration_since(started),
-            total: now.duration_since(started),
-            queue: timed.queue,
-            initialization: timed.initialization,
-            execution: timed.execution,
-            cold: timed.cold,
-            timed_out: now >= budget.deadline(),
-            outcome: timed.outcome,
-            error_code: timed.error_code,
-            error_detail: timed.error_detail,
-        },
-    );
-    timed.response
+    let status = timed.response.status().as_u16();
+    trace.set_root_error(timed.error_code.as_deref());
+    let timing = FunctionTiming {
+        name,
+        version: deployment.artifact_version.clone(),
+        budget: budget.deadline().duration_since(started),
+        total: now.duration_since(started),
+        queue: timed.queue,
+        initialization: timed.initialization,
+        execution: timed.execution,
+        cold: timed.cold,
+        timed_out: now >= budget.deadline(),
+        outcome: timed.outcome,
+        error_code: timed.error_code,
+        error_detail: timed.error_detail,
+    };
+    if timed.outcome == FunctionOutcome::Replayed {
+        let _ = trace.push(TraceRecord {
+            parent: Some(0),
+            name: "konae.function.receipt_replay",
+            start_us: 0,
+            duration_us: timed.queue.as_micros().min(u64::MAX as u128) as u64,
+            action_name: None,
+            origin: None,
+            sequence: None,
+            rows_read: None,
+            rows_written: None,
+            reply_bytes: None,
+            sqlite_us: None,
+            error_code: Some(function_data::IDEMPOTENCY_REPLAY_CODE),
+        });
+    }
+    let outcome = match timed.outcome {
+        FunctionOutcome::Ok => "ok",
+        FunctionOutcome::Refused => "refused",
+        FunctionOutcome::Failed => "failed",
+        FunctionOutcome::DeadlineExceeded => "deadline_exceeded",
+        FunctionOutcome::MutationOutcomeUnknown => "mutation_outcome_unknown",
+        FunctionOutcome::Replayed => "replayed",
+    };
+    let data_root = state.data_root.clone();
+    let deployment_id = deployment.id.clone();
+    let local = state.execution_mode.is_test();
+    crate::usage::function_capture(data_root, deployment_id, timing, trace.clone(), local);
+    trace.finish(status, outcome);
+    let mut response = timed.response;
+    trace::attach_response(&mut response, trace);
+    response
 }
 fn declaration(deployment: &Deployment, path: &str) -> Option<(String, Function)> {
     deployment
@@ -496,6 +543,16 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
         return Err(request);
     };
     let started = Instant::now();
+    let runner_kind = if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm") {
+        "wasm"
+    } else {
+        "deno"
+    };
+    let trace = TraceBuffer::new(
+        TraceContext::from_headers(request.headers(), state.execution_mode.is_test()),
+        started,
+        runner_kind,
+    );
     let budget = Budget::until(started + state.functions.deadline);
     let _cancel = Cancel(budget.clone());
     let deadline = tokio::time::Instant::from_std(budget.deadline());
@@ -522,11 +579,14 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 &budget,
                 started,
                 timed,
+                &trace,
             ));
         }
     };
     let Some(deployment) = deployment else {
-        return Ok(failure(404, "function.not-found", "Function not found."));
+        let mut response = failure(404, "function.not-found", "Function not found.");
+        trace::attach_response(&mut response, &trace);
+        return Ok(response);
     };
     let Some((name, function)) = declaration(&deployment, request.uri().path()) else {
         return Err(request);
@@ -770,14 +830,37 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             let deployment = deployment.clone();
             let worker_budget = budget.clone();
             let name = name.clone();
+            let worker_trace = trace.clone();
+            trace.retain_native();
             let task = tokio::task::spawn_blocking(move || {
+                let _native_trace_completion = NativeTraceCompletion(worker_trace.clone());
                 let budget = worker_budget;
                 let _operation = operation;
                 let _generation = generation;
                 let _held = held;
                 let mut sql_slot = None;
                 let mut sql_guard = None;
-                let bundles = match pinned_bundle(&state, &deployment, &name) {
+                let prepare_started = Instant::now();
+                let bundles_result = pinned_bundle(&state, &deployment, &name);
+                let prepare_us = prepare_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                let _ = worker_trace.push(TraceRecord {
+                    parent: Some(0),
+                    name: "konae.function.prepare",
+                    start_us: worker_trace.elapsed_us().saturating_sub(prepare_us),
+                    duration_us: prepare_us,
+                    action_name: None,
+                    origin: None,
+                    sequence: None,
+                    rows_read: None,
+                    rows_written: None,
+                    reply_bytes: None,
+                    sqlite_us: None,
+                    error_code: bundles_result
+                        .as_ref()
+                        .err()
+                        .map(|_| "function.artifact-changed"),
+                });
+                let bundles = match bundles_result {
                     Ok(bundles) => bundles,
                     Err(_) => {
                         return Timed::refusal(
@@ -796,10 +879,16 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 let mut invocation = None;
                 let mut replayed = None;
                 let mut config = Some(config);
+                let mut ipc_sequence = 0u16;
                 let request_body: Arc<dyn konae_functions_executor::RequestBody> = body.clone();
                 let action_body = body.clone();
+                let action_trace = worker_trace.clone();
+                let handler_started = Instant::now();
                 let run = lease.run_stream(&name, &bundles, input, request_body, &budget, &mut |operation, args| {
+                    ipc_sequence = ipc_sequence.saturating_add(1);
                     if operation != "action" {
+                        let _ = action_trace.push(TraceRecord { parent: Some(0), name: "konae.action", start_us: action_trace.elapsed_us(), duration_us: 0,
+                            action_name: Some("<unknown>"), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.operation-forbidden".into()) });
                         return Err("function.operation-forbidden".into());
                     }
                     if request_method == "POST" && !action_body.complete() {
@@ -873,9 +962,11 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         }
                     }
                     let Some(action) = args["name"].as_str() else {
+                        let _ = action_trace.push(TraceRecord { parent: Some(0), name: "konae.action", start_us: action_trace.elapsed_us(), duration_us: 0,
+                            action_name: Some("<unknown>"), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.input-invalid".into()) });
                         return Err("function.input-invalid".into());
                     };
-                    match invocation.as_mut().unwrap().action(action, args.get("input").unwrap_or(&Value::Null)) {
+                    match invocation.as_mut().unwrap().action_traced(action, args.get("input").unwrap_or(&Value::Null), &action_trace, ipc_sequence) {
                         Ok(answer) => Ok(answer),
                         Err(error) => {
                             let code = error.code.to_owned();
@@ -884,6 +975,60 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                         }
                     }
                 });
+                let worker_us = handler_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                let init_us = run.initialization.as_micros().min(u64::MAX as u128) as u64;
+                let handler_us = worker_us.saturating_sub(init_us);
+                let _ = action_trace.push(TraceRecord {
+                    parent: Some(0),
+                    name: "konae.function.worker",
+                    start_us: action_trace.elapsed_us().saturating_sub(worker_us),
+                    duration_us: worker_us,
+                    action_name: Some(if run.cold { "cold" } else { "warm" }),
+                    origin: None,
+                    sequence: None,
+                    rows_read: None,
+                    rows_written: None,
+                    reply_bytes: None,
+                    sqlite_us: None,
+                    error_code: None,
+                });
+                let _ = action_trace.push(TraceRecord {
+                    parent: Some(0),
+                    name: "konae.function.handler",
+                    start_us: action_trace.elapsed_us().saturating_sub(handler_us),
+                    duration_us: handler_us,
+                    action_name: None,
+                    origin: None,
+                    sequence: None,
+                    rows_read: None,
+                    rows_written: None,
+                    reply_bytes: None,
+                    sqlite_us: None,
+                    error_code: run
+                        .output
+                        .as_ref()
+                        .err()
+                        .map(|error| konae_functions_executor::error_code(error)),
+                });
+                if run.cold {
+                    let _ = action_trace.push(TraceRecord {
+                        parent: Some(0),
+                        name: "konae.function.init",
+                        start_us: action_trace
+                            .elapsed_us()
+                            .saturating_sub(handler_us)
+                            .saturating_sub(init_us),
+                        duration_us: init_us,
+                        action_name: None,
+                        origin: None,
+                        sequence: None,
+                        rows_read: None,
+                        rows_written: None,
+                        reply_bytes: None,
+                        sqlite_us: None,
+                        error_code: None,
+                    });
+                }
                 let _admission = lease.take_admission();
                 drop(lease);
                 let ingress = body.drain();
@@ -1025,28 +1170,26 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
                 let mut failure_code = None;
                 let mut failure_detail = None;
                 let (response, result_outcome) = match run.output {
-                    Ok(output) => {
-                        match invocation.finish(output) {
-                            Ok(output) => {
-                                let outcome = if output.status >= 500 {
-                                    FunctionOutcome::Failed
-                                } else if output.status >= 400 {
-                                    FunctionOutcome::Refused
-                                } else {
-                                    FunctionOutcome::Ok
-                                };
-                                (respond(output), outcome)
-                            }
-                            Err(error) => {
-                                failure_code = Some(error.code.to_owned());
-                                failure_detail = Some(error.message.clone());
-                                (
-                                    failure(error.status, error.code, &error.message),
-                                    outcome(error.code),
-                                )
-                            }
+                    Ok(output) => match invocation.finish(output) {
+                        Ok(output) => {
+                            let outcome = if output.status >= 500 {
+                                FunctionOutcome::Failed
+                            } else if output.status >= 400 {
+                                FunctionOutcome::Refused
+                            } else {
+                                FunctionOutcome::Ok
+                            };
+                            (respond(output), outcome)
                         }
-                    }
+                        Err(error) => {
+                            failure_code = Some(error.code.to_owned());
+                            failure_detail = Some(error.message.clone());
+                            (
+                                failure(error.status, error.code, &error.message),
+                                outcome(error.code),
+                            )
+                        }
+                    },
                     Err(error) => {
                         let _ = invocation.abort();
                         if let Some(error) = native_failure {
@@ -1094,7 +1237,15 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             }
         }
     };
-    Ok(record(state, &deployment, name, &budget, started, timed))
+    Ok(record(
+        state,
+        &deployment,
+        name,
+        &budget,
+        started,
+        timed,
+        &trace,
+    ))
 }
 
 static BUNDLE_CACHE: OnceLock<

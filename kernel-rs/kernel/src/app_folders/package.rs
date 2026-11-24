@@ -428,6 +428,7 @@ pub fn snapshot(
 ) -> Result<Vec<(&'static str, PathBuf)>> {
     // Usage queued before the copy is written first, so the copy holds it.
     usage::flush();
+    usage::scrub_legacy_function_details(&folder.join(usage::USAGE_DATABASE))?;
     std::fs::create_dir_all(target)?;
     let mut components = Vec::new();
     if crate::modules::is_on(modules, "actions") || folder.join("database.sqlite").is_file() {
@@ -1519,6 +1520,35 @@ mod tests {
                 .unwrap(),
             "kept"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn usage_snapshot_scrubs_legacy_function_error_details() {
+        let root = std::env::temp_dir().join(format!("konae-package-usage-{}", Uuid::new_v4()));
+        let folder = root.join("app/data");
+        let target = root.join("snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        let usage = Connection::open(folder.join(usage::USAGE_DATABASE)).unwrap();
+        usage
+            .execute_batch(
+                "CREATE TABLE function_latency(id INTEGER PRIMARY KEY, error_detail TEXT);
+                 INSERT INTO function_latency(error_detail) VALUES('private fixture detail');",
+            )
+            .unwrap();
+        drop(usage);
+        let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
+        let blobs = file_store::BlockingFiles::new(store, "app");
+        let mut modules = crate::modules::defaults();
+        modules.get_mut("actions").unwrap()["on"] = json!(false);
+        let parts = snapshot(&folder, &target, &blobs, &modules).unwrap();
+        assert!(parts.iter().any(|(name, _)| *name == "usage"));
+        let copied = Connection::open(target.join(usage::USAGE_DATABASE)).unwrap();
+        let detail: Option<String> = copied
+            .query_row("SELECT error_detail FROM function_latency", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(detail, None);
+        assert!(!detail.unwrap_or_default().contains("private fixture detail"));
         let _ = std::fs::remove_dir_all(root);
     }
 
