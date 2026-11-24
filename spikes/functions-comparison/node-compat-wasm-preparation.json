@@ -1,0 +1,202 @@
+{
+  "runner": "StarlingMonkey",
+  "nativeCacheBytes": 1774219200,
+  "nativeCacheFiles": 36,
+  "lanes": {
+    "cli": {
+      "functionCount": 18,
+      "helperMsSum": 145068.831,
+      "functions": [
+        {
+          "function": "bareBuiltin",
+          "helperMs": 8221.046,
+          "exitCode": 0
+        },
+        {
+          "function": "bufferEvents",
+          "helperMs": 7994.039,
+          "exitCode": 0
+        },
+        {
+          "function": "commonJsEvents",
+          "helperMs": 8011.527,
+          "exitCode": 0
+        },
+        {
+          "function": "createHash",
+          "helperMs": 8170.727,
+          "exitCode": 0
+        },
+        {
+          "function": "dateFns",
+          "helperMs": 7970.156,
+          "exitCode": 0
+        },
+        {
+          "function": "dependencyMode",
+          "helperMs": 8003.321,
+          "exitCode": 0
+        },
+        {
+          "function": "dynamicBuiltin",
+          "helperMs": 8139.802,
+          "exitCode": 0
+        },
+        {
+          "function": "hono",
+          "helperMs": 8038.949,
+          "exitCode": 0
+        },
+        {
+          "function": "jose",
+          "helperMs": 7946.117,
+          "exitCode": 0
+        },
+        {
+          "function": "modules",
+          "helperMs": 7961.851,
+          "exitCode": 0
+        },
+        {
+          "function": "nanoid",
+          "helperMs": 8096.768,
+          "exitCode": 0
+        },
+        {
+          "function": "npmProcess",
+          "helperMs": 7843.089,
+          "exitCode": 0
+        },
+        {
+          "function": "reexportBuiltin",
+          "helperMs": 8071.952,
+          "exitCode": 0
+        },
+        {
+          "function": "stream",
+          "helperMs": 8208.641,
+          "exitCode": 0
+        },
+        {
+          "function": "typeOnlyBuiltin",
+          "helperMs": 8183.563,
+          "exitCode": 0
+        },
+        {
+          "function": "uuid",
+          "helperMs": 7984.164,
+          "exitCode": 0
+        },
+        {
+          "function": "web",
+          "helperMs": 8082.294,
+          "exitCode": 0
+        },
+        {
+          "function": "zod",
+          "helperMs": 8140.825,
+          "exitCode": 0
+        }
+      ],
+      "nativeCacheBytes": 887830496
+    },
+    "editor": {
+      "functionCount": 18,
+      "helperMsSum": 141457.936,
+      "functions": [
+        {
+          "function": "bareBuiltin",
+          "helperMs": 7805.503,
+          "exitCode": 0
+        },
+        {
+          "function": "bareBuiltin",
+          "helperMs": 7821.614,
+          "exitCode": 0
+        },
+        {
+          "function": "bufferEvents",
+          "helperMs": 7639.062,
+          "exitCode": 0
+        },
+        {
+          "function": "commonJsEvents",
+          "helperMs": 7666.454,
+          "exitCode": 0
+        },
+        {
+          "function": "createHash",
+          "helperMs": 7727.047,
+          "exitCode": 0
+        },
+        {
+          "function": "dateFns",
+          "helperMs": 7686.578,
+          "exitCode": 0
+        },
+        {
+          "function": "dependencyMode",
+          "helperMs": 7765.893,
+          "exitCode": 0
+        },
+        {
+          "function": "dynamicBuiltin",
+          "helperMs": 7760.537,
+          "exitCode": 0
+        },
+        {
+          "function": "hono",
+          "helperMs": 7935.225,
+          "exitCode": 0
+        },
+        {
+          "function": "jose",
+          "helperMs": 7755.128,
+          "exitCode": 0
+        },
+        {
+          "function": "modules",
+          "helperMs": 7828.265,
+          "exitCode": 0
+        },
+        {
+          "function": "nanoid",
+          "helperMs": 8164.448,
+          "exitCode": 0
+        },
+        {
+          "function": "npmProcess",
+          "helperMs": 7924.334,
+          "exitCode": 0
+        },
+        {
+          "function": "reexportBuiltin",
+          "helperMs": 8127.098,
+          "exitCode": 0
+        },
+        {
+          "function": "stream",
+          "helperMs": 7961.707,
+          "exitCode": 0
+        },
+        {
+          "function": "typeOnlyBuiltin",
+          "helperMs": 7921.372,
+          "exitCode": 0
+        },
+        {
+          "function": "uuid",
+          "helperMs": 8083.959,
+          "exitCode": 0
+        },
+        {
+          "function": "web",
+          "helperMs": 7883.712,
+          "exitCode": 0
+        }
+      ],
+      "nativeCacheBytes": 886388704
+    }
+  },
+  "measurementWindowUtc": "2026-11-24 13:00-13:59 UTC"
+}
