@@ -42,6 +42,14 @@ fn worker(bundle: &Bundle, timeout: Duration) -> Worker {
 }
 
 fn worker_with_limits(bundle: &Bundle, timeout: Duration, limits: WorkerLimits) -> Worker {
+    try_worker_with_limits(bundle, timeout, limits).unwrap_or_else(|error| panic!("{error:#}"))
+}
+
+fn try_worker_with_limits(
+    bundle: &Bundle,
+    timeout: Duration,
+    limits: WorkerLimits,
+) -> anyhow::Result<Worker> {
     #[cfg(feature = "starling-runner")]
     {
         let components = bundle
@@ -75,11 +83,10 @@ fn worker_with_limits(bundle: &Bundle, timeout: Duration, limits: WorkerLimits) 
             limits,
             MemoryPolicy::DevelopmentPolling,
         )
-        .unwrap_or_else(|error| panic!("{error:#}"))
     }
     #[cfg(feature = "quickjs-runner")]
     {
-        spawn_source_worker(bundle, timeout, limits).unwrap()
+        spawn_source_worker(bundle, timeout, limits)
     }
 }
 
@@ -871,6 +878,24 @@ fn no_host_apis_or_raw_ipc_imports_are_visible_to_javascript() {
     )
     .unwrap_or_else(|error| panic!("{error}; {}", local_worker.diagnostics()));
     assert_eq!(output.body, "[]");
+}
+
+#[test]
+fn executor_refuses_a_worker_over_its_resident_memory_budget() {
+    let bundle = Bundle::new("export function handle() { return new Response('ok'); }");
+    let timeout = Duration::from_secs(5);
+    let limits = WorkerLimits {
+        heap_bytes: 1024 * 1024,
+        rss_bytes: 1024 * 1024,
+        ..WorkerLimits::default()
+    };
+    let error = try_worker_with_limits(&bundle, timeout, limits)
+        .and_then(|mut worker| invoke(&mut worker, input("/", "alice"), timeout))
+        .unwrap_err();
+    assert_eq!(
+        konae_functions_executor::error_code(&error),
+        "worker_memory_limit"
+    );
 }
 
 #[test]

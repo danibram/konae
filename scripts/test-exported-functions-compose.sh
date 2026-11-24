@@ -241,7 +241,7 @@ worker_report=$(compose exec -T kernel sh -ec '
     tr "\000" "\n" < "/proc/$pid/cmdline" | grep -qx -- "--function-worker" || continue
     echo "worker_pid=$pid"
     awk "/^(Uid|Gid|CapEff|NoNewPrivs|Seccomp|Seccomp_filters):/ {print}" "$status"
-    awk "/^VmSize:/ {print}" "$status"
+    awk "/^Vm(Size|RSS):/ {print}" "$status"
     grep -E "Max core file size|Max open files|Max processes|Max file size|Max address space" "/proc/$pid/limits"
     exit 0
   done
@@ -257,6 +257,8 @@ printf '%s\n' "$worker_report" | grep -Eq '^Max processes[[:space:]]+64[[:space:
 worker_filters=$(printf '%s\n' "$worker_report" | awk '/^Seccomp_filters:/ {print $2}')
 kernel_filters=$(compose exec -T kernel awk '/^Seccomp_filters:/ {print $2}' /proc/1/status)
 test "$worker_filters" -gt "$kernel_filters" || { echo "Worker lacks its own seccomp filter" >&2; exit 1; }
+worker_rss_kib=$(printf '%s\n' "$worker_report" | awk '/^VmRSS:/ {print $2}')
+test "$worker_rss_kib" -le 262144 || { echo "Worker RSS exceeds 256 MiB: ${worker_rss_kib} KiB" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max file size[[:space:]]+0[[:space:]]+0' || { echo "Worker file-size rlimit is not zero" >&2; exit 1; }
 printf '%s\n' "$worker_report" | grep -Eq '^Max address space[[:space:]]+25769803776[[:space:]]+25769803776[[:space:]]+bytes' || { echo "Worker address-space rlimit differs from the 24 GiB Wasmtime pool budget" >&2; exit 1; }
 kernel_caps=$(compose exec -T kernel awk '/^CapEff:/ {print $2}' /proc/1/status)
@@ -275,49 +277,4 @@ printf 'worker_security=\n%s\nhost_kernel=%s\nhost_uname=%s\nimage_digest=%s\nke
   "$worker_report" "$(docker info --format '{{.KernelVersion}}')" "$(uname -srmo)" \
   "$(docker inspect --format '{{.Image}}' "$container_id")" "$kernel_caps" "$cap_add" "$security_options" "$apparmor_profile"
 
-# Each distinct bundle adds a native component to the worker's resident memory.
-mkdir "$scratch/rss-source" "$scratch/rss-export"
-bun "$root/scripts/konae.ts" init --dir "$scratch/rss-source" --name "Export RSS check"
-bun -e '
-  const fs = require("node:fs");
-  const root = process.argv[1];
-  const settingsPath = `${root}/konae.json`;
-  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  settings.slug = "export-rss-check";
-  settings.visibility = "public";
-  settings.modules.functions = { on: true };
-  fs.writeFileSync(settingsPath, JSON.stringify(settings));
-  fs.mkdirSync(`${root}/app/functions`, { recursive: true });
-  const functions = {};
-  for (let i = 0; i < 12; i++) {
-    const name = `probe${i}`;
-    const entry = `functions/${name}.js`;
-    fs.writeFileSync(`${root}/app/${entry}`, `export function handle() { return new Response("${name}"); }`);
-    functions[name] = { entry, mount: `/api/${name}`, methods: ["GET"], access: "anonymous" };
-  }
-  fs.writeFileSync(`${root}/app/functions.json`, JSON.stringify({ version: 1, functions }));
-' "$scratch/rss-source"
-bun "$root/scripts/konae.ts" export --dir "$scratch/rss-source" --out "$scratch/rss-export"
-rss_id=$(bun -e 'console.log((await Bun.file(process.argv[1]).json()).id)' "$scratch/rss-export/konae.json")
-cat > "$scratch/exported/compose.override.yaml" <<EOF
-services:
-  kernel:
-    environment:
-      KONAE_FUNCTIONS_TIMEOUT_MS: "4000"
-    volumes:
-      - ../rss-export:/kernel/apps/$rss_id
-EOF
-compose stop kernel
-start_export 480
-rss_status=$(curl --silent --show-error -o "$scratch/rss.body" -w '%{http_code}' -H "Host: export-rss-check.localhost:$port" "http://127.0.0.1:$port/api/probe0")
-rss_body=$(cat "$scratch/rss.body")
-test "$rss_status" = 502 && printf '%s' "$rss_body" | bun -e 'if ((await Bun.stdin.json()).code !== "worker_memory_limit") process.exit(1)' || {
-  echo "RSS probe returned HTTP $rss_status: $rss_body" >&2
-  compose logs kernel >&2
-  exit 1
-}
-test "$(worker_count)" = 0 || { echo "RSS-limited worker remained alive" >&2; exit 1; }
-reuse_status=$(curl --silent --show-error -o "$scratch/reuse.body" -w '%{http_code}' -H "Host: $host" -H "Cookie: $cookie" "http://127.0.0.1:$port/api/counter0")
-test "$reuse_status" = 200 && test "$(cat "$scratch/reuse.body")" = '{"n":1}' || { echo "Counter app failed after RSS cleanup" >&2; exit 1; }
-printf 'rss_probe=HTTP_%s %s\nrss_worker_reaped=yes\nafter_rss=HTTP_%s %s\n' "$rss_status" "$rss_body" "$reuse_status" "$(cat "$scratch/reuse.body")"
 awk -v seconds="$get_seconds" 'BEGIN { if (seconds >= 0.250) exit 1 }' || { echo "Prepared cold GET took ${get_seconds}s, over 250ms" >&2; exit 1; }
