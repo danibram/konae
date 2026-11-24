@@ -31,7 +31,8 @@ import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-
 import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
-import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
+import { ACTION_TYPES_FILE, renderActionTypes, renderFunctionContextTypes } from "../src/lib/action-types";
+import { actionsModuleBody } from "../src/sdk/functions";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule, bundleFunctions } from "../src/lib/local-builder.js";
 import { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
@@ -588,7 +589,8 @@ export async function buildLocal(root: string, options: { development?: boolean;
     validateFunctionSources(functions, files);
     validateFunctions(functions, functionsContext);
   }
-  const serverArtifact = functions && Object.keys(functions.functions).length ? await bundleFunctions(appDir(root), functions, options.development) : undefined;
+  const contract = generateActionContract({ actionsSource: files["actions.json"] ?? '{"version":1,"actions":{}}', schemaSource: files["schema.sql"] ?? "" }).contract;
+  const serverArtifact = functions && Object.keys(functions.functions).length ? await bundleFunctions(appDir(root), functions, contract, options.development, actionsModuleBody()) : undefined;
   validateServerArtifact(functions, serverArtifact);
   const saveServer = async (staticPaths: string[]) => {
     if (functions) validateFunctions(functions, { ...functionsContext, staticPaths });
@@ -598,7 +600,7 @@ export async function buildLocal(root: string, options: { development?: boolean;
   const sdkEnabled = sdkRequired(settings?.modules, files, settings?.visibility ?? "private");
   await refreshActionTypes(root);
   const paths = await capsulePaths(root);
-  if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
+  if (paths.some((file) => (file.startsWith("src/") || file.startsWith("functions/")) && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
     await refreshPageBuilder(root, sdkEnabled, authoredBuildFiles);
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
@@ -904,7 +906,7 @@ async function folderFiles(root: string, settings: AppSettings) {
     hasFunctions = Object.keys(manifest.manifest?.functions ?? {}).length > 0;
   }
   return generatedFiles({
-    settings, actionsSource: await read("actions.json") || '{"version":1,"actions":{}}', schemaSource: await read("schema.sql"),
+    settings, actionsSource: await read("actions.json") || '{"version":1,"actions":{}}', schemaSource: await read("schema.sql"), functionsSource: await read("functions.json") || undefined,
     hasFunctions,
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
@@ -1013,8 +1015,25 @@ async function refreshActionTypes(root: string) {
   const actionsSource = await readFile(path.join(appDir(root), "actions.json"), "utf8").catch(() => undefined);
   if (actionsSource === undefined) return;
   const schemaSource = await readFile(path.join(appDir(root), "schema.sql"), "utf8").catch(() => "");
+  const functionsSource = await readFile(path.join(appDir(root), "functions.json"), "utf8").catch(() => undefined);
   try {
-    await writeActionTypes(root, generateActionContract({ actionsSource, schemaSource }).contract);
+    const contract = generateActionContract({ actionsSource, schemaSource }).contract;
+    await writeActionTypes(root, contract);
+    const declarations = functionsSource === undefined ? undefined : renderFunctionContextTypes(contract, parseFunctions(functionsSource));
+    if (declarations !== undefined) {
+      const file = path.join(root, "functions.d.ts");
+      if (await readFile(file, "utf8").catch(() => undefined) !== declarations) await writeFile(file, declarations);
+      const tsconfigFile = path.join(root, "tsconfig.json");
+      const tsconfigSource = await readFile(tsconfigFile, "utf8").catch(() => undefined);
+      if (tsconfigSource !== undefined) {
+        const tsconfig = JSON.parse(tsconfigSource) as { include?: unknown };
+        const include = Array.isArray(tsconfig.include) ? tsconfig.include.filter((entry): entry is string => typeof entry === "string") : [];
+        if (!include.includes("app/functions")) {
+          tsconfig.include = [...include, "app/functions"];
+          await writeFile(tsconfigFile, `${JSON.stringify(tsconfig, null, 2)}\n`);
+        }
+      }
+    }
   } catch (error) {
     console.warn(`${ACTION_TYPES_FILE} stays as it was: ${error instanceof Error ? error.message : error}`);
   }
