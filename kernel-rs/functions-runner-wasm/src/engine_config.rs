@@ -19,5 +19,9 @@ pub fn starling() -> wasmtime::Config {
     config
         .epoch_interruption(true)
         .allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pool));
+    // Wasmtime writes anonymous memory images to a memfd on Linux.
+    // Workers run with a zero file-size limit.
+    #[cfg(target_os = "linux")]
+    config.memory_init_cow(false);
     config
 }
