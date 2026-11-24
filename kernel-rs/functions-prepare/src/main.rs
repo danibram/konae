@@ -207,6 +207,7 @@ fn prepare_bundle(
     let mut command = Command::new(&wizer_path);
     command
         .env_clear()
+        .env("HOME", dir)
         .env("SOURCE_NAME", "source.js")
         .env("DEBUG", "")
         .env("FEATURE_CLOCKS", "1")
