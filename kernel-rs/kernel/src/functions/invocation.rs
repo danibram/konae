@@ -872,8 +872,10 @@ fn validate_output(output: &Output) -> Result<String> {
         if header_bytes > MAX_RESPONSE_HEADER_BYTES {
             return Err(output_too_large());
         }
+        let canonical_name = name.to_ascii_lowercase();
         if axum::http::HeaderName::from_bytes(name.as_bytes()).is_err()
             || axum::http::HeaderValue::from_str(value).is_err()
+            || canonical_name.starts_with("content-security-policy")
             || [
                 "connection",
                 "transfer-encoding",
@@ -884,8 +886,11 @@ fn validate_output(output: &Output) -> Result<String> {
                 "proxy-authorization",
                 "te",
                 "trailer",
+                "set-cookie",
+                "service-worker-allowed",
+                "clear-site-data",
             ]
-            .contains(&name.to_ascii_lowercase().as_str())
+            .contains(&canonical_name.as_str())
         {
             return Err(Failure::new(
                 "function.output-invalid",

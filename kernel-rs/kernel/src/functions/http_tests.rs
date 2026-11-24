@@ -46,6 +46,7 @@ export async function handle(request) {
   const path=new URL(request.url).pathname;
   if(path.endsWith('/envelope')) return new Response('x'.repeat(1024*1024));
   if(path.endsWith('/framing')) return new Response('x',{headers:{'content-length':'1'}});
+  if(path.endsWith('/headers')) return new Response('x',{headers:{'content-security-policy-report-only':"default-src 'none'"}});
   const reader=request.body.getReader(); let count=0; let checksum=0;
   for(;;) { const {done,value}=await reader.read(); if(done) break; count+=value.byteLength; for(let i=0;i<value.length;i++) checksum=(checksum+value[i])>>>0; }
   return Response.json({count,checksum});
@@ -511,6 +512,11 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
         ),
         (
             "/api/orders/framing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The function returned an invalid HTTP response.",
+        ),
+        (
+            "/api/orders/headers",
             StatusCode::INTERNAL_SERVER_ERROR,
             "The function returned an invalid HTTP response.",
         ),

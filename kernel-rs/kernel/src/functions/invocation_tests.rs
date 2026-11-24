@@ -539,6 +539,25 @@ fn invalid_output_does_not_commit() {
 }
 
 #[test]
+fn platform_response_headers_are_refused() {
+    for name in [
+        "Content-Security-Policy",
+        "content-security-policy-report-only",
+        "Content-Security-Policy-Test",
+        "Set-Cookie",
+        "service-worker-allowed",
+        "Clear-Site-Data",
+    ] {
+        let response = Output {
+            headers: vec![(name.into(), "test".into())],
+            ..output(200)
+        };
+        let error = validate_output(&response).unwrap_err();
+        assert_eq!(error.code, "function.output-invalid", "{name}");
+    }
+}
+
+#[test]
 fn forged_receipt_schema_and_attached_trigger_are_rejected() {
     let fixture = Fixture::new();
     let db = Connection::open(&fixture.path).unwrap();
