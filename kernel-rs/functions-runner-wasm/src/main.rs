@@ -229,21 +229,33 @@ fn worker() -> Result<()> {
     });
     let mut prepared = std::collections::BTreeMap::new();
     #[cfg(feature = "starling-runner")]
-    for (name, descriptor) in &components {
-        let bytes = read_component_descriptor(*descriptor)?;
-        let component = match Invocation::pack_prepared(&compiler, &bytes) {
-            Ok(component) => component,
-            Err(error) => {
-                let code = worker_error_code(&error);
-                send(&ChildMessage::Failure {
-                    capability: None,
-                    code: code.into(),
-                    detail: Some(error.to_string()),
-                })?;
-                bail!("{code}");
-            }
-        };
-        prepared.insert(name.clone(), component);
+    {
+        use std::os::unix::fs::MetadataExt;
+        let mut loaded = std::collections::HashMap::new();
+        for (name, descriptor) in &components {
+            let file = open_component_descriptor(*descriptor)?;
+            let metadata = file.metadata()?;
+            let key = (metadata.dev(), metadata.ino());
+            let component = match loaded.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let bytes = read_component(file, &metadata)?;
+                    match Invocation::pack_prepared(&compiler, &bytes) {
+                        Ok(component) => entry.insert(component),
+                        Err(error) => {
+                            let code = worker_error_code(&error);
+                            send(&ChildMessage::Failure {
+                                capability: None,
+                                code: code.into(),
+                                detail: Some(error.to_string()),
+                            })?;
+                            bail!("{code}");
+                        }
+                    }
+                }
+            };
+            prepared.insert(name.clone(), component.clone());
+        }
     }
     #[cfg(feature = "quickjs-runner")]
     for (name, source) in &bundles {
@@ -340,6 +352,7 @@ fn valid_bundles(bundles: &std::collections::BTreeMap<String, String>) -> bool {
 
 #[cfg(feature = "starling-runner")]
 fn valid_components(components: &std::collections::BTreeMap<String, u32>) -> bool {
+    let mut descriptors = std::collections::BTreeSet::new();
     !components.is_empty()
         && components.len() <= 32
         && components.iter().all(|(name, fd)| {
@@ -347,16 +360,20 @@ fn valid_components(components: &std::collections::BTreeMap<String, u32>) -> boo
                 && name.len() <= 64
                 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
                 && *fd > 2
+                && descriptors.insert(*fd)
         })
 }
 
 #[cfg(feature = "starling-runner")]
-fn read_component_descriptor(fd: u32) -> Result<Vec<u8>> {
+fn open_component_descriptor(fd: u32) -> Result<std::fs::File> {
     let raw = i32::try_from(fd)?;
     let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
     anyhow::ensure!(flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY, "component descriptor is not read-only");
-    let file = unsafe { std::fs::File::from_raw_fd(raw) };
-    let metadata = file.metadata()?;
+    Ok(unsafe { std::fs::File::from_raw_fd(raw) })
+}
+
+#[cfg(feature = "starling-runner")]
+fn read_component(file: std::fs::File, metadata: &std::fs::Metadata) -> Result<Vec<u8>> {
     anyhow::ensure!(metadata.is_file() && metadata.len() > 0 && metadata.len() <= 512 * 1024 * 1024, "invalid prepared component descriptor");
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(512 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
