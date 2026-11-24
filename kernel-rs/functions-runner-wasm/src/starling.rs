@@ -1,48 +1,51 @@
 use crate::bridge::Bridge;
-use anyhow::{Context, Result, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use konae_functions_executor::{
+    protocol::{Input, Output, WorkerLimits, BODY_CHUNK_BYTES, MAX_OPERATION_BYTES},
     WorkerError,
-    protocol::{BODY_CHUNK_BYTES, Input, MAX_OPERATION_BYTES, Output, WorkerLimits},
 };
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
     sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use wasmtime::{
-    Engine, Store, UpdateDeadline,
     component::{
         Component, Instance, InstancePre, Linker, Resource, ResourceAny, ResourceType, TypedFunc,
         Val,
     },
+    Engine, Store, UpdateDeadline,
 };
 
 const MAX_RANDOM_BYTES: u64 = 1 << 20;
-const ALLOWED_COMPONENT_IMPORTS: [&str; 8] = [
+const ALLOWED_COMPONENT_IMPORTS: [&str; 15] = [
     "konae:worker/host",
+    "wasi:cli/stderr@0.2.10",
     "wasi:cli/stderr@0.2.12",
+    "wasi:clocks/monotonic-clock@0.2.10",
     "wasi:clocks/monotonic-clock@0.2.12",
+    "wasi:clocks/wall-clock@0.2.10",
     "wasi:clocks/wall-clock@0.2.12",
+    "wasi:io/error@0.2.10",
     "wasi:io/error@0.2.12",
+    "wasi:io/poll@0.2.10",
     "wasi:io/poll@0.2.12",
+    "wasi:io/streams@0.2.10",
     "wasi:io/streams@0.2.12",
+    "wasi:random/random@0.2.10",
     "wasi:random/random@0.2.12",
 ];
 static TEST_RANDOM_SEED_INDEX: AtomicU64 = AtomicU64::new(0);
 
 pub struct Compiler {
     pub engine: Engine,
-    linker: Linker<Bridge>,
 }
 
 impl Compiler {
     pub fn new() -> Result<Self> {
         let engine = Engine::new(&crate::engine_config::starling())?;
-        let mut linker = Linker::<Bridge>::new(&engine);
-        linker.allow_shadowing(true);
-        link_worker_imports(&mut linker)?;
-        Ok(Self { engine, linker })
+        Ok(Self { engine })
     }
 }
 
@@ -131,21 +134,34 @@ impl Invocation {
             .imports(&compiler.engine)
             .map(|(name, _)| name.to_owned())
             .collect::<BTreeSet<_>>();
+        let unsupported = imports
+            .iter()
+            .filter(|name| !ALLOWED_COMPONENT_IMPORTS.contains(&name.as_str()))
+            .collect::<Vec<_>>();
         ensure!(
-            imports
+            unsupported.is_empty(),
+            "Prepared component imports unsupported host interfaces: {}",
+            unsupported
                 .iter()
-                .all(|name| ALLOWED_COMPONENT_IMPORTS.contains(&name.as_str())),
-            "Prepared component imports an unsupported host interface"
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         ensure!(
-            imports.contains("wasi:clocks/monotonic-clock@0.2.12")
-                && imports.contains("wasi:clocks/wall-clock@0.2.12")
-                && imports.contains("wasi:io/poll@0.2.12")
-                && imports.contains("wasi:random/random@0.2.12"),
+            ["0.2.10", "0.2.12"].iter().any(|version| {
+                imports.contains(&format!("wasi:clocks/monotonic-clock@{version}"))
+            }) && ["0.2.10", "0.2.12"]
+                .iter()
+                .any(|version| { imports.contains(&format!("wasi:io/poll@{version}")) })
+                && ["0.2.10", "0.2.12"]
+                    .iter()
+                    .any(|version| { imports.contains(&format!("wasi:random/random@{version}")) }),
             "Prepared component is missing request Web API imports"
         );
-        let mut linker = compiler.linker.clone();
+        let mut linker = Linker::<Bridge>::new(&compiler.engine);
+        linker.allow_shadowing(true);
         linker.define_unknown_imports_as_traps(&component)?;
+        link_worker_imports(&mut linker)?;
         linker.instantiate_pre(&component)
     }
 
@@ -241,7 +257,12 @@ impl Invocation {
 }
 
 fn link_request_web_imports(linker: &mut Linker<Bridge>) -> Result<()> {
-    let mut clocks = linker.instance("wasi:clocks/monotonic-clock@0.2.12")?;
+    link_request_web_imports_version(linker, "0.2.10")?;
+    link_request_web_imports_version(linker, "0.2.12")
+}
+
+fn link_request_web_imports_version(linker: &mut Linker<Bridge>, version: &str) -> Result<()> {
+    let mut clocks = linker.instance(&format!("wasi:clocks/monotonic-clock@{version}"))?;
     clocks.func_new("now", |store, _, results| {
         results[0] = Val::U64(store.data().monotonic_ns());
         Ok(())
@@ -281,7 +302,7 @@ fn link_request_web_imports(linker: &mut Linker<Bridge>) -> Result<()> {
         Ok(())
     })?;
 
-    let mut wall = linker.instance("wasi:clocks/wall-clock@0.2.12")?;
+    let mut wall = linker.instance(&format!("wasi:clocks/wall-clock@{version}"))?;
     wall.func_new("now", |store, _, results| {
         let since_epoch = store.data().wall_time()?.duration_since(UNIX_EPOCH)?;
         results[0] = Val::Record(vec![
@@ -298,7 +319,7 @@ fn link_request_web_imports(linker: &mut Linker<Bridge>) -> Result<()> {
         Ok(())
     })?;
 
-    let mut random = linker.instance("wasi:random/random@0.2.12")?;
+    let mut random = linker.instance(&format!("wasi:random/random@{version}"))?;
     random.func_new("get-random-u64", |mut store, _, results| {
         require_live_request(&mut store)?;
         let mut bytes = [0u8; 8];
@@ -320,7 +341,7 @@ fn link_request_web_imports(linker: &mut Linker<Bridge>) -> Result<()> {
         Ok(())
     })?;
 
-    let mut poll = linker.instance("wasi:io/poll@0.2.12")?;
+    let mut poll = linker.instance(&format!("wasi:io/poll@{version}"))?;
     poll.resource("pollable", ResourceType::host::<()>(), |mut store, rep| {
         store.data_mut().remove_pollable(rep);
         Ok(())

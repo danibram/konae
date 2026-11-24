@@ -7,8 +7,9 @@ use oxc_span::SourceType;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use spidermonkey_embedding_splicer::{
-    splice::splice_bindings, stub_wasi::stub_wasi,
-    wit::exports::local::spidermonkey_embedding_splicer::splicer::CoreTy,
+    splice::splice_bindings,
+    stub_wasi::stub_wasi,
+    wit::exports::local::spidermonkey_embedding_splicer::splicer::{CoreTy, Feature},
 };
 use std::{
     env, fs,
@@ -172,7 +173,7 @@ fn prepare_bundle(
     write_scratch!(
         dir,
         &entry,
-        b"import { hostRuntime, initializationFailed } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (initializationFailed()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
+        b"import { hostRuntime, initializationFailed } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (initializationFailed()) throw new Error('function.wasm-init-effect: A function cannot start timers or fetch during top-level initialization.');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
     );
 
     let spliced = splice_bindings(
@@ -205,7 +206,7 @@ fn prepare_bundle(
         .env_clear()
         .env("SOURCE_NAME", "source.js")
         .env("DEBUG", "")
-        .env("FEATURE_CLOCKS", "")
+        .env("FEATURE_CLOCKS", "1")
         .env("EXPORT_CNT", spliced.exports.len().to_string())
         .env("IMPORT_CNT", spliced.imports.len().to_string());
     for (i, (name, signature)) in spliced.exports.iter().enumerate() {
@@ -313,6 +314,7 @@ fn prepare_bundle(
                     .take(1024)
                     .collect::<String>();
                 let refusal = if detail.contains("KONAE_INIT_EFFECT")
+                    || detail.contains("function.wasm-init-effect:")
                     || detail.contains("function.initialization-cannot-snapshot:")
                     || [
                         "fetch",
@@ -362,8 +364,15 @@ fn prepare_bundle(
         }
         _ => (),
     }
-    let core = stub_wasi(snapshot_bytes, vec![], Some(WIT.to_owned()), None, None)
-        .map_err(|error| anyhow::anyhow!("WASI adapter failed: {error}"))?;
+    let core = stub_wasi(
+        snapshot_bytes,
+        vec![Feature::Clocks, Feature::Random],
+        Some(WIT.to_owned()),
+        None,
+        None,
+    )
+    .map_err(|error| anyhow::anyhow!("WASI adapter failed: {error}"))?;
+    let core = streaming::forward_random(&core)?;
     let core = streaming::bound_allocations(&core)?;
     let component = ComponentEncoder::default()
         .merge_imports_based_on_semver(false)

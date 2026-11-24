@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use wirm::wasmparser::MemArg;
 use wirm::{
     DataType, InitInstr, Module, Opcode,
     ir::{
@@ -12,6 +13,88 @@ use wirm::{
 
 const CHUNK_BYTES: i32 = 64 * 1024;
 const STACK: GlobalID = GlobalID(0);
+
+pub fn forward_random(core: &[u8]) -> Result<Vec<u8>> {
+    let mut module = Module::parse(core, false, false)?;
+    let random = module
+        .imports
+        .get_func(
+            "wasi:random/random@0.2.10".into(),
+            "get-random-bytes".into(),
+        )
+        .context("StarlingMonkey random import changed")?;
+    let realloc = module
+        .exports
+        .get_func_by_name("cabi_realloc".into())
+        .context("StarlingMonkey allocator changed")?;
+    let random_get = module
+        .functions
+        .get_local_fid_by_name("random_get")
+        .context("StarlingMonkey random_get stub changed")?;
+    let mut function = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[DataType::I32]);
+    for ty in [DataType::I32; 3] {
+        function.add_local(ty);
+    }
+    function
+        .i32_const(0)
+        .i32_const(0)
+        .i32_const(4)
+        .i32_const(8)
+        .call(realloc)
+        .local_set(LocalID(2))
+        .local_get(LocalID(1))
+        .i64_extend_i32_u()
+        .local_get(LocalID(2))
+        .call(random)
+        .local_get(LocalID(2));
+    function.body.push_op(Operator::I32Load {
+        memarg: MemArg {
+            align: 2,
+            max_align: 2,
+            offset: 0,
+            memory: 0,
+        },
+    });
+    function.local_set(LocalID(3)).local_get(LocalID(2));
+    function.body.push_op(Operator::I32Load {
+        memarg: MemArg {
+            align: 2,
+            max_align: 2,
+            offset: 4,
+            memory: 0,
+        },
+    });
+    function
+        .local_set(LocalID(4))
+        .local_get(LocalID(0))
+        .local_get(LocalID(3))
+        .local_get(LocalID(4));
+    function.body.push_op(Operator::MemoryCopy {
+        dst_mem: 0,
+        src_mem: 0,
+    });
+    function
+        .local_get(LocalID(3))
+        .local_get(LocalID(4))
+        .i32_const(1)
+        .i32_const(0)
+        .call(realloc)
+        .drop()
+        .local_get(LocalID(2))
+        .i32_const(8)
+        .i32_const(4)
+        .i32_const(0)
+        .call(realloc)
+        .drop()
+        .i32_const(0);
+    function.end();
+    module
+        .functions
+        .get_mut(random_get)
+        .unwrap_local_mut()?
+        .body = function.body;
+    Ok(module.encode()?)
+}
 
 pub fn bound_allocations(core: &[u8]) -> Result<Vec<u8>> {
     let mut module = Module::parse(core, false, false)?;

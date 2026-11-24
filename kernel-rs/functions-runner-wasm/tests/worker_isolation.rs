@@ -75,7 +75,7 @@ fn worker_with_limits(bundle: &Bundle, timeout: Duration, limits: WorkerLimits) 
             limits,
             MemoryPolicy::DevelopmentPolling,
         )
-        .unwrap()
+        .unwrap_or_else(|error| panic!("{error:#}"))
     }
     #[cfg(feature = "quickjs-runner")]
     {
@@ -679,7 +679,6 @@ fn request_webcrypto_imports_fixture_jwks_and_verifies_signatures() {
 #[cfg(feature = "starling-runner")]
 #[test]
 fn caught_top_level_timer_and_crypto_effects_refuse_preparation() {
-    let runner = Path::new(env!("CARGO_BIN_EXE_konae-functions-runner-wasm"));
     for source in [
         "setTimeout(() => {}, 1); export function handle() {}",
         "try { setTimeout(() => {}, 1); } catch {} export function handle() {}",
@@ -689,17 +688,17 @@ fn caught_top_level_timer_and_crypto_effects_refuse_preparation() {
         "try { crypto.getRandomValues(new Uint8Array(1)); } catch {} export function handle() {}",
     ] {
         let bundle = Bundle::new(source);
-        let output = std::process::Command::new(runner)
-            .arg("--prepare")
-            .arg(bundle.path().join("orders.mjs"))
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("function.wasm-init-effect"),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+        let reply = prepare(
+            &bundle.path().join("orders.mjs"),
+            &bundle.path().join("orders.wasm"),
         );
+        assert!(
+            reply["diagnostic"]
+                .as_str()
+                .is_some_and(|diagnostic| diagnostic.contains("function.wasm-init-effect")),
+            "{reply}"
+        );
+        assert_eq!(reply["status"], "init_effect", "{reply}");
     }
 }
 
