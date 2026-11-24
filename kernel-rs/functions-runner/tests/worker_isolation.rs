@@ -412,8 +412,9 @@ fn shutdown_deadline_covers_a_pending_hook_that_ignores_cancellation() {
 fn both_runners_follow_the_portable_web_contract() {
     let bundles = bundle(include_str!("fixtures/function-contract.js"));
     let timeout = Duration::from_secs(5);
-    let mut worker = worker(&bundles, timeout);
-    let output = invoke(&mut worker, input("/", "alice"), timeout).unwrap();
+    let mut instance = worker(&bundles, timeout);
+    let output = invoke(&mut instance, input("/", "alice"), timeout).unwrap();
+    drop(instance);
     assert_eq!(
         serde_json::from_str::<Value>(&output.body).unwrap(),
         json!({
@@ -429,7 +430,8 @@ fn both_runners_follow_the_portable_web_contract() {
         ("/timeout", "unsupported_runtime_api"),
         ("/invalid-response", "invalid_response"),
     ] {
-        let error = invoke(&mut worker, input(path, "alice"), timeout).unwrap_err();
+        let mut instance = worker(&bundles, timeout);
+        let error = invoke(&mut instance, input(path, "alice"), timeout).unwrap_err();
         assert_eq!(
             konae_functions_executor::error_code(&error),
             code,
