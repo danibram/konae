@@ -18,7 +18,7 @@ sha2 = "0.10.9"
 spidermonkey-embedding-splicer = { path = "vendor/spidermonkey-embedding-splicer" }
 tempfile = "3.27.0"
 libc = "0.2.191"
-wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "runtime", "cranelift", "component-model", "pooling-allocator", "gc-null"] }
+wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "runtime", "cranelift", "component-model", "pooling-allocator"] }
 wit-component = "=0.245.1"
 wirm = { version = "=5.0.0", default-features = false }
 

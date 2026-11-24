@@ -18,8 +18,6 @@ pub fn starling() -> wasmtime::Config {
     let mut config = wasmtime::Config::new();
     config
         .epoch_interruption(true)
-        .wasm_reference_types(true)
-        .wasm_function_references(true)
         .allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pool));
     config
 }

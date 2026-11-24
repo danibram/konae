@@ -105,7 +105,7 @@ impl Runtime {
             Some(Config {
                 executable,
                 policy,
-                wasm: false,
+                wasm: std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm"),
             }),
             deadline,
             idle,
