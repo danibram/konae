@@ -21,6 +21,7 @@ const PREPARE_LIMIT: Duration = Duration::from_secs(90);
 const COMPONENT_LIMIT: usize = 64 * 1024 * 1024;
 const NATIVE_RESERVATION_LIMIT: u64 = 512 * 1024 * 1024;
 const DEFAULT_CACHE_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+const NATIVE_VERIFY_READERS: usize = 4;
 static CACHE_PREPARATION_LOCK: Mutex<()> = Mutex::new(());
 static CACHE_PINS: OnceLock<Mutex<std::collections::HashMap<PathBuf, usize>>> = OnceLock::new();
 
@@ -108,12 +109,47 @@ pub fn prepared_bundles(
     check_cache_directory(&cache)?;
     let identity: HelperIdentity = json_command(&helper, &["identity"], PREPARE_LIMIT)?;
     let target: NativeTarget = json_command(&runner, &["--native-target"], PREPARE_LIMIT)?;
-    bundles.iter().map(|(name, source)| {
-        let key = alias_key(source, &identity, &target);
-        let (_, file) = cached_object(&cache, &key)?
-            .with_context(|| format!("Prepared Wasm component for {name} is missing or corrupt; prepare the app before serving"))?;
-        Ok((name.clone(), file))
-    }).collect()
+    let entries: Vec<_> = bundles
+        .iter()
+        .map(|(name, source)| (name, alias_key(source, &identity, &target)))
+        .collect();
+    if entries.len() <= NATIVE_VERIFY_READERS {
+        return entries
+            .iter()
+            .map(|(name, key)| prepared_file(&cache, name, key))
+            .collect();
+    }
+
+    let chunk_size = entries.len().div_ceil(NATIVE_VERIFY_READERS);
+    std::thread::scope(|scope| {
+        let tasks: Vec<_> = entries
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let cache = &cache;
+                std::thread::Builder::new().spawn_scoped(scope, move || {
+                    chunk
+                        .iter()
+                        .map(|(name, key)| prepared_file(cache, name, key))
+                        .collect::<Result<Vec<_>>>()
+                })
+            })
+            .collect::<io::Result<_>>()?;
+        let mut files = std::collections::BTreeMap::new();
+        for task in tasks {
+            let verified = task
+                .join()
+                .map_err(|_| anyhow::anyhow!("Wasm cache verification stopped"))??;
+            files.extend(verified);
+        }
+        Ok(files)
+    })
+}
+
+fn prepared_file(cache: &Path, name: &str, key: &str) -> Result<(String, File)> {
+    let (_, file) = cached_object(cache, key)?.with_context(|| {
+        format!("Prepared Wasm component for {name} is missing or corrupt; prepare the app before serving")
+    })?;
+    Ok((name.to_owned(), file))
 }
 
 fn prepare_bundles_blocking(bundles: &std::collections::BTreeMap<String, String>) -> Result<std::collections::BTreeMap<String, PathBuf>> {
