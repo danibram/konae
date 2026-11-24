@@ -106,9 +106,24 @@ def wait_for_kernel(server, port):
     raise RuntimeError("Kernel failed to start")
 
 
-def worker_pid(server, runner):
+def child_kernel_pid(server, kernel):
+    children = subprocess.run(
+        ["pgrep", "-P", str(server.pid)], check=False, text=True,
+        stdout=subprocess.PIPE,
+    ).stdout.splitlines()
+    for child in children:
+        command = subprocess.run(
+            ["ps", "-p", child, "-o", "command="], check=True, text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        if str(kernel) in command:
+            return child
+    raise RuntimeError(f"Could not find Kernel child of konae dev process {server.pid}")
+
+
+def worker_pid(kernel_pid, runner):
     found = subprocess.run(
-        ["pgrep", "-f", "-P", str(server.pid), re.escape(str(runner))],
+        ["pgrep", "-f", "-P", str(kernel_pid), re.escape(str(runner))],
         check=True, text=True, stdout=subprocess.PIPE,
     ).stdout.splitlines()
     if len(found) != 1:
@@ -128,7 +143,7 @@ def usage_count(path):
         raise
 
 
-def request(connection, host, sampled, sequence):
+def request(connection, host, sampled, sequence, allow_timeout=False):
     headers = {
         "Host": host,
         "X-Forwarded-For": f"198.18.{sequence // 250}.{1 + sequence % 250}",
@@ -139,6 +154,10 @@ def request(connection, host, sampled, sequence):
     body = response.read()
     elapsed = time.perf_counter_ns() - started
     traceparent = response.getheader("traceparent")
+    if allow_timeout and response.status == 504:
+        return elapsed, None
+    if allow_timeout and (response.status, body) == (200, b'{"sum":0}'):
+        return elapsed, traceparent
     if (response.status, body) != (200, PAYLOAD):
         raise RuntimeError(f"HTTP {response.status} {body!r}")
     flag = "01" if sampled else "00"
@@ -151,31 +170,71 @@ def percentile_us(values, p):
     return sorted(values)[math.ceil(len(values) * p / 100) - 1] / 1_000
 
 
-def run(server, runner, port, host, usage_path, rounds, sampled, collector, baseline_us):
-    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+def run(server, kernel_pid, runner, port, host, usage_path, rounds, sampled, collector, baseline_us,
+        profile_seconds, profile_prefix):
+    connections = [HTTPConnection("127.0.0.1", port, timeout=5)]
     samples = []
     pid = None
-    usage_before = usage_count(usage_path)
+    usage_start = usage_count(usage_path)
+    usage_before = usage_start
+    profiles = []
     try:
         for sequence in range(40):
-            _, traceparent = request(connection, host, sampled, sequence)
+            traceparent = None
+            for _attempt in range(10):
+                _, traceparent = request(connections[0], host, sampled, sequence, allow_timeout=True)
+                if traceparent is not None:
+                    break
+            if traceparent is None:
+                raise RuntimeError("Function did not return HTTP 200 during warmup")
             if sequence == 0:
-                pid = worker_pid(server, runner)
+                pid = worker_pid(kernel_pid, runner)
+        warm_usage_target = usage_start + 40 * 10
+        warm_usage_deadline = time.monotonic() + 10
+        stable_count = None
+        stable_reads = 0
+        while time.monotonic() < warm_usage_deadline:
+            current_count = usage_count(usage_path)
+            if current_count >= warm_usage_target and current_count == stable_count:
+                stable_reads += 1
+                if stable_reads >= 3:
+                    usage_before = current_count
+                    break
+            else:
+                stable_count = current_count
+                stable_reads = 0
+            time.sleep(0.05)
+        else:
+            raise RuntimeError("Usage did not settle after warmup requests")
+        with sqlite3.connect(usage_path.parent / "database.sqlite") as database:
+            database.execute("INSERT INTO sample VALUES (1)")
+        if profile_seconds:
+            for label, process_id in (("kernel", kernel_pid), ("runner", pid)):
+                output = f"{profile_prefix}.{label}.sample.txt"
+                profiles.append((output, subprocess.Popen(
+                    ["/usr/bin/sample", str(process_id), str(profile_seconds), "-file", output],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                )))
         for sequence in range(rounds):
-            elapsed, _ = request(connection, host, sampled, 40 + sequence)
+            elapsed, _ = request(connections[0], host, sampled, 40 + sequence)
             samples.append(elapsed)
-        assert worker_pid(server, runner) == pid
+        assert worker_pid(kernel_pid, runner) == pid
     finally:
-        connection.close()
+        for connection in connections:
+            connection.close()
+        for output, profile in profiles:
+            _, stderr = profile.communicate(timeout=profile_seconds + 15)
+            if profile.returncode:
+                raise RuntimeError(f"/usr/bin/sample failed for {output}: {stderr.strip()}")
 
     p50 = percentile_us(samples, 50)
-    expected_usage = usage_before + (rounds + 40) * 10
+    expected_usage = usage_before + rounds * 10
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline and usage_count(usage_path) < expected_usage:
         time.sleep(0.05)
     usage_after = usage_count(usage_path)
     if usage_after != expected_usage:
-        raise RuntimeError(f"Usage rows changed by {usage_after - usage_before}; expected {(rounds + 40) * 10}")
+        raise RuntimeError(f"Usage rows changed by {usage_after - usage_before}; expected {rounds * 10}")
     result = {"warm_worker_pid": pid, "collector": collector, "requests": len(samples),
               "p50_us": p50, "p95_us": percentile_us(samples, 95),
               "usage_rows": usage_after - usage_before, "warmup_requests": 40}
@@ -195,16 +254,23 @@ def main():
     parser.add_argument("--rounds", type=int, default=1200, help="warm GET requests to measure")
     parser.add_argument("--collector", choices=("off", "reachable", "stalled"), default="off")
     parser.add_argument("--baseline-us", type=float, help="disabled-export p50 from the baseline run")
+    parser.add_argument("--runner-kind", choices=("deno", "wasm"), default="deno")
+    parser.add_argument("--preparer", type=lambda path: Path(path).resolve())
+    parser.add_argument("--profile-seconds", type=int, default=0)
+    parser.add_argument("--profile-prefix", default="/tmp/konae-tracing-otlp-profile")
     args = parser.parse_args()
     if not 1 <= args.rounds <= 5_000:
         parser.error("--rounds must be between 1 and 5000")
+    if args.runner_kind == "wasm" and args.preparer is None:
+        parser.error("--preparer is required for --runner-kind wasm")
+    if args.profile_seconds < 0 or args.profile_seconds > 30:
+        parser.error("--profile-seconds must be between 0 and 30")
 
     with tempfile.TemporaryDirectory(prefix="konae-functions-tracing-otlp-", dir="/tmp") as scratch:
         folder = Path(scratch) / "app"
         deployment = prepare(folder)
-        state = Path(scratch) / "state"
-        (state / "apps").mkdir(parents=True)
-        (state / "apps" / deployment).symlink_to(folder, target_is_directory=True)
+        cache = Path(scratch) / "wasm-cache"
+        cache.mkdir()
         port = free_port()
         collector = None
         if args.collector != "off":
@@ -212,26 +278,29 @@ def main():
             threading.Thread(target=collector.serve_forever, daemon=True).start()
         env = {key: value for key, value in os.environ.items() if not key.startswith("KONAE_")}
         env.update(
-            KONAE_BIND="127.0.0.1", KONAE_DATA_DIR=str(state), KONAE_KERNEL_PORT=str(port),
-            KONAE_HOST_SUFFIX="localhost", KONAE_PUBLIC_ORIGIN=f"http://localhost:{port}",
-            KONAE_TRUSTED_PROXIES="127.0.0.1", KONAE_FUNCTIONS_RUNNER=str(args.runner),
+            KONAE_KERNEL_BIN=str(args.kernel), KONAE_FUNCTIONS_RUNNER=str(args.runner),
+            KONAE_TRUSTED_PROXIES="127.0.0.1",
             KONAE_FUNCTIONS_DEVELOPMENT="1", KONAE_EXECUTION_MODE="live",
             KONAE_MAIL_TRANSPORT="development",
         )
+        if args.runner_kind == "wasm":
+            env.update(KONAE_FUNCTIONS_RUNNER_KIND="wasm", KONAE_FUNCTIONS_PREPARER=str(args.preparer),
+                       KONAE_FUNCTIONS_WASM_CACHE=str(cache))
         if collector is not None:
             env["KONAE_OTLP_TRACES_ENDPOINT"] = f"http://127.0.0.1:{collector.server_port}/v1/traces"
             env["KONAE_OTLP_TRACES_SAMPLE_RATE"] = "1"
         with tempfile.TemporaryFile(mode="w+b") as log:
-            with subprocess.Popen([args.kernel], env=env, stdout=log, stderr=log) as server:
+            dev_command = ["bun", str(REPO / "scripts/konae.ts"), "dev", "--dir", str(folder),
+                           "--port", str(port), "--events-port", str(free_port())]
+            with subprocess.Popen(dev_command, env=env, stdout=log, stderr=log) as server:
                 try:
                     wait_for_kernel(server, port)
-                    with sqlite3.connect(folder / "data/database.sqlite") as connection:
-                        connection.execute("INSERT INTO sample VALUES (1)")
-                    record = json.loads((folder / ".konae/deployment.json").read_text())
-                    run(server, args.runner, port, record["hostname"],
+                    kernel_pid = child_kernel_pid(server, args.kernel)
+                    slug = json.loads((folder / "konae.json").read_text())["slug"]
+                    run(server, kernel_pid, args.runner, port, f"{slug}.localhost:{port}",
                         folder / "data" / "usage.sqlite", args.rounds,
-                        collector is not None,
-                        args.collector, args.baseline_us)
+                        True,
+                        args.collector, args.baseline_us, args.profile_seconds, args.profile_prefix)
                     if collector is not None:
                         print(f"Collector {args.collector} received {collector.received} spans.", flush=True)
                 except BaseException:

@@ -1,8 +1,5 @@
 use std::{
     collections::VecDeque,
-    fs::OpenOptions,
-    io::{Read, Write},
-    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -16,7 +13,6 @@ use reqwest::{
     Client,
     header::{CONTENT_TYPE, HeaderName, HeaderValue},
 };
-use ring::rand::SecureRandom;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
@@ -46,7 +42,7 @@ pub struct Exporter {
 }
 
 struct Inner {
-    tx: Mutex<Option<mpsc::Sender<QueuedTrace>>>,
+    tx: mpsc::Sender<QueuedTrace>,
     worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
     shutdown_deadline: Arc<Mutex<Option<tokio::time::Instant>>>,
     shutdown_requested: Arc<AtomicBool>,
@@ -56,8 +52,7 @@ struct Inner {
     endpoint: reqwest::Url,
     headers: Vec<(HeaderName, HeaderValue)>,
     losses: Arc<Losses>,
-    sample_rate: f64,
-    sample_key: [u8; 32],
+    sample_threshold: u64,
 }
 
 struct QueuedTrace {
@@ -87,7 +82,7 @@ struct Settings {
 struct HeaderConfig(std::collections::BTreeMap<String, String>);
 
 impl Exporter {
-    pub(crate) fn from_env(data_root: &Path) -> Result<Option<Self>> {
+    pub(crate) fn from_env() -> Result<Option<Self>> {
         let settings = parse_settings(
             std::env::var("KONAE_OTLP_TRACES_ENDPOINT").ok().as_deref(),
             std::env::var("KONAE_OTLP_TRACES_HEADERS").ok().as_deref(),
@@ -98,18 +93,17 @@ impl Exporter {
         let Some(settings) = settings else {
             return Ok(None);
         };
-        let sample_key = sample_key(data_root)?;
-        Ok(Some(Self::start(settings, sample_key)?))
+        Ok(Some(Self::start(settings)?))
     }
 
-    fn start(settings: Settings, sample_key: [u8; 32]) -> Result<Self> {
+    fn start(settings: Settings) -> Result<Self> {
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(POST_TIMEOUT)
             .build()?;
         let (tx, rx) = mpsc::channel(QUEUE_TRACES);
         let inner = Arc::new(Inner {
-            tx: Mutex::new(Some(tx)),
+            tx,
             worker: Mutex::new(None),
             shutdown_deadline: Arc::new(Mutex::new(None)),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
@@ -119,8 +113,7 @@ impl Exporter {
             endpoint: settings.endpoint,
             headers: settings.headers,
             losses: Arc::new(Losses::default()),
-            sample_rate: settings.sample_rate,
-            sample_key,
+            sample_threshold: sample_threshold(settings.sample_rate),
         });
         let worker_config = WorkerConfig {
             queued_bytes: Arc::clone(&inner.queued_bytes),
@@ -141,21 +134,28 @@ impl Exporter {
     }
 
     pub(crate) fn should_sample(&self, trace_id: &[u8; 16]) -> bool {
-        if self.inner.sample_rate >= 1.0 {
+        if self.inner.sample_threshold == u64::MAX {
             return true;
         }
-        if self.inner.sample_rate <= 0.0 {
+        if self.inner.sample_threshold == 0 {
             return false;
         }
-        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &self.inner.sample_key);
-        let digest = ring::hmac::sign(&key, trace_id);
-        let value = u64::from_be_bytes(digest.as_ref()[..8].try_into().unwrap());
-        (value as f64) / (u64::MAX as f64) < self.inner.sample_rate
+        let mut value = u64::from_be_bytes(trace_id[..8].try_into().unwrap())
+            ^ u64::from_be_bytes(trace_id[8..].try_into().unwrap());
+        value ^= value >> 30;
+        value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value ^= value >> 27;
+        value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+        value < self.inner.sample_threshold
     }
 
     pub(crate) fn enqueue(&self, trace: CompletedTrace) {
-        let span_count = trace.span_count();
-        if span_count == 0 {
+        if self.inner.shutdown_requested.load(Ordering::Acquire) {
+            self.inner
+                .losses
+                .shutdown
+                .fetch_add(trace.span_count() as u64, Ordering::Relaxed);
             return;
         }
         let bytes = trace.queued_bytes();
@@ -170,22 +170,10 @@ impl Exporter {
             self.inner
                 .losses
                 .queue_full
-                .fetch_add(span_count as u64, Ordering::Relaxed);
+                .fetch_add(trace.span_count() as u64, Ordering::Relaxed);
             return;
         }
-        let sender = self
-            .inner
-            .tx
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let Some(sender) = sender.as_ref() else {
-            self.inner
-                .losses
-                .shutdown
-                .fetch_add(span_count as u64, Ordering::Relaxed);
-            return;
-        };
-        if let Err(error) = sender.try_send(QueuedTrace { trace, bytes }) {
+        if let Err(error) = self.inner.tx.try_send(QueuedTrace { trace, bytes }) {
             let payload = error.into_inner();
             self.inner
                 .queued_bytes
@@ -206,11 +194,6 @@ impl Exporter {
             Some(tokio::time::Instant::now() + Duration::from_secs(1));
         self.inner.shutdown_requested.store(true, Ordering::Release);
         self.inner.shutdown_notify.notify_one();
-        self.inner
-            .tx
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take();
         let worker = self
             .inner
             .worker
@@ -272,43 +255,11 @@ fn parse_settings(
     }))
 }
 
-fn sample_key(data_root: &Path) -> Result<[u8; 32]> {
-    let path = data_root.join("otlp-trace-sampling.key");
-    if let Ok(mut file) = std::fs::File::open(&path) {
-        let mut key = [0; 32];
-        file.read_exact(&mut key)
-            .context("Invalid OTLP sampling key")?;
-        let mut extra = [0; 1];
-        if file.read(&mut extra)? != 0 {
-            bail!("Invalid OTLP sampling key");
-        }
-        return Ok(key);
-    }
-    let mut key = [0u8; 32];
-    ring::rand::SystemRandom::new()
-        .fill(&mut key)
-        .map_err(|_| anyhow::anyhow!("Could not initialize trace sampling"))?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    match options.open(&path) {
-        Ok(mut file) => {
-            file.write_all(&key)?;
-            file.sync_all()?;
-            Ok(key)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let mut file = std::fs::File::open(path)?;
-            let mut existing = [0; 32];
-            file.read_exact(&mut existing)
-                .context("Invalid OTLP sampling key")?;
-            Ok(existing)
-        }
-        Err(error) => Err(error.into()),
+fn sample_threshold(rate: f64) -> u64 {
+    if rate >= 1.0 {
+        u64::MAX
+    } else {
+        (rate * u64::MAX as f64) as u64
     }
 }
 
@@ -324,25 +275,40 @@ async fn worker(config: WorkerConfig, mut rx: mpsc::Receiver<QueuedTrace>) {
                 .unwrap_or_else(|error| error.into_inner());
         }
         if queue.is_empty() {
-            match rx.recv().await {
-                Some(trace) => add_trace(&mut queue, trace, &config).await,
-                None => {
+            if !open {
+                break;
+            }
+            tokio::select! {
+                biased;
+                _ = config.shutdown_notify.notified(), if config.shutdown_requested.load(Ordering::Acquire) => {
+                    rx.close();
+                    open = false;
+                    shutdown_deadline = *config.shutdown_deadline.lock().unwrap_or_else(|error| error.into_inner());
                     while let Ok(trace) = rx.try_recv() {
-                        config
-                            .losses
-                            .shutdown
-                            .fetch_add(trace.trace.span_count() as u64, Ordering::Relaxed);
-                        config
-                            .queued_bytes
-                            .fetch_sub(trace.bytes as u64, Ordering::AcqRel);
+                        add_trace(&mut queue, trace, &config).await;
                     }
-                    break;
                 }
+                message = rx.recv() => match message {
+                    Some(trace) => add_trace(&mut queue, trace, &config).await,
+                    None => open = false,
+                },
+            }
+            if queue.is_empty() && !open {
+                break;
             }
         }
         let deadline = tokio::time::Instant::now() + BATCH_WAIT;
         while open && queue.len() < BATCH_SPANS {
             tokio::select! {
+                biased;
+                _ = config.shutdown_notify.notified(), if config.shutdown_requested.load(Ordering::Acquire) => {
+                    rx.close();
+                    open = false;
+                    shutdown_deadline = *config.shutdown_deadline.lock().unwrap_or_else(|error| error.into_inner());
+                    while let Ok(trace) = rx.try_recv() {
+                        add_trace(&mut queue, trace, &config).await;
+                    }
+                },
                 message = rx.recv() => match message {
                     Some(trace) => add_trace(&mut queue, trace, &config).await,
                     None => {
@@ -588,7 +554,7 @@ mod tests {
         }
         let context = TraceContext::from_headers(&headers, true);
         let trace = TraceBuffer::new(context, std::time::Instant::now(), "deno");
-        trace.set_export_hook(Arc::new(|_| {}));
+        trace.set_completion_hook(Box::new(|_| {}));
         for _ in 1..records {
             trace.push(TraceRecord {
                 parent: Some(0),
@@ -658,6 +624,14 @@ mod tests {
         assert!(parse_settings(None, Some("bad"), None).is_err());
     }
 
+    #[test]
+    fn sampling_uses_a_precomputed_integer_threshold() {
+        assert_eq!(sample_threshold(0.0), 0);
+        assert_eq!(sample_threshold(1.0), u64::MAX);
+        let halfway = sample_threshold(0.5);
+        assert!(halfway > 0 && halfway < u64::MAX);
+    }
+
     #[tokio::test]
     async fn collector_receives_otlp_json_and_configured_headers_without_redirects() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -698,7 +672,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let exporter = Exporter::start(settings, [7; 32]).unwrap();
+        let exporter = Exporter::start(settings).unwrap();
         let queued_at = tokio::time::Instant::now();
         exporter.enqueue(completed_trace(
             Some("00-4bf92f3577b34da6a3ce929d0e0e4736-b7ad6b7169203331-01"),
@@ -770,7 +744,7 @@ mod tests {
         let settings = parse_settings(Some(&endpoint), None, Some("1"))
             .unwrap()
             .unwrap();
-        let exporter = Exporter::start(settings, [13; 32]).unwrap();
+        let exporter = Exporter::start(settings).unwrap();
         let probe = completed_trace(None, 16, None);
         let per_trace = probe.otlp_spans().len();
         assert_eq!(BATCH_SPANS % per_trace, 0);
@@ -804,7 +778,6 @@ mod tests {
             parse_settings(Some(&endpoint), None, None)
                 .unwrap()
                 .unwrap(),
-            [8; 32],
         )
         .unwrap();
         exporter.enqueue(completed_trace(None, 1, None));
@@ -861,7 +834,6 @@ mod tests {
             parse_settings(Some(&endpoint), None, None)
                 .unwrap()
                 .unwrap(),
-            [9; 32],
         )
         .unwrap();
         exporter.enqueue(completed_trace(None, 1, None));
@@ -893,7 +865,6 @@ mod tests {
             parse_settings(Some(&endpoint), None, None)
                 .unwrap()
                 .unwrap(),
-            [10; 32],
         )
         .unwrap();
         exporter.enqueue(completed_trace(None, 1, None));
@@ -925,7 +896,6 @@ mod tests {
             parse_settings(Some(&endpoint), None, None)
                 .unwrap()
                 .unwrap(),
-            [11; 32],
         )
         .unwrap();
         let traces = (0..20)
@@ -952,7 +922,7 @@ mod tests {
     fn a_full_channel_drops_and_counts_the_trace() {
         let (tx, _rx) = mpsc::channel(QUEUE_TRACES);
         let inner = Arc::new(Inner {
-            tx: Mutex::new(Some(tx)),
+            tx,
             worker: Mutex::new(None),
             shutdown_deadline: Arc::new(Mutex::new(None)),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
@@ -962,8 +932,7 @@ mod tests {
             endpoint: reqwest::Url::parse("http://127.0.0.1/v1/traces").unwrap(),
             headers: Vec::new(),
             losses: Arc::new(Losses::default()),
-            sample_rate: 1.0,
-            sample_key: [0; 32],
+            sample_threshold: u64::MAX,
         });
         let exporter = Exporter { inner };
         for _ in 0..=QUEUE_TRACES {
@@ -983,7 +952,6 @@ mod tests {
             parse_settings(Some(&endpoint), None, None)
                 .unwrap()
                 .unwrap(),
-            [12; 32],
         )
         .unwrap();
         let action = "x".repeat(100);

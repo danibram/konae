@@ -554,10 +554,8 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
         .as_ref()
         .map(|exporter| exporter.should_sample(&trace_context.trace_id))
         .unwrap_or(state.execution_mode.is_test());
-    let trace = TraceBuffer::new(trace_context, started, runner_kind);
-    if let Some(exporter) = state.otlp.clone().filter(|_| trace_context.sampled) {
-        trace.set_export_hook(Arc::new(move |completed| exporter.enqueue(completed)));
-    }
+    let exporter = state.otlp.clone().filter(|_| trace_context.sampled);
+    let trace = TraceBuffer::new_with_exporter(trace_context, started, runner_kind, exporter);
     let budget = Budget::until(started + state.functions.deadline);
     let _cancel = Cancel(budget.clone());
     let deadline = tokio::time::Instant::from_std(budget.deadline());
@@ -1286,8 +1284,9 @@ fn pinned_bundle(
         anyhow::ensure!(bundles.contains_key(name), "Missing function bundle");
         return Ok(bundles);
     }
-    let (artifact, checked) = crate::functions::read_artifact_with_metadata(&server, Some(published))?
-        .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
+    let (artifact, checked) =
+        crate::functions::read_artifact_with_metadata(&server, Some(published))?
+            .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
     anyhow::ensure!(&checked == published, "Published server artifact changed");
     let source = Arc::new(artifact.bundles);
     let mut cache = cache.lock().unwrap();

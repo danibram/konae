@@ -312,7 +312,7 @@ struct Inner {
     response_span: [u8; 8],
     records: Mutex<Recorder>,
     completion: Mutex<CompletionState>,
-    export_hook: Mutex<Option<Arc<dyn Fn(CompletedTrace) + Send + Sync>>>,
+    exporter: Option<super::otlp::Exporter>,
     #[cfg(test)]
     hook: Mutex<Option<Box<dyn FnOnce(CompletedTrace) + Send>>>,
 }
@@ -325,7 +325,17 @@ struct CompletionState {
 }
 
 impl TraceBuffer {
+    #[cfg(test)]
     pub fn new(context: TraceContext, started: Instant, runner_kind: &'static str) -> Self {
+        Self::new_with_exporter(context, started, runner_kind, None)
+    }
+
+    pub(crate) fn new_with_exporter(
+        context: TraceContext,
+        started: Instant,
+        runner_kind: &'static str,
+        exporter: Option<super::otlp::Exporter>,
+    ) -> Self {
         Self(Arc::new(Inner {
             started,
             context,
@@ -350,7 +360,7 @@ impl TraceBuffer {
                 recorder
             }),
             completion: Mutex::new(CompletionState::default()),
-            export_hook: Mutex::new(None),
+            exporter,
             #[cfg(test)]
             hook: Mutex::new(None),
         }))
@@ -406,14 +416,6 @@ impl TraceBuffer {
         drop(state);
         self.try_complete();
     }
-    pub(crate) fn set_export_hook(&self, hook: Arc<dyn Fn(CompletedTrace) + Send + Sync>) {
-        *self
-            .0
-            .export_hook
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(hook);
-        self.try_complete();
-    }
     #[cfg(test)]
     pub fn set_completion_hook(&self, hook: Box<dyn FnOnce(CompletedTrace) + Send>) {
         *self
@@ -453,12 +455,7 @@ impl TraceBuffer {
         if state.http.is_none() {
             return;
         }
-        let export_hook = self
-            .0
-            .export_hook
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
+        let exporter = self.0.exporter.clone();
         #[cfg(test)]
         let test_hook = self
             .0
@@ -468,7 +465,7 @@ impl TraceBuffer {
             .take();
         #[cfg(not(test))]
         let test_hook: Option<Box<dyn FnOnce(CompletedTrace) + Send>> = None;
-        if export_hook.is_none() && test_hook.is_none() {
+        if exporter.is_none() && test_hook.is_none() {
             #[cfg(not(test))]
             {
                 state.completed = true;
@@ -483,8 +480,8 @@ impl TraceBuffer {
             status,
             outcome,
         };
-        if let Some(hook) = export_hook {
-            hook(completed.clone());
+        if let Some(exporter) = exporter {
+            exporter.enqueue(completed.clone());
         }
         #[cfg(test)]
         if let Some(hook) = test_hook {

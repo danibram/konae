@@ -146,7 +146,7 @@ pub async fn state_from_env(
     };
     let copies = copies::CopyStatus::open(copy_config.as_ref(), &copies::status_directory(&data_root),
         &file_store::env_var("KONAE_S3_ENDPOINT").unwrap_or_default(), &data_bucket);
-    let otlp = functions::otlp::Exporter::from_env(&data_root)?;
+    let otlp = functions::otlp::Exporter::from_env()?;
     let state = AppState {
         execution_mode: startup.execution_mode,
         deployments: Arc::new(RwLock::new(deployments)),

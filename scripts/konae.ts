@@ -1153,6 +1153,7 @@ export async function localKernel(root: string, settings: AppSettings, options: 
       "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID", "KONAE_FUNCTIONS_PREPARER",
       "KONAE_FUNCTIONS_WASM_CACHE", "KONAE_FUNCTIONS_WASM_CACHE_BYTES",
       "KONAE_OTLP_TRACES_ENDPOINT", "KONAE_OTLP_TRACES_HEADERS", "KONAE_OTLP_TRACES_SAMPLE_RATE",
+      "KONAE_TRUSTED_PROXIES",
     ].includes(name))),
     KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
