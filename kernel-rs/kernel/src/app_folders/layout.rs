@@ -1,4 +1,3 @@
-
 use std::path::{Path, PathBuf};
 
 /// The folder that holds one folder per app.
@@ -72,6 +71,11 @@ pub fn record(root: &Path, id: &str) -> PathBuf {
 
 pub fn backups(root: &Path, id: &str) -> PathBuf {
     private(root, id).join("backups")
+}
+
+/// The local function waterfall ring, kept with installation-private app state.
+pub fn function_traces(root: &Path, id: &str) -> PathBuf {
+    private(root, id).join("function-traces.jsonl")
 }
 
 /// The compiled server bundles are never part of the static document root.

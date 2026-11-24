@@ -9,6 +9,23 @@ use wasmparser::{
 use crate::refusal::{Refusal, refuse};
 
 const ABI: &str = "konae-functions-wasm/1";
+const ALLOWED_COMPONENT_IMPORTS: [&str; 15] = [
+    "konae:worker/host",
+    "wasi:cli/stderr@0.2.10",
+    "wasi:cli/stderr@0.2.12",
+    "wasi:clocks/monotonic-clock@0.2.10",
+    "wasi:clocks/monotonic-clock@0.2.12",
+    "wasi:clocks/wall-clock@0.2.10",
+    "wasi:clocks/wall-clock@0.2.12",
+    "wasi:io/error@0.2.10",
+    "wasi:io/error@0.2.12",
+    "wasi:io/poll@0.2.10",
+    "wasi:io/poll@0.2.12",
+    "wasi:io/streams@0.2.10",
+    "wasi:io/streams@0.2.12",
+    "wasi:random/random@0.2.10",
+    "wasi:random/random@0.2.12",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -157,11 +174,28 @@ pub(crate) fn verify_component(
         }
     }
     let types = types.as_ref();
-    let allowed_imports = ["konae:worker/host"];
-    if imports.len() != 1
-        || !allowed_imports.contains(&imports[0].0.as_str())
-        || imports[0].1 != wasmparser::ComponentExternalKind::Instance
-        || !host_interface_matches(types)
+    let supported_imports = imports.iter().all(|(name, kind)| {
+        ALLOWED_COMPONENT_IMPORTS.contains(&name.as_str())
+            && *kind == wasmparser::ComponentExternalKind::Instance
+    });
+    let has_host = imports
+        .iter()
+        .filter(|(name, _)| name == "konae:worker/host")
+        .count()
+        == 1;
+    let has_request_web_imports = [
+        "wasi:clocks/monotonic-clock@0.2.10",
+        "wasi:clocks/monotonic-clock@0.2.12",
+    ]
+    .iter()
+    .any(|name| imports.iter().any(|(actual, _)| actual == name))
+        && ["wasi:io/poll@0.2.10", "wasi:io/poll@0.2.12"]
+            .iter()
+            .any(|name| imports.iter().any(|(actual, _)| actual == name))
+        && ["wasi:random/random@0.2.10", "wasi:random/random@0.2.12"]
+            .iter()
+            .any(|name| imports.iter().any(|(actual, _)| actual == name));
+    if !supported_imports || !has_host || !has_request_web_imports || !host_interface_matches(types)
     {
         return Err(refuse_error(
             "function.wasm-import",
@@ -386,6 +420,14 @@ mod tests {
                 "malformed_wit" => vec![0, 97, 115, 109, 13, 0, 1, 255],
                 "wrong_host_signature" => component_fixture(true, false),
                 "wrong_runner_signature" => component_fixture(false, true),
+                "extra_import" => {
+                    let mut imports = ALLOWED_COMPONENT_IMPORTS
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect::<Vec<_>>();
+                    imports.push(fixture["interface"].as_str().unwrap().to_owned());
+                    component_with_imports(&imports)
+                }
                 other => panic!("unknown WIT fixture {other}"),
             };
             let manifest = WasmManifest {
@@ -400,6 +442,143 @@ mod tests {
             assert_eq!(refused.message, case["error"], "{}", case["case"]);
             assert_eq!(refused.hint(), case["hint"], "{}", case["case"]);
         }
+    }
+
+    #[test]
+    fn request_web_api_imports_are_accepted() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../functions-wasm-cases.json")).unwrap();
+        let fixture = cases["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|case| case.get("acceptedFixture"))
+            .unwrap();
+        let imports = serde_json::from_value::<Vec<String>>(fixture["imports"].clone()).unwrap();
+        assert_eq!(
+            imports,
+            ALLOWED_COMPONENT_IMPORTS
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        );
+        let bytes = component_with_imports(&imports);
+        let manifest = WasmManifest {
+            abi: ABI.into(),
+            input_sha256: "00".repeat(32),
+            component_sha256: format!("{:x}", Sha256::digest(&bytes)),
+        };
+        verify_component(&manifest, &manifest.input_sha256, &bytes).unwrap();
+    }
+
+    fn component_with_imports(import_names: &[String]) -> Vec<u8> {
+        let mut host = InstanceType::new();
+        host.ty().defined_type().list(EncodedPrimitive::U8);
+        host.ty().defined_type().option(EncodedPrimitive::String);
+        host.ty()
+            .function()
+            .params([("args", EncodedPrimitive::String)])
+            .result(Some(EncodedPrimitive::String.into()));
+        host.export("op-worker-call", ComponentTypeRef::Func(2));
+        host.ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(Some(EncodedValType::Type(0)));
+        host.export("op-worker-body-read", ComponentTypeRef::Func(3));
+        host.ty()
+            .function()
+            .params([("bytes", EncodedValType::Type(0))])
+            .result(Some(EncodedPrimitive::Bool.into()));
+        host.export("op-worker-response-chunk", ComponentTypeRef::Func(4));
+        host.ty()
+            .function()
+            .params([
+                ("code", EncodedValType::Primitive(EncodedPrimitive::String)),
+                ("detail", EncodedValType::Type(1)),
+            ])
+            .result(None);
+        host.export("op-worker-failure", ComponentTypeRef::Func(5));
+        host.ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(Some(EncodedPrimitive::F64.into()));
+        host.export("now-ms", ComponentTypeRef::Func(6));
+        host.ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(Some(EncodedPrimitive::U64.into()));
+        host.export("random-seed", ComponentTypeRef::Func(7));
+
+        let mut runner = InstanceType::new();
+        runner
+            .ty()
+            .function()
+            .params([
+                ("input", EncodedPrimitive::String),
+                ("limit", EncodedPrimitive::U32),
+            ])
+            .result(Some(EncodedPrimitive::String.into()));
+        runner.export("handle", ComponentTypeRef::Func(0));
+        runner
+            .ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(Some(EncodedPrimitive::Bool.into()));
+        runner.export("has-shutdown", ComponentTypeRef::Func(1));
+        runner
+            .ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(None);
+        runner.export("shutdown", ComponentTypeRef::Func(2));
+        runner
+            .ty()
+            .function()
+            .params(std::iter::empty::<(&str, EncodedValType)>())
+            .result(None);
+        runner.export("spin", ComponentTypeRef::Func(3));
+
+        let mut types = ComponentTypeSection::new();
+        types.ty().instance(&host);
+        types.ty().instance(&runner);
+        types.ty().instance(&InstanceType::new());
+        let mut component = Component::new();
+        component.section(&types);
+        let mut imports = ComponentImportSection::new();
+        let mut runner_instance = None;
+        let mut instance_index = 0;
+        for name in import_names {
+            let type_index = if name == "konae:worker/host" {
+                0
+            } else if runner_instance.is_none() {
+                runner_instance = Some(instance_index);
+                1
+            } else {
+                2
+            };
+            imports.import(name, ComponentTypeRef::Instance(type_index));
+            instance_index += 1;
+        }
+        component.section(&imports);
+        let mut aliases = ComponentAliasSection::new();
+        let instance = runner_instance.unwrap();
+        for name in ["handle", "has-shutdown", "shutdown", "spin"] {
+            aliases.alias(Alias::InstanceExport {
+                instance,
+                kind: ComponentExportKind::Func,
+                name,
+            });
+        }
+        component.section(&aliases);
+        let mut exports = ComponentExportSection::new();
+        for (index, name) in ["handle", "has-shutdown", "shutdown", "spin"]
+            .into_iter()
+            .enumerate()
+        {
+            exports.export(name, ComponentExportKind::Func, index as u32, None);
+        }
+        component.section(&exports);
+        component.finish()
     }
 
     fn component_fixture(wrong_host: bool, wrong_exports: bool) -> Vec<u8> {
@@ -449,10 +628,21 @@ mod tests {
 
         let mut types = ComponentTypeSection::new();
         types.ty().instance(&host);
+        if wrong_exports {
+            types.ty().instance(&InstanceType::new());
+        }
         let mut component = Component::new();
         component.section(&types);
         let mut imports = ComponentImportSection::new();
         imports.import("konae:worker/host", ComponentTypeRef::Instance(0));
+        if wrong_exports {
+            for name in ALLOWED_COMPONENT_IMPORTS
+                .iter()
+                .filter(|name| **name != "konae:worker/host")
+            {
+                imports.import(*name, ComponentTypeRef::Instance(1));
+            }
+        }
         component.section(&imports);
         let mut aliases = ComponentAliasSection::new();
         let source_names = if wrong_exports {

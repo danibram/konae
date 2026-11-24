@@ -527,8 +527,15 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
             .await
             .unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
-        assert_eq!(status, expected_status, "{path}: {}", String::from_utf8_lossy(&bytes));
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            expected_status,
+            "{path}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["error"], expected_error);
     }
@@ -692,7 +699,7 @@ async fn a_join_failure_reports_unknown_if_a_mutation_may_have_committed() {
 }
 
 #[tokio::test]
-async fn unauthenticated_requests_do_not_consume_admission() {
+async fn function_trace_is_returned_on_pre_worker_refusal() {
     let root = std::env::temp_dir().join(format!("konae-function-queue-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let mut state = AppState::for_test(&root);
@@ -876,15 +883,27 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     )
     .unwrap();
     drop(db);
-    assert_eq!(
-        client
-            .get(&url)
-            .header("host", &deployed.hostname)
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
+    let refusal = client
+        .get(&url)
+        .header("host", &deployed.hostname)
+        .header(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refusal.status(), StatusCode::UNAUTHORIZED);
+    let traceparent = refusal
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(traceparent.starts_with("00-4bf92f3577b34da6a3ce929d0e0e4736-"));
+    assert_ne!(
+        traceparent,
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     );
     let get = |suffix: &str, cookie: &str| {
         client
@@ -1381,15 +1400,9 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     assert_eq!(a_series["samples"], expected_samples, "{latency}");
     assert_eq!(a_series["timeouts"], 1, "{latency}");
     assert_eq!(a_series["replays"], 3, "{latency}");
-    let handler_error = a_series["errors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|error| error["code"] == "handler_error")
-        .unwrap();
-    let detail = handler_error["detail"].as_str().unwrap();
-    assert!(detail.len() <= 4096);
-    assert!(!detail.contains("alice@example.test"));
+    assert_eq!(a_series["errorCounts"]["handler_error"], 1);
+    assert!(a_series.get("errors").is_none());
+    assert!(!latency.to_string().contains("alice@example.test"));
     assert_eq!(b_series["samples"], 7, "{latency}");
     assert_eq!(b_series["timeouts"], 2, "{latency}");
     assert!(b_series["coldStarts"].as_u64().unwrap() >= 2, "{latency}");

@@ -12,12 +12,17 @@ export type TimingPercentiles = { p50Ms: number; p95Ms: number; p99Ms: number; m
 export type FunctionLatencySeries = {
   name: string; version: string; limitMs: number; samples: number; coldStarts: number;
   timeouts: number; failures: number; uncertain: number; replays: number; lastAt: number;
+  errorCounts?: Record<string, number>;
   budgetP95Percent: number; total: TimingPercentiles; queue: TimingPercentiles;
   initialization: TimingPercentiles; execution: TimingPercentiles;
 };
 export type FunctionLatencySummary = {
   series: FunctionLatencySeries[]; maxSamples: number; seriesLimit: number;
   seriesTruncated: boolean; retainedOnly: true; prunedThrough: number | null; retainedFrom: number | null;
+};
+export type FunctionActionLatencySummary = {
+  series: { action: string; version: string; origin: string; samples: number; duration: TimingPercentiles; sqlite: TimingPercentiles; rowsRead: number; rowsWritten: number; replyBytes: number; errors: Record<string, number>; lastAt: number }[];
+  maxSamples: number; seriesLimit: number; seriesTruncated: boolean; retainedOnly: true; samples?: number; queueDrops?: number;
 };
 export type UsageSummary = {
   deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
@@ -26,6 +31,7 @@ export type UsageSummary = {
   accounts: UsageAccounts;
   storage: UsageStorage;
   functionLatency?: FunctionLatencySummary;
+  functionActionLatency?: FunctionActionLatencySummary;
   calls: { states: { state: string; count: number }[]; retainedOnly: boolean };
   mail: { states: { state: string; count: number }[]; retainedOnly: boolean };
   coverage: { startedAt: number | null; earliestMetricDay: string | null; prunedThrough: number | null; retentionDays: number; approximate: boolean; previewIncluded: boolean; queueFlushed: boolean; installationDroppedSinceRestart: number; installationWriteErrorsSinceRestart: number };

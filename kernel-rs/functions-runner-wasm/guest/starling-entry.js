@@ -3,7 +3,7 @@ import * as web from './web.js';
 import * as app from 'konae:app-source';
 
 if (initializationFailed()) {
-  throw new Error(`function.initialization-cannot-snapshot: The function's top-level code must finish without pending promises, timers, fetch, or random values.`);
+  throw new Error(`function.wasm-init-effect: A function cannot start timers or fetch during top-level initialization.`);
 }
 
 Object.assign(globalThis, {
