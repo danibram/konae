@@ -63,6 +63,11 @@ fn worker_with_limits(bundle: &Bundle, timeout: Duration, limits: WorkerLimits) 
                         "{}",
                         String::from_utf8_lossy(&output.stderr)
                     );
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(
+                        fs::metadata(&native).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
                 }
                 (function_name(&source), fs::File::open(native).unwrap())
             })
@@ -288,8 +293,8 @@ fn six_distinct_components_share_one_worker() {
         "invoices",
         "returns",
     ];
-    let sources = names
-        .map(|name| format!("export function handle() {{ return new Response('{name}'); }}"));
+    let sources =
+        names.map(|name| format!("export function handle() {{ return new Response('{name}'); }}"));
     let entries: Vec<_> = names
         .into_iter()
         .zip(sources.iter().map(String::as_str))
@@ -677,8 +682,12 @@ fn webcrypto_vectors_match_on_each_invocation() {
         ("/reuse", "true"),
         ("/vectors", "passed"),
     ] {
-        let reply = invoke(&mut worker, input(path, "alice"), timeout)
-            .unwrap_or_else(|error| panic!("{path}: {error:#}; detail={:?}", konae_functions_executor::error_detail(&error)));
+        let reply = invoke(&mut worker, input(path, "alice"), timeout).unwrap_or_else(|error| {
+            panic!(
+                "{path}: {error:#}; detail={:?}",
+                konae_functions_executor::error_detail(&error)
+            )
+        });
         assert_eq!(reply.body, expected, "{path}");
     }
 }
@@ -1229,4 +1238,37 @@ fn web_apis_preserve_utf8_and_form_data_files() {
         serde_json::from_str::<Value>(&output.body).unwrap(),
         json!({"name": "Madrid 🦊", "filename": "binary.bin", "type": "application/octet-stream", "binary": [0, 255]})
     );
+}
+
+#[cfg(feature = "starling-runner")]
+#[test]
+fn both_runners_follow_the_portable_web_contract() {
+    let bundles = Bundle::new(include_str!(
+        "../../functions-runner/tests/fixtures/function-contract.js"
+    ));
+    let timeout = Duration::from_secs(5);
+    let mut worker = worker(&bundles, timeout);
+    let output = invoke(&mut worker, input("/", "alice"), timeout).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.body).unwrap(),
+        json!({
+            "initializedAt": 0,
+            "fetch": "function",
+            "wasm": "undefined",
+            "requestSignal": true,
+            "appSignal": "fixture"
+        })
+    );
+    for (path, code) in [
+        ("/fetch", "unsupported_runtime_api"),
+        ("/timeout", "unsupported_runtime_api"),
+        ("/invalid-response", "invalid_response"),
+    ] {
+        let error = invoke(&mut worker, input(path, "alice"), timeout).unwrap_err();
+        assert_eq!(
+            konae_functions_executor::error_code(&error),
+            code,
+            "{path}: {error:#}"
+        );
+    }
 }

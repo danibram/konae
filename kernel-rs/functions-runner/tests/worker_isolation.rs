@@ -67,8 +67,12 @@ fn webcrypto_vectors_match_on_each_invocation() {
         ("/reuse", "true"),
         ("/vectors", "passed"),
     ] {
-        let reply = invoke(&mut worker, input(path, "alice"), timeout)
-            .unwrap_or_else(|error| panic!("{path}: {error:#}; detail={:?}", konae_functions_executor::error_detail(&error)));
+        let reply = invoke(&mut worker, input(path, "alice"), timeout).unwrap_or_else(|error| {
+            panic!(
+                "{path}: {error:#}; detail={:?}",
+                konae_functions_executor::error_detail(&error)
+            )
+        });
         assert_eq!(reply.body, expected, "{path}");
     }
 }
@@ -245,8 +249,13 @@ fn request_microtasks_run_before_the_handler_returns() {
         "export async function handle() { const order = []; queueMicrotask(() => order.push('microtask')); Promise.resolve().then(() => order.push('promise')); await new Promise(resolve => queueMicrotask(() => resolve(7))); return Response.json({ order, value: 7 }); }",
     );
     let mut worker = worker(&bundles, Duration::from_secs(2));
-    let output = invoke(&mut worker, input("/", "alice"), Duration::from_secs(2))
-        .unwrap_or_else(|error| panic!("{error}; detail={:?}", konae_functions_executor::error_detail(&error)));
+    let output =
+        invoke(&mut worker, input("/", "alice"), Duration::from_secs(2)).unwrap_or_else(|error| {
+            panic!(
+                "{error}; detail={:?}",
+                konae_functions_executor::error_detail(&error)
+            )
+        });
     assert_eq!(
         serde_json::from_str::<Value>(&output.body).unwrap(),
         json!({"order": ["microtask", "promise"], "value": 7})
@@ -397,4 +406,34 @@ fn shutdown_deadline_covers_a_pending_hook_that_ignores_cancellation() {
     assert_shutdown_reports_failure(
         "export async function shutdown() { await new Promise(() => {}); }",
     );
+}
+
+#[test]
+fn both_runners_follow_the_portable_web_contract() {
+    let bundles = bundle(include_str!("fixtures/function-contract.js"));
+    let timeout = Duration::from_secs(5);
+    let mut worker = worker(&bundles, timeout);
+    let output = invoke(&mut worker, input("/", "alice"), timeout).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.body).unwrap(),
+        json!({
+            "initializedAt": 0,
+            "fetch": "function",
+            "wasm": "undefined",
+            "requestSignal": true,
+            "appSignal": "fixture"
+        })
+    );
+    for (path, code) in [
+        ("/fetch", "unsupported_runtime_api"),
+        ("/timeout", "unsupported_runtime_api"),
+        ("/invalid-response", "invalid_response"),
+    ] {
+        let error = invoke(&mut worker, input(path, "alice"), timeout).unwrap_err();
+        assert_eq!(
+            konae_functions_executor::error_code(&error),
+            code,
+            "{path}: {error:#}"
+        );
+    }
 }

@@ -3,7 +3,7 @@ import * as web from './web.js';
 import * as app from 'konae:app-source';
 
 if (initializationFailed()) {
-  throw new Error(`function.wasm-init-effect: A function cannot start timers or fetch during top-level initialization.`);
+  throw new Error('KONAE_INIT_EFFECT');
 }
 
 Object.assign(globalThis, {

@@ -14,14 +14,10 @@ const nativeTimers = {
   queueMicrotask: globalThis.queueMicrotask,
 };
 const nativePerformance = globalThis.performance;
-const initEffectCode = 'function.wasm-init-effect';
 
 function refuseInitializationEffect(api) {
-  if (!running) {
-    initializationEffect = true;
-    throw new TypeError(`${initEffectCode}: A function cannot start timers or fetch during top-level initialization.`);
-  }
-  throw new TypeError(`${api} is unavailable in this function runtime`);
+  initializationEffect = true;
+  throw new TypeError(`KONAE_INIT_EFFECT: ${api}`);
 }
 
 function callable(value, api) {
@@ -62,7 +58,11 @@ function clearAllTimers() {
   timerRecords.clear();
 }
 
-globalThis.fetch = (...args) => refuseInitializationEffect('fetch');
+globalThis.fetch = () => {
+  if (!running) refuseInitializationEffect('fetch');
+  opWorkerFailure('unsupported_runtime_api', null);
+  throw new TypeError('unsupported_runtime_api');
+};
 globalThis.setTimeout = (callback, delay, ...args) => scheduleTimer('setTimeout', callback, delay, ...args);
 globalThis.setInterval = (callback, delay, ...args) => scheduleTimer('setInterval', callback, delay, ...args);
 globalThis.clearTimeout = handle => clearTimer('clearTimeout', handle);
@@ -112,10 +112,7 @@ function seedRandom(seed) {
   if (!randomState) randomState = 0x6d2b79f5;
 }
 Math.random = () => {
-  if (!running) {
-    initializationEffect = true;
-    throw new TypeError(`${initEffectCode}: A function cannot use random values during top-level initialization.`);
-  }
+  if (!running) refuseInitializationEffect('Math.random');
   randomState ^= randomState << 13;
   randomState ^= randomState >>> 17;
   randomState ^= randomState << 5;
