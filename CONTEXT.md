@@ -127,7 +127,7 @@ A named occurrence a Server Action declares, with properties from its input bind
 _Avoid_: event, track, custom metric
 
 **Usage**:
-The Kernel's daily totals for one Deployment: sessions, page views, actions, routes, uploads, file reads, signups, logins, refusals, notices, calls and scheduled runs, with the activity of each signed-in app account and what the app stores. It lives in `data/usage.sqlite`, and only the owner reads it (ADR-0010).
+The Kernel's daily totals for one Deployment: sessions, page views, actions, functions, routes, uploads, file reads, signups, logins, refusals, notices, calls and scheduled runs, with the activity of each signed-in app account and what the app stores. It lives in `data/usage.sqlite`, and only the owner reads it (ADR-0010).
 _Avoid_: analytics, telemetry, audit, metric
 
 **Invitation**:

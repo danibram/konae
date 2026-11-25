@@ -64,7 +64,8 @@ All three need `read`. `usage_summary` and `signals_read` also need the named pr
 | --- | --- | --- |
 | `session` | | `auth_session` answers. The SDK calls it when an app opens |
 | `page_view` | the HTML file served, such as `index.html` | a browser navigation received one of the artifact's HTML pages with 200 |
-| `action` | the action | `actions_invoke` runs the action |
+| `action` | the action | `actions_invoke` or a call continuation runs the action successfully |
+| `function` | the declared function | the Kernel decides the response to a Function call, including a refusal, timeout or replay |
 | `route` | `POST /hooks/orders` | an HTTP route runs its action, which is not counted again under `action` |
 | `upload` | | `files_upload` stores a file |
 | `file_read` | | `files_read` or `GET /_konae/files/<id>` returns a file |
@@ -75,7 +76,7 @@ All three need `read`. `usage_summary` and `signals_read` also need the named pr
 | `scheduled` | the action | the timer ran a [scheduled](#scheduled-work) mutation, whether it succeeded or failed |
 | `call` | the action | a call action queued a call |
 
-Nothing else the Kernel refuses is counted. The Kernel writes Usage off the request path, and the read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
+The app's Usage page shows daily counts by Function and Action name. Function counts start when the Kernel is updated and survive the pruning of individual latency samples. The Kernel groups counts in memory by UTC day and writes each batch off the request path. The read tools wait up to five seconds to enqueue a flush and up to five more for the writer to confirm it. Check `coverage` for dropped records, write errors or an incomplete drain.
 
 `usage_summary` returns the counters, the published actions, daily execution and Signal totals by origin (`runtime`, `route`, `schedule`, `continuation`) and outcome (`ok`, `refused`, `failed`, `unchanged`), the states of retained calls and email, and `coverage`, which says whether queued records finished writing and how far back the store reaches. It also returns `accounts` and `storage`:
 

@@ -176,7 +176,9 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let program: crate::ActionProgram = serde_json::from_str(&actions)?;
     let _database = crate::database_lock(state, id).await;
     let database = layout::database(root, id);
-    if actions_enabled { tokio::fs::create_dir_all(layout::data(root, id)).await?; }
+    if actions_enabled || server.is_some() {
+        tokio::fs::create_dir_all(layout::data(root, id)).await?;
+    }
     if actions_enabled && !database.exists() {
         initialize_database(&database)?;
     }
@@ -566,6 +568,35 @@ mod tests {
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_folder_with_functions_and_no_actions_has_room_for_usage() {
+        let root = scratch();
+        let id = "function_only";
+        let state = AppState::for_test(&root);
+        let input: DeployInput = serde_json::from_value(crate::functions::tests::release(
+            id, "export function handle() { return new Response('ok'); }",
+        )).unwrap();
+        let sources = layout::sources(&root, id);
+        std::fs::create_dir_all(sources.join("functions")).unwrap();
+        for (name, source) in input.project.files {
+            std::fs::write(sources.join(name), source).unwrap();
+        }
+        let dist = layout::dist(&root, id);
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), &input.artifact.files["index.html"]).unwrap();
+        crate::functions::stage(&layout::server(&root, id), input.server_artifact.as_ref()).await.unwrap();
+        let mut settings = Settings::new(id, "Function only", id, &json!({"visibility": "public"}));
+        settings.modules.get_mut("functions").unwrap()["on"] = json!(true);
+        settings.write(&root).await.unwrap();
+
+        assert!(!layout::data(&root, id).exists());
+        let deployment = open(&state, id, None).await.unwrap();
+        assert!(layout::data(&root, id).is_dir());
+        assert!(!crate::modules::is_on(&deployment.modules, "actions"));
+        assert!(!layout::database(&root, id).exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

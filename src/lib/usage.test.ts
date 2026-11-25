@@ -56,8 +56,20 @@ test("a daily series has one point per day of the range, zero on a day with noth
   expect(series.map((p) => p.day)).toEqual(["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"]);
   expect(series.map((p) => p.value)).toEqual([0, 2, 0, 0, 0, 0, 0, 4]);
   expect(series.at(-1)?.parts).toEqual({ "index.html": 3, "about.html": 1 });
+  expect(dailyUsage(value, "action").at(-1)).toEqual({ day: "2026-11-08", value: 9, parts: { "notes.add": 9 } });
   expect(pageViews(value)).toEqual([{ page: "index.html", count: 3 }, { page: "about.html", count: 1 }]);
   expect(featureRows(value).find((f) => f.id === "pages")?.count).toBe(4);
+});
+
+test("daily function calls keep each declared name and count", () => {
+  const value = summary([
+    { kind: "function", name: "orders", count: 3 },
+    { kind: "function", name: "constructor", count: 2 },
+    { kind: "action", name: "orders", count: 9 },
+  ]);
+  expect(dailyUsage(value, "function").at(-1)).toEqual({
+    day: "2026-11-08", value: 5, parts: { orders: 3, constructor: 2 },
+  });
 });
 
 test("daily executions keep each result as a part of the day", () => {

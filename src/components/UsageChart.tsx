@@ -11,6 +11,7 @@ type Props = {
   partLabel?: (part: string) => string;
   empty: string;
   stacked?: boolean;
+  showSinglePart?: boolean;
   partColor?: (part: string) => string | undefined;
 };
 
