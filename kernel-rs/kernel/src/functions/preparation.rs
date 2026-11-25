@@ -775,6 +775,57 @@ fn replace_cache_entry(source: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(source, destination)
 }
 
+fn isolate_preparation_command(command: &mut Command) {
+    // Wizer inherits the preparer's process group so both can be stopped together.
+    command.process_group(0);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        command.pre_exec(|| {
+            // Keep Rust's exec error pipe open until exec, but pass only stdio to the tool.
+            if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC)
+                != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            konae_functions_executor::sandbox::drop_privileges()
+        });
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        command.pre_exec(|| {
+            let mut descriptors = [std::mem::MaybeUninit::<libc::proc_fdinfo>::uninit(); 128];
+            let capacity = std::mem::size_of_val(&descriptors) as libc::c_int;
+            let bytes = libc::proc_pidinfo(
+                libc::getpid(),
+                libc::PROC_PIDLISTFDS,
+                0,
+                descriptors.as_mut_ptr().cast(),
+                capacity,
+            );
+            let mark_close_on_exec = |fd| {
+                if fd >= 3 && libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EBADF) {
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            };
+            if bytes > 0 && bytes < capacity {
+                let count = bytes as usize / std::mem::size_of::<libc::proc_fdinfo>();
+                for entry in &descriptors[..count] {
+                    mark_close_on_exec(entry.assume_init_ref().proc_fd)?;
+                }
+            } else {
+                for fd in 3..libc::getdtablesize() {
+                    mark_close_on_exec(fd)?;
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
 fn json_command<T: for<'de> Deserialize<'de>>(
     program: &Path,
     args: &[&str],
@@ -865,11 +916,8 @@ fn compile_component(
 
 fn spawn_tool(mut command: Command, deadline: Instant) -> Result<Child> {
     check_deadline(deadline)?;
-    Ok(command
-        .env_clear()
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()?)
+    isolate_preparation_command(&mut command);
+    Ok(command.env_clear().stderr(Stdio::null()).spawn()?)
 }
 
 fn stop_tool(child: &mut Child) {
@@ -913,6 +961,40 @@ impl Drop for Staging {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparation_shell_and_its_child_share_an_isolated_process_group() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-ec",
+            r#"
+for fd in /dev/fd/[0-9]*; do test "${fd##*/}" -lt 9; done
+test "$(ps -o pgid= -p "$$" | tr -d ' ')" = "$$"
+if [ -r /proc/$$/status ]; then
+    awk '/^Cap(Inh|Prm|Eff|Amb):/ && $2 !~ /^0+$/ { exit 1 }
+         /^NoNewPrivs:/ { if ($2 != 1) exit 1; seen = 1 }
+         END { if (!seen) exit 1 }' /proc/$$/status
+fi
+/bin/sh -ec 'test "$(ps -o pgid= -p "$$" | tr -d " ")" = "$1"' child "$$"
+"#,
+        ]);
+        unsafe {
+            command.pre_exec(|| {
+                let fd = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                if fd < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let result = libc::fcntl(fd, libc::F_DUPFD, 9);
+                libc::close(fd);
+                if result < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        isolate_preparation_command(&mut command);
+        assert!(command.status().unwrap().success());
+    }
 
     #[test]
     fn a_cache_alias_returns_only_bytes_matching_its_digest() {
