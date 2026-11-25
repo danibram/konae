@@ -115,6 +115,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_DATA_DIR` | `/data` (`/kernel` in the `kernel` image, `data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory. See [Data directory and copies](#data-directory-and-copies). |
 | `KONAE_FUNCTIONS_RUNNER` | The packaged runner for the selected kind, when installed | Absolute path to the operator-installed function worker. |
 | `KONAE_FUNCTIONS_RUNNER_KIND` | `wasm` | Selects StarlingMonkey. Set to `deno` for deno_core. An installed preparer checks function initialization for both runners. |
+| `KONAE_FUNCTIONS_DEPLOYMENT_ADMISSION` | `8` | Maximum admitted function requests per Deployment. The installation-wide cap remains `KONAE_FUNCTIONS_ADMISSION`. |
 | `KONAE_FUNCTIONS_PREPARER` | `/usr/local/lib/konae/functions-prepare` when installed | Absolute path to the matching Rust preparer. Required to serve function apps with Wasm. |
 | `KONAE_FUNCTIONS_WASM_CACHE` | `$KONAE_DATA_DIR/.konae/wasm-cache` in the images | Absolute path to the operator-owned native component cache. |
 | `KONAE_FUNCTIONS_WASM_CACHE_BYTES` | `4294967296` | Maximum native cache size and in-flight reservation budget. |

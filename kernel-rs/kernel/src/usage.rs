@@ -483,7 +483,11 @@ struct PendingFunctionTrace {
 fn writer(receiver: Receiver<Message>) {
     let mut pending_traces = Vec::new();
     loop {
-        let first = match receiver.recv_timeout(BATCH_WINDOW) {
+        let first = match if pending_traces.is_empty() {
+            receiver.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        } else {
+            receiver.recv_timeout(BATCH_WINDOW)
+        } {
             Ok(message) => Some(message),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => break,

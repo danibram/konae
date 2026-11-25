@@ -8,11 +8,11 @@ This document specifies the production behavior. The [parity list](../../kernel-
 
 The builder evaluates module-level code once. Each request restores that state in a fresh instance. A counter declared as `let counter = 0` returns 1 on every request if the handler increments it once. An app stores durable changes through Server Actions.
 
-At the top level, `Date.now()`, `new Date()` and the callable `Date()` use one build timestamp embedded in the artifact. Inside a handler or retirement hook, those forms read wall time. Local date formatting uses UTC, as it did in the spike. Explicit dates such as `new Date(0)` keep standard JavaScript semantics. A new build can capture a new timestamp. Installing the same artifact preserves its timestamp.
+At the top level, `Date.now()`, `new Date()` and the callable `Date()` currently use the runner's fixed initialization clock. The artifact does not carry a build timestamp. Inside a handler or retirement hook, those forms read wall time. Local date formatting uses UTC. Explicit dates such as `new Date(0)` keep standard JavaScript semantics.
 
-The deno_core probe returned counter 1 three times and evaluated the top-level clock anew each time. The spike returned counter 1 three times and froze top-level `Date.now()` at zero. Top-level `+new Date()` froze a nonzero timestamp. In the handler, `Date.now()` advanced and `+new Date()` stayed frozen. The spike overrides only `Date.now()` in `guest/starling-runtime.js`.
+The deno_core probe returned counter 1 three times and evaluated the top-level clock anew each time. The spike returned counter 1 three times and froze top-level `Date.now()` at zero. Top-level `+new Date()` froze a nonzero initialization value. In the handler, `Date.now()` advanced and `+new Date()` stayed frozen. The adapter must preserve these observed semantics.
 
-Use the same clock provider for all implicit Date reads. Set one build timestamp during componentization and carry it in the portable artifact. Switch to the wall-clock import when the runner enters a real invocation or retirement hook. Test two requests at distinct known times and install the same artifact in a second Kernel cache. Check the build timestamp on both installations.
+Parity work remains open. The runner must use the same clock provider for all implicit Date reads, freeze top-level initialization, and read wall time inside an invocation or retirement hook. The existing artifact format carries no build timestamp, so documentation does not promise timestamp preservation.
 
 ### Initialization refusals
 
@@ -99,7 +99,7 @@ These probes check named behavior. The Fetch and Streams APIs have more cases th
 
 Use after the parity tests pass. This replaces the IPC/3 `docs/functions.md` paragraph that begins "The runner exposes these Web APIs."
 
-> The runner exposes `DOMException`, `Event`, `EventTarget`, `CustomEvent`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `ReadableStream`, `WritableStream`, `TransformStream`, `AbortController`, `AbortSignal`, `Blob`, `File`, `Headers`, `FormData`, `Request`, `Response`, `structuredClone`, `queueMicrotask`, `console` and standard JavaScript built-ins. It provides no Web Crypto, network `fetch`, timers, `AbortSignal.timeout()`, `performance.now()` or Cache API. The Kernel owns response framing. You can return a bounded UTF-8 response stream. Hono routing and ETag with a supplied digest work after the clone fix. Hono streaming helpers that set framing headers need adaptation.
+> Both production runners provide timers and Web Crypto. Neither provides network `fetch`, `AbortSignal.timeout()`, `performance.now()` or the Cache API. The Kernel owns response framing. You can return a bounded UTF-8 response stream. Hono routing and ETag with a supplied digest work after the clone fix. Hono streaming helpers that set framing headers need adaptation.
 >
 > A function's top-level code runs during the build. Every request starts from the same snapshot. Read the clock inside `handle` for request time and use Server Actions to store durable state. The Kernel can stop execution at its deadline without delivering an abort event to the handler.
 

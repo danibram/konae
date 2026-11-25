@@ -51,7 +51,10 @@ pub async fn admin_database(state: &AppState, id: &str, body: &[u8]) -> Response
             body.get("backupId").and_then(Value::as_str).unwrap_or(""),
         ).await {
             Ok(pin) => Some(pin),
-            Err(failure) => return error(StatusCode::SERVICE_UNAVAILABLE, &format!("Wasm function preparation failed: {failure:#}")),
+            Err(failure) => return match crate::refusal::of(&failure) {
+                Some(refused) => refusal_error(refused),
+                None => error(StatusCode::BAD_REQUEST, &failure.to_string()),
+            },
         }
     } else { None };
     let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;

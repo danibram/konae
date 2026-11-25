@@ -1836,48 +1836,10 @@ async fn run_verified(
     let db_path = database_path(state, &deployment.id);
     let _guard = action_lock(state, &deployment.id, &action.kind).await;
     crate::copies::operation::action(state, &deployment.id, name, action, async {
-        let action_started = std::time::Instant::now();
         let result = match state.guards.statement_permit(&deployment.id).await {
             Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
             Err(wait) => return rate_limited(wait),
         };
-        let rows_read = result.as_ref().ok().and_then(|ran| {
-            ran.answer
-                .as_array()
-                .map(|rows| rows.len().min(u32::MAX as usize) as u32)
-        });
-        let rows_written = result
-            .as_ref()
-            .ok()
-            .and_then(|ran| ran.answer["changes"].as_u64())
-            .map(|rows| rows.min(u32::MAX as u64) as u32);
-        let reply_bytes = result
-            .as_ref()
-            .ok()
-            .and_then(|ran| serde_json::to_vec(&ran.answer).ok())
-            .map(|bytes| bytes.len().min(u32::MAX as usize) as u32);
-        let sqlite = result
-            .as_ref()
-            .ok()
-            .map_or(std::time::Duration::ZERO, |ran| ran.sqlite);
-        crate::usage::function_action_latency(
-            &state.data_root,
-            &deployment.id,
-            crate::usage::FunctionActionTiming {
-                action: name.to_owned(),
-                version: deployment.artifact_version.clone(),
-                origin: "http".into(),
-                duration: action_started.elapsed(),
-                sqlite,
-                rows_read,
-                rows_written,
-                reply_bytes,
-                error_code: result
-                    .as_ref()
-                    .err()
-                    .map(|_| "action-execution-failed".to_owned()),
-            },
-        );
         drop(_guard);
         let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
         match result {

@@ -714,10 +714,10 @@ async fn function_trace_is_returned_on_pre_worker_refusal() {
     payload["visibility"] = json!("private");
     let deployed = publish(&state, &payload).await;
     let reservations = (0..63)
-        .map(|_| {
+        .map(|index| {
             state
                 .functions
-                .admit(&Budget::new(Duration::from_secs(2)))
+                .admit(&format!("reserved-{index}"), &Budget::new(Duration::from_secs(2)))
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -735,12 +735,12 @@ async fn function_trace_is_returned_on_pre_worker_refusal() {
     assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
     let final_permit = state
         .functions
-        .admit(&Budget::new(Duration::from_secs(2)))
+        .admit("final-reservation", &Budget::new(Duration::from_secs(2)))
         .unwrap();
     assert_eq!(
         state
             .functions
-            .admit(&Budget::new(Duration::from_secs(2)))
+            .admit("overflow-reservation", &Budget::new(Duration::from_secs(2)))
             .err()
             .unwrap(),
         "queue_full"

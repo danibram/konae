@@ -87,6 +87,7 @@ function nodeModuleFromSource(source: string): string | undefined {
     return false;
   })();
   const pending = [program];
+  const unsupported: string[] = [];
   while (pending.length) {
     const current = pending.pop();
     if (Array.isArray(current)) { pending.push(...current); continue; }
@@ -94,22 +95,23 @@ function nodeModuleFromSource(source: string): string | undefined {
     const sourceValue = current.source;
     if (current.type === "ImportDeclaration" && current.importKind !== "type"
       && !(Array.isArray(current.specifiers) && current.specifiers.length > 0 && current.specifiers.every((item) => bundleAstNode(item) && item.importKind === "type"))) {
-      const found = nodeName(bundleAstNode(sourceValue) ? sourceValue.value : undefined); if (found) return found;
+      const found = nodeName(bundleAstNode(sourceValue) ? sourceValue.value : undefined); if (found) unsupported.push(found);
     }
     if ((current.type === "ExportNamedDeclaration" || current.type === "ExportAllDeclaration") && current.exportKind !== "type" && bundleAstNode(sourceValue)) {
-      const found = nodeName(sourceValue.value); if (found) return found;
+      const found = nodeName(sourceValue.value); if (found) unsupported.push(found);
     }
     if (current.type === "ImportExpression" && bundleAstNode(current.source)) {
-      const found = nodeName(current.source.value); if (found) return found;
+      const found = nodeName(current.source.value); if (found) unsupported.push(found);
     }
     if (current.type === "CallExpression" && bundleAstNode(current.callee) && current.callee.type === "Import" && Array.isArray(current.arguments)) {
-      const found = nodeName(bundleAstNode(current.arguments[0]) ? current.arguments[0].value : undefined); if (found) return found;
+      const found = nodeName(bundleAstNode(current.arguments[0]) ? current.arguments[0].value : undefined); if (found) unsupported.push(found);
     }
     if (!shadowedRequire && current.type === "CallExpression" && bundleAstNode(current.callee) && current.callee.type === "Identifier" && current.callee.name === "require" && Array.isArray(current.arguments)) {
-      const found = nodeName(bundleAstNode(current.arguments[0]) ? current.arguments[0].value : undefined); if (found) return found;
+      const found = nodeName(bundleAstNode(current.arguments[0]) ? current.arguments[0].value : undefined); if (found) unsupported.push(found);
     }
     for (const child of Object.values(current)) pending.push(child);
   }
+  return unsupported.sort()[0];
 }
 function sourceSpecifiers(source: string): string[] {
   let program: unknown;
