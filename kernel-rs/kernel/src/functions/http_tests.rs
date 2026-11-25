@@ -106,6 +106,10 @@ async fn send_chunked_http(
     if connected {
         let _ = socket.write_all(b"0\r\n\r\n").await;
     }
+    read_chunked_http_response(socket).await
+}
+
+async fn read_chunked_http_response(mut socket: tokio::net::TcpStream) -> (u16, Value) {
     let mut response = Vec::new();
     socket.read_to_end(&mut response).await.unwrap();
     let boundary = response
@@ -643,9 +647,19 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
         "a third request returned while both app slots were held: {:?}",
         small.await.unwrap()
     );
-    small.abort();
-    let _ = small.await;
-    drop(stalled);
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for mut socket in stalled {
+            socket.write_all(b"0\r\n\r\n").await.unwrap();
+            let (status, value) = read_chunked_http_response(socket).await;
+            assert_eq!(status, 200);
+            assert_eq!(value["count"], 64 * 1024);
+        }
+        let (status, value) = small.await.unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(value["count"], 2);
+    })
+    .await
+    .expect("finishing the uploads should free a worker slot for the queued request");
     serving.abort();
     let _ = serving.await;
     crate::usage::flush();
