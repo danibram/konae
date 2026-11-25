@@ -69,7 +69,7 @@ pub(crate) fn helper_refusal(status: PrepareStatus, function: &str) -> anyhow::E
         ),
         PrepareStatus::InitEffect => (
             "function.wasm-init-effect",
-            "A function cannot start timers or fetch during top-level initialization.".into(),
+            "A function cannot use timers, fetch, queueMicrotask, Web Crypto or random values during top-level initialization.".into(),
         ),
         PrepareStatus::InitFailed => (
             "function.wasm-init",

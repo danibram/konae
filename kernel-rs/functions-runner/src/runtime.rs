@@ -210,7 +210,7 @@ impl Runtime {
         js.op_state().borrow_mut().put(bridge.clone());
         let bootstrap = js.execute_script(
             "worker:bootstrap-result",
-            "(() => { const value = globalThis.__functions_bootstrap; delete globalThis.__functions_bootstrap; delete globalThis.Deno; delete globalThis.__bootstrap; return value; })()",
+            "(() => { const value = globalThis.__functions_bootstrap; delete globalThis.__functions_bootstrap; delete globalThis.Deno; delete globalThis.__bootstrap; delete globalThis.WebAssembly; return value; })()",
         )?;
         let (invoke, cancel, shutdown) = {
             deno_core::scope!(scope, js);

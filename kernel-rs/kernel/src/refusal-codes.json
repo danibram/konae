@@ -20,7 +20,7 @@
   "function.wasm-export": { "fix": "operator", "remedy": "Install a preparer that emits the runner exports in the runner WIT." },
   "function.wasm-api": { "fix": "capsule", "remedy": "Remove the unsupported API from the function bundle." },
   "function.wasm-init-pending": { "fix": "capsule", "remedy": "Make top-level initialization finish before the function handles requests." },
-  "function.wasm-init-effect": { "fix": "capsule", "remedy": "Move timers and fetch calls out of top-level initialization." },
+  "function.wasm-init-effect": { "fix": "capsule", "remedy": "Move request effects out of top-level initialization. Use a call action for outbound HTTP." },
   "function.wasm-init": { "fix": "capsule", "remedy": "Fix the function's top-level initialization error." },
   "function.wasm-build-limit": { "fix": "capsule", "remedy": "Reduce work and memory use during function initialization." },
   "function.wasm-invalid": { "fix": "operator", "remedy": "Check the preparer and component packaging, then prepare the function again." },

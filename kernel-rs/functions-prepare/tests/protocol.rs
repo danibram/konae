@@ -114,7 +114,7 @@ fn initialization_refusals_have_typed_statuses() {
             "init_effect",
         ),
         (
-            "throw new Error('initialization failed'); export function handle() {}",
+            "throw new Error('initialization is pending and unsettled'); export function handle() {}",
             "init_failed",
         ),
         (
@@ -133,7 +133,7 @@ fn initialization_refusals_have_typed_statuses() {
 
 #[test]
 fn a_synchronous_initialization_loop_hits_the_deadline() {
-    let reply = prepare_source("while (true) {} export function handle() {}");
+    let reply = prepare_source("while (true) {} export function handle() { return 'await'; }");
     assert_eq!(reply["status"], "build_limit", "{reply}");
 }
 

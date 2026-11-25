@@ -112,15 +112,14 @@ pub async fn prepare_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
     }
     let record = copies::history::checked_record(&backup_dir(state, id), backup_id)?;
     if !record.holds.iter().any(|part| part == import::HOLDS_SOURCES) {
-        return Ok(crate::functions::pin_prepared(&std::collections::BTreeMap::new()));
+        return Ok(crate::functions::PreparedPin::default());
     }
     let release_path = backup_dir(state, id).join(&record.key).join("release.json");
     if !tokio::fs::try_exists(&release_path).await? {
-        return Ok(crate::functions::pin_prepared(&std::collections::BTreeMap::new()));
+        return Ok(crate::functions::PreparedPin::default());
     }
     let release: Value = serde_json::from_slice(&tokio::fs::read(release_path).await?)?;
     let artifact: Option<crate::functions::ServerArtifact> =
         serde_json::from_value(release["serverArtifact"].clone())?;
-    let prepared = crate::functions::prepare_artifact(artifact.as_ref()).await?;
-    Ok(crate::functions::pin_prepared(&prepared))
+    crate::functions::prepare_artifact(state, artifact.as_ref()).await
 }

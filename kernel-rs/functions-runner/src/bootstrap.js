@@ -30,6 +30,7 @@
     core.registerErrorBuilder('DOMException' + name, message => new domException(message, name));
   }
   const requestClass = Request;
+  const responseClass = Response;
   const controllerClass = AbortController;
   const encode = new TextEncoder().encode.bind(new TextEncoder());
   const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -44,6 +45,24 @@
   const stringify = JSON.stringify;
   let controller;
   let requestActive = false;
+  let retirementActive = false;
+  const NativeDate = Date;
+  const nativeNow = Date.now;
+  const currentTime = () => requestActive || retirementActive ? nativeNow() : 0;
+  function KonaeDate(...args) {
+    if (!new.target) return new NativeDate(currentTime()).toString();
+    return args.length ? new NativeDate(...args) : new NativeDate(currentTime());
+  }
+  KonaeDate.prototype = NativeDate.prototype;
+  Object.setPrototypeOf(KonaeDate, NativeDate);
+  KonaeDate.now = currentTime;
+  globalThis.Date = KonaeDate;
+  globalThis.fetch = () => reject('unsupported_runtime_api');
+  const nativeRandom = Math.random;
+  Math.random = () => {
+    if (!requestActive && !retirementActive) reject('unsupported_runtime_api');
+    return nativeRandom();
+  };
   function reject(code) { failure(code); throw new Error(code); }
   function requireRequestEffect() {
     if (!requestActive) reject('unsupported_runtime_api');
@@ -178,7 +197,6 @@
   delete globalThis.__bootstrap;
   return {
     async invoke(handler, input, capability, responseLimit) {
-      controller = new controllerClass();
       requestActive = true;
       let bodySequence = 0;
       const body = new ReadableStream({
@@ -193,7 +211,6 @@
       const request = new requestClass(input.url, {
         method: input.method,
         headers: input.headers,
-        signal: controller.signal,
         ...(input.method === 'POST' ? { body } : {}),
       });
       const context = {
@@ -204,6 +221,7 @@
       };
       try {
         const response = await handler(request, context);
+        if (!(response instanceof responseClass)) reject('invalid_response');
         const headers = [...response.headers];
         let headerBytes = 0;
         for (const [name, value] of headers) headerBytes += encode(name).byteLength + encode(value).byteLength;
@@ -243,8 +261,12 @@
       requestActive = false;
       clearRequestTimers();
       controller = new controllerClass();
+      retirementActive = true;
       try { if (typeof handler === 'function') await handler(controller.signal); }
-      finally { controller = undefined; }
+      finally {
+        retirementActive = false;
+        controller = undefined;
+      }
       return 'null';
     },
   };

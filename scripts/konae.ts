@@ -1777,11 +1777,9 @@ export async function main() {
         const decoder = new TextDecoder();
         for await (const block of started.stderr as ReadableStream<Uint8Array>) { const text = decoder.decode(block); output += text; process.stderr.write(text); }
       })();
-      const wasmBundles = kernel.env.KONAE_FUNCTIONS_RUNNER_KIND === "wasm"
-        ? Object.keys(serverArtifact?.bundles ?? {}).length
-        : 0;
-      // The Kernel allows 90 seconds each for preparation and native compilation.
-      const startupDeadline = performance.now() + 15_000 + 180_000 * wasmBundles;
+      const functionCount = Object.keys(serverArtifact?.bundles ?? {}).length;
+      // Preparation and native compilation each have a 90 second deadline.
+      const startupDeadline = performance.now() + 15_000 + 180_000 * functionCount;
       while (performance.now() < startupDeadline && !/listening on/.test(output) && !shuttingDown) {
         if (started.exitCode !== null) break;
         await Bun.sleep(100);

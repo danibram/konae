@@ -154,10 +154,10 @@
       "case": "init_effect",
       "status": "init_effect",
       "code": "function.wasm-init-effect",
-      "error": "A function cannot start timers or fetch during top-level initialization.",
+      "error": "A function cannot use timers, fetch, queueMicrotask, Web Crypto or random values during top-level initialization.",
       "hint": {
         "fix": "capsule",
-        "remedy": "Move timers and fetch calls out of top-level initialization."
+        "remedy": "Move request effects out of top-level initialization. Use a call action for outbound HTTP."
       }
     },
     {

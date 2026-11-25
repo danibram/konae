@@ -176,7 +176,7 @@ fn prepare_bundle(
     write_scratch!(
         dir,
         &entry,
-        b"import { hostRuntime, initializationFailed } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (initializationFailed()) throw new Error('function.wasm-init-effect: A function cannot start timers or fetch during top-level initialization.');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
+        b"import { hostRuntime, initializationFailed } from './adapter.mjs';\nimport * as app from './app.mjs';\nif (typeof app.handle !== 'function') throw new Error('KONAE_BUNDLE_CONTRACT');\nif (initializationFailed()) throw new Error('KONAE_INIT_EFFECT');\nexport const { handle, hasShutdown, shutdown, spin } = hostRuntime(app);\n"
     );
 
     let spliced = splice_bindings(
@@ -290,13 +290,8 @@ fn prepare_bundle(
             let _ = child.wait();
             let _ = out_reader.join();
             let _ = err_reader.join();
-            let status = if source.contains("await") {
-                "init_pending"
-            } else {
-                "build_limit"
-            };
             return Ok((
-                status,
+                "build_limit",
                 None,
                 Some("Wizer exceeded its preparation deadline".into()),
             ));
@@ -320,27 +315,12 @@ fn prepare_bundle(
                     .chars()
                     .take(1024)
                     .collect::<String>();
-                let refusal = if detail.contains("KONAE_INIT_EFFECT")
-                    || detail.contains("function.wasm-init-effect:")
-                    || detail.contains("function.initialization-cannot-snapshot:")
-                    || [
-                        "fetch",
-                        "setTimeout",
-                        "clearTimeout",
-                        "setInterval",
-                        "clearInterval",
-                    ]
-                    .iter()
-                    .any(|name| {
-                        detail.contains(&format!("{name} is not available in function handlers"))
-                    }) {
+                let refusal = if detail.contains("KONAE_INIT_EFFECT") {
                     "init_effect"
                 } else if detail.contains("WebAssembly is not defined")
                     || detail.contains("KONAE_UNSUPPORTED_API")
                 {
                     "unsupported_api"
-                } else if detail.contains("pending") || detail.contains("unsettled") {
-                    "init_pending"
                 } else if detail.contains("KONAE_BUNDLE_CONTRACT") {
                     "bundle_contract"
                 } else {

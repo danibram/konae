@@ -175,7 +175,10 @@ Run installation commands from the folder containing `konae.json`. Use `npm ci -
 
 ```sh
 konae build --dir .
-KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner \
+mkdir -p .konae/wasm-cache
+KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner-wasm \
+KONAE_FUNCTIONS_PREPARER=/absolute/path/to/konae-functions-prepare \
+KONAE_FUNCTIONS_WASM_CACHE="$PWD/.konae/wasm-cache" \
 KONAE_FUNCTIONS_DEVELOPMENT=1 konae dev --dir .
 ```
 
@@ -185,17 +188,22 @@ From a Konae checkout, use its CLI script and Kernel binary as a pair. Build the
 KONAE_REPO=/path/to/konae
 APP_DIR=/path/to/my-app
 bun "$KONAE_REPO/scripts/konae.ts" build --dir "$APP_DIR"
+mkdir -p "$APP_DIR/.konae/wasm-cache"
 KONAE_KERNEL_BIN="$KONAE_REPO/kernel-rs/target/debug/kernel" \
-KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner \
+KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner-wasm \
+KONAE_FUNCTIONS_PREPARER=/absolute/path/to/konae-functions-prepare \
+KONAE_FUNCTIONS_WASM_CACHE="$APP_DIR/.konae/wasm-cache" \
 KONAE_FUNCTIONS_DEVELOPMENT=1 \
 bun "$KONAE_REPO/scripts/konae.ts" dev --dir "$APP_DIR"
 ```
 
-The runner and Kernel must come from the same build. Local development mode uses RSS polling and does not apply Linux cgroup, identity, Landlock or seccomp isolation. On a deployment, the operator configures `KONAE_FUNCTIONS_RUNNER` and a writable delegated cgroup v2 subtree through `KONAE_FUNCTIONS_CGROUP`, with the separate worker UID/GID and Linux namespaces described in [Operate an installation](./operate.md#typescript-function-workers). Never use development mode as the deployment boundary. The editor preview does not execute functions.
+Use the runner, preparer and Kernel from the same build. StarlingMonkey is the default. To serve with deno_core, set `KONAE_FUNCTIONS_RUNNER_KIND=deno` and point `KONAE_FUNCTIONS_RUNNER` at the deno binary. When a preparer is installed, both runners use its initialization check in the Validation Gate, in `konae dev` and at publish. A standalone deno installation without the helper can serve functions. Its candidate check reports preparation as unchecked.
 
-The runner exposes `DOMException`, `Event`, `EventTarget`, `CustomEvent`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `ReadableStream`, `WritableStream`, `TransformStream`, `AbortController`, `AbortSignal`, `Blob`, `File`, `Headers`, `FormData`, `Request`, `Response`, `structuredClone`, `queueMicrotask`, `console` and standard JavaScript built-ins. It provides no Web Crypto, network `fetch`, timers, `AbortSignal.timeout()`, `performance.now()` or Cache API. The Kernel owns response framing. A function can return a bounded UTF-8 response stream. Hono routing and ETag with a supplied digest work. Hono streaming helpers that set framing headers need adaptation.
+Local development uses RSS polling. For production worker isolation and requirements for each runner, see [Operate an installation](./operate.md#typescript-function-workers). The editor preview does not execute functions.
 
-A function's top-level code runs during the build. Each request starts from the same snapshot. Read the clock inside `handle` for request time and use Server Actions for durable state. The Kernel can stop execution at its deadline without delivering an abort event to the handler.
+Functions expose the Web Request and Response APIs, request-scoped timers and supported Web Crypto operations. WebAssembly and the Cache API are absent. Calling `fetch` or `AbortSignal.timeout()` refuses with `unsupported_runtime_api`. Use a call action for outbound HTTP. Return a Web `Response` or the runner refuses with `invalid_response`. The Kernel owns response framing. Hono routing and ETag with a supplied digest work. Hono streaming helpers that set framing headers need adaptation.
+
+Top-level clock reads use the Unix epoch. Read the clock inside `handle` for request time and use Server Actions for durable state. The Kernel cancels timed-out requests at the runner boundary. The handler's `request.signal` is a Web signal, but Kernel cancellation does not dispatch an abort event to it.
 
 Once `konae dev` reports the app URL, set `APP_URL` to that exact printed URL, including its local hostname, then call the mount:
 
@@ -216,9 +224,9 @@ The Kernel runs a POST action invocation in a SQLite transaction. It commits act
 
 The Kernel authenticates each retry before looking up its receipt. An identical retry returns `409 idempotency_replay`, even when the original response body remains in an older receipt. New receipts keep the request fingerprint and a fixed marker instead of the response body. The existing receipt table stays unchanged, so an app export can still open on this Kernel. A caller must read current state through an authorized request.
 
-For POST functions with actions, consume the complete request body before the first `context.actions.call`. If the handler calls an action early, the invocation fails even if it catches the rejected Promise. Each request evaluates the bundle in a fresh V8 isolate, even when the Kernel reuses the worker process. Store durable state through Server Actions. `Request.signal` lets a handler cooperatively stop after cancellation. If JavaScript is still blocked, the runner terminates the isolate. The supervisor can kill a worker that fails to respond.
+For POST functions with actions, consume the complete request body before the first `context.actions.call`. If the handler calls an action early, the invocation fails even if it catches the rejected Promise. Each request gets fresh JavaScript state, even when the Kernel reuses the worker process. Store durable state through Server Actions. The supervisor can kill a worker that fails to respond to cancellation.
 
-A bundle may export `shutdown(signal)` to release resources when the worker retires. The runner calls it in the last completed isolate, if one is still available. The hook has a short deadline and may not run after a crash, memory exhaustion or a blocked loop. It does not roll back a transaction that already committed.
+A bundle may export `shutdown(signal)` to release resources when the worker retires. The runner calls it in the last completed request's JavaScript state, when that state is still available. The hook has a short deadline and may not run after a crash, memory exhaustion or a blocked loop. It does not roll back a transaction that already committed.
 
 ## Separate limits
 
@@ -242,4 +250,4 @@ Read [Take the app elsewhere](./guides/take-the-app-elsewhere.md) for the full e
 
 The app author chooses exact npm dependency versions. The builder bundles installed packages into ESM. The runtime does not resolve npm packages at request time. Packages that require Node builtins, native addons, host modules, network access, or unsupported Web APIs will not work just because npm can install them. Hono is an optional framework dependency, not a runtime requirement.
 
-The Kernel returns a refusal if Functions are off, a dependency module is off, the runner is unavailable, the IPC pair does not match, the handler calls an undeclared action, the action is refused, the request exceeds a limit, or the execution deadline expires. If a handler reaches its deadline, the Kernel kills and reaps its worker before releasing the app slot. A published app still starts when `KONAE_FUNCTIONS_RUNNER` is unset, but function requests return `503 function.runner-unavailable`; the Kernel logs the variable to set. Functions need Linux cgroup v2 with writable `memory` and `pids` controllers, a separate worker UID/GID, and the capabilities and namespaces documented in [Operate an installation](./operate.md#typescript-function-workers). `Request.signal` and `shutdown` let application code respond to some cancellations, but neither grants work after the request ends. Functions remain experimental; see [the architecture record](./adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md) for the implementation boundary and evidence status.
+The Kernel returns a refusal if Functions are off, a dependency module is off, the runner is unavailable, the IPC pair does not match, the handler calls an undeclared action, the action is refused, the request exceeds a limit, or the execution deadline expires. If a worker fails to acknowledge cancellation, the Kernel kills and reaps it before releasing the app slot. A function app needs a matching Wasm runner, preparer and cache on the default path. The product images configure these. For deno_core, select it explicitly and follow its cgroup requirements. [Operate an installation](./operate.md#typescript-function-workers) lists both policies. Functions remain experimental; see [the architecture record](./adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md) for the implementation boundary and evidence status.

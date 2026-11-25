@@ -69,6 +69,6 @@ RUN chmod 755 /usr/local/bin/konae-entrypoint
 # The Kernel binds all interfaces here, so it refuses the local development
 # key unless the compose file opts in.
 # An empty KONAE_EDITOR_DIR serves no editor.
-ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data KONAE_EDITOR_DIR=/usr/local/share/konae/editor KONAE_FUNCTIONS_UID=10002 KONAE_FUNCTIONS_GID=10002
+ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data KONAE_EDITOR_DIR=/usr/local/share/konae/editor KONAE_FUNCTIONS_PREPARER=/usr/local/lib/konae/functions-prepare KONAE_FUNCTIONS_UID=10002 KONAE_FUNCTIONS_GID=10002
 EXPOSE 8787
 ENTRYPOINT ["/usr/local/bin/konae-entrypoint"]

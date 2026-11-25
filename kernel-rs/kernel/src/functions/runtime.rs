@@ -17,6 +17,8 @@ use konae_functions_executor::{
 use serde_json::Value;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
+use super::preparation::{self, PreparedPin};
+
 const INSTANCES: usize = 8;
 const ADMISSION: usize = 64;
 const SHUTDOWN: Duration = Duration::from_millis(10);
@@ -52,7 +54,8 @@ pub struct Runtime {
     allocations: Arc<Semaphore>,
     app_slots: usize,
     protocol_failure: Arc<AtomicBool>,
-    prepared_pins: Mutex<HashMap<String, crate::functions::PreparedPin>>,
+    preparation_enabled: bool,
+    prepared_pins: Mutex<HashMap<String, Option<Arc<Mutex<PreparedPin>>>>>,
 }
 
 struct Reservation(Arc<Slot>);
@@ -86,6 +89,7 @@ pub struct Lease {
     active_limit: Arc<Semaphore>,
     _admission: Option<OwnedSemaphorePermit>,
     config: Config,
+    prepared_pin: Option<Arc<Mutex<PreparedPin>>>,
     progress: Arc<Mutex<RunProgress>>,
     protocol_failure: Arc<AtomicBool>,
 }
@@ -101,32 +105,20 @@ impl Runtime {
         deadline: Duration,
         idle: Duration,
     ) -> Self {
-        Self::new(
+        let wasm = wasm_selected();
+        let mut runtime = Self::new(
             Some(Config {
                 executable,
                 policy,
-                wasm: std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm"),
+                wasm,
             }),
             deadline,
             idle,
-        )
-    }
-
-    fn configured_wasm(
-        executable: PathBuf,
-        policy: MemoryPolicy,
-        deadline: Duration,
-        idle: Duration,
-    ) -> Self {
-        Self::new(
-            Some(Config {
-                executable,
-                policy,
-                wasm: true,
-            }),
-            deadline,
-            idle,
-        )
+        );
+        runtime.preparation_enabled = wasm
+            && std::env::var_os("KONAE_TEST_FUNCTION_WORKER").is_some()
+            || std::env::var_os("KONAE_FUNCTIONS_PREPARER").is_some();
+        runtime
     }
 
     fn new(config: Option<Config>, deadline: Duration, idle: Duration) -> Self {
@@ -149,15 +141,31 @@ impl Runtime {
             ))),
             app_slots: env_capacity("KONAE_FUNCTIONS_APP_SLOTS", 2),
             protocol_failure: Arc::new(AtomicBool::new(false)),
+            preparation_enabled: false,
             prepared_pins: Mutex::new(HashMap::new()),
         }
     }
 
-    pub(crate) fn retain_prepared(&self, reference: &str, paths: &BTreeMap<String, PathBuf>) {
+    pub(crate) fn has_runner(&self) -> bool {
+        self.config.is_some()
+    }
+
+    pub(super) fn preparation_enabled(&self) -> bool {
+        self.preparation_enabled
+    }
+
+    pub(crate) fn retain_prepared(&self, reference: &str, pin: PreparedPin) {
         self.prepared_pins
             .lock()
             .unwrap()
-            .insert(reference.to_owned(), crate::functions::pin_prepared(paths));
+            .insert(reference.to_owned(), Some(Arc::new(Mutex::new(pin))));
+    }
+
+    pub(crate) fn block_preparation(&self, reference: &str) {
+        self.prepared_pins
+            .lock()
+            .unwrap()
+            .insert(reference.to_owned(), None);
     }
 
     /// Test diagnostics: every slot with its pins and whether a worker is present, plus permits.
@@ -229,6 +237,12 @@ impl Runtime {
         if self.protocol_failure.load(Ordering::SeqCst) {
             return Err("worker_protocol_mismatch".into());
         }
+        let app = key.split(':').next().unwrap_or(&key);
+        let prepared_pin = match self.prepared_pins.lock().unwrap().get(app) {
+            Some(None) => return Err("function.runner-unavailable".into()),
+            Some(Some(pin)) => Some(pin.clone()),
+            None => None,
+        };
         let reservation = self.reserve(key, budget).await?;
         self.start_reaper();
         let worker = wait(budget, reservation.0.worker.clone().lock_owned()).await?;
@@ -240,6 +254,7 @@ impl Runtime {
             active_limit: self.active.clone(),
             _admission: Some(admission),
             config,
+            prepared_pin,
             progress: Arc::new(Mutex::new(RunProgress::default())),
             protocol_failure: self.protocol_failure.clone(),
         })
@@ -254,7 +269,7 @@ impl Runtime {
                 .keys()
                 .filter(|key| {
                     key.strip_prefix(&prefix)
-                        .and_then(|key| key.split(':').nth(1))
+                        .and_then(|key| key.split_once(':').map(|(version, _)| version))
                         .is_some_and(|installed| installed != version)
                 })
                 .cloned()
@@ -499,7 +514,9 @@ impl Lease {
                 let spawned = if self.config.wasm {
                     Worker::spawn_prepared_with_policy(
                         &self.config.executable,
-                        crate::functions::prepared_bundles(bundles)?,
+                        preparation::configuration()?
+                            .ok_or_else(|| anyhow::anyhow!("The Wasm preparer is missing"))?
+                            .prepared_bundles(bundles, self.prepared_pin.clone())?,
                         budget,
                         WorkerLimits::default(),
                         self.config.policy.clone(),
@@ -620,13 +637,28 @@ async fn wait<T>(budget: &Budget, future: impl Future<Output = T>) -> Result<T, 
     }
 }
 
+pub(super) fn wasm_selected() -> bool {
+    std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() != Ok("deno")
+}
+
+pub(super) fn runner_path(wasm: bool) -> Option<PathBuf> {
+    let packaged = PathBuf::from(if wasm {
+        "/usr/local/lib/konae/functions-runner-wasm"
+    } else {
+        "/usr/local/lib/konae/functions-runner-deno"
+    });
+    std::env::var_os("KONAE_FUNCTIONS_RUNNER")
+        .map(PathBuf::from)
+        .or_else(|| packaged.is_file().then_some(packaged))
+}
+
 mod kernel_environment {
     use super::*;
 
     pub(super) fn runner_kind(kind: Option<&str>) -> anyhow::Result<bool> {
         match kind {
-            Some("wasm") => Ok(true),
-            Some("deno") | None => Ok(false),
+            Some("wasm") | None => Ok(true),
+            Some("deno") => Ok(false),
             Some(_) => anyhow::bail!("KONAE_FUNCTIONS_RUNNER_KIND must be deno or wasm"),
         }
     }
@@ -638,25 +670,24 @@ mod kernel_environment {
             Err(error) => return Err(error.into()),
         };
         let wasm = runner_kind(kind.as_deref())?;
-        let Some(executable) = std::env::var_os("KONAE_FUNCTIONS_RUNNER") else {
-            anyhow::ensure!(
-                !wasm,
-                "KONAE_FUNCTIONS_RUNNER is required when KONAE_FUNCTIONS_RUNNER_KIND=wasm"
-            );
-            return Ok(Runtime::disabled());
+        let Some(executable) = runner_path(wasm) else {
+            let mut runtime = Runtime::disabled();
+            runtime.preparation_enabled = true;
+            return Ok(runtime);
         };
-        let executable = PathBuf::from(executable);
-        anyhow::ensure!(
-            executable.is_absolute() && executable.is_file(),
-            "KONAE_FUNCTIONS_RUNNER must name an absolute executable file"
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
+        if !wasm {
             anyhow::ensure!(
-                executable.metadata()?.permissions().mode() & 0o111 != 0,
-                "KONAE_FUNCTIONS_RUNNER must be executable"
+                executable.is_absolute() && executable.is_file(),
+                "KONAE_FUNCTIONS_RUNNER must name an absolute executable file"
             );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                anyhow::ensure!(
+                    executable.metadata()?.permissions().mode() & 0o111 != 0,
+                    "KONAE_FUNCTIONS_RUNNER must be executable"
+                );
+            }
         }
         let development = match std::env::var("KONAE_FUNCTIONS_DEVELOPMENT") {
             Ok(value) if value == "1" => true,
@@ -673,61 +704,6 @@ mod kernel_environment {
             );
         }
         let policy = if wasm {
-            let preparer = std::env::var_os("KONAE_FUNCTIONS_PREPARER")
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "KONAE_FUNCTIONS_PREPARER must name the packaged Wasm preparation helper"
-                    )
-                })?;
-            let cache = std::env::var_os("KONAE_FUNCTIONS_WASM_CACHE")
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "KONAE_FUNCTIONS_WASM_CACHE must name the operator-owned Wasm cache"
-                    )
-                })?;
-            anyhow::ensure!(
-                preparer.is_absolute() && preparer.is_file(),
-                "KONAE_FUNCTIONS_PREPARER must name an absolute executable file"
-            );
-            anyhow::ensure!(
-                cache.is_absolute(),
-                "KONAE_FUNCTIONS_WASM_CACHE must be absolute"
-            );
-            let cache_metadata = std::fs::symlink_metadata(&cache).map_err(|_| {
-                anyhow::anyhow!(
-                    "KONAE_FUNCTIONS_WASM_CACHE must be an existing operator-owned directory"
-                )
-            })?;
-            anyhow::ensure!(
-                cache_metadata.is_dir(),
-                "KONAE_FUNCTIONS_WASM_CACHE must be an existing directory, not a symlink"
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::{MetadataExt, PermissionsExt};
-                anyhow::ensure!(
-                    cache_metadata.uid() == unsafe { libc::geteuid() }
-                        && cache_metadata.permissions().mode() & 0o022 == 0,
-                    "KONAE_FUNCTIONS_WASM_CACHE must be owned by the Kernel user and not writable by group or others"
-                );
-            }
-            if !development {
-                #[cfg(not(target_os = "linux"))]
-                anyhow::bail!("the Wasm production worker policy requires Linux");
-                #[cfg(target_os = "linux")]
-                konae_functions_executor::validate_linux_worker_identity()
-                    .map_err(|_| anyhow::anyhow!("KONAE_FUNCTIONS_UID and KONAE_FUNCTIONS_GID must name a separate non-root worker identity, and the Kernel must hold CAP_KILL, CAP_SETUID and CAP_SETGID"))?;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                anyhow::ensure!(
-                    preparer.metadata()?.permissions().mode() & 0o111 != 0,
-                    "KONAE_FUNCTIONS_PREPARER must be executable"
-                );
-            }
             if development {
                 MemoryPolicy::DevelopmentPolling
             } else {
@@ -753,11 +729,17 @@ mod kernel_environment {
         };
         let deadline = env_duration("KONAE_FUNCTIONS_TIMEOUT_MS", 1000)?;
         let idle = env_duration("KONAE_FUNCTIONS_IDLE_MS", 60_000)?;
-        Ok(if wasm {
-            Runtime::configured_wasm(executable, policy, deadline, idle)
-        } else {
-            Runtime::configured(executable, policy, deadline, idle)
-        })
+        let mut runtime = Runtime::new(
+            Some(Config {
+                executable,
+                policy,
+                wasm,
+            }),
+            deadline,
+            idle,
+        );
+        runtime.preparation_enabled = true;
+        Ok(runtime)
     }
 
     fn env_duration(name: &str, default: u64) -> anyhow::Result<Duration> {
@@ -781,8 +763,8 @@ mod environment_tests {
     use super::kernel_environment::runner_kind;
 
     #[test]
-    fn runner_kind_defaults_to_deno_and_rejects_unknown_values() {
-        assert_eq!(runner_kind(None).unwrap(), false);
+    fn runner_kind_defaults_to_wasm_and_rejects_unknown_values() {
+        assert_eq!(runner_kind(None).unwrap(), true);
         assert_eq!(runner_kind(Some("deno")).unwrap(), false);
         assert_eq!(runner_kind(Some("wasm")).unwrap(), true);
         assert!(runner_kind(Some("other")).is_err());
@@ -792,6 +774,47 @@ mod environment_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn release_change_keeps_workers_for_the_installed_version() {
+        let runtime = runtime(Duration::from_secs(60));
+        let budget = Budget::new(Duration::from_secs(2));
+        let old = "app:build-a:digest-a";
+        let installed = "app:build-b:digest-b";
+        let neighbor = "neighbor:build-a:digest-a";
+        for key in [old, installed, neighbor] {
+            drop(runtime.lease(key.to_owned(), &budget).await.unwrap());
+        }
+        runtime.release_changed("app", "build-b").await;
+        let state = runtime.state.lock().unwrap();
+        assert!(!state.slots.contains_key(old));
+        assert!(state.slots.contains_key(installed));
+        assert!(state.slots.contains_key(neighbor));
+    }
+
+    #[tokio::test]
+    async fn a_refused_startup_release_blocks_only_that_app() {
+        let runtime = runtime(Duration::from_secs(60));
+        let budget = Budget::new(Duration::from_secs(2));
+        runtime.block_preparation("refused");
+        let refused = "refused:version:server-digest";
+        assert_eq!(
+            runtime
+                .lease(refused.into(), &budget)
+                .await
+                .err()
+                .as_deref(),
+            Some("function.runner-unavailable")
+        );
+        assert!(
+            runtime
+                .lease("other:version:server-digest".into(), &budget)
+                .await
+                .is_ok()
+        );
+        runtime.retain_prepared("refused", PreparedPin::default());
+        assert!(runtime.lease(refused.into(), &budget).await.is_ok());
+    }
 
     fn runtime(idle: Duration) -> Arc<Runtime> {
         Arc::new(Runtime::configured(
@@ -1120,11 +1143,11 @@ export function handle(request, context) {
         ))
     }
     fn prepare_fixture(fixture: &Fixture) {
-        if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() != Ok("wasm") {
+        if !wasm_selected() {
             return;
         }
         let source = std::fs::read_to_string(fixture.0.join("example.mjs")).unwrap();
-        crate::functions::prepare_bundles(&BTreeMap::from([("example".into(), source)])).unwrap();
+        preparation::prepare_test_bundles(&BTreeMap::from([("example".into(), source)])).unwrap();
     }
     async fn run(
         runtime: &Arc<Runtime>,
@@ -1167,18 +1190,19 @@ export function handle(request, context) {
         let fixture = Fixture::new();
         prepare_fixture(&fixture);
         let runtime = real_runtime(Duration::from_millis(200));
-        let (first, pid) = run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
+        let (first, pid) = run(&runtime, "app:v1:server-digest-a", &fixture.0, "alice", "").await;
         let response = first.output.unwrap();
         assert_eq!(response.body, "1:alice");
         assert!(first.cold);
         let pid = pid.unwrap();
-        let (second, second_pid) = run(&runtime, "app:example:v1", &fixture.0, "bob", "").await;
+        let (second, second_pid) =
+            run(&runtime, "app:v1:server-digest-a", &fixture.0, "bob", "").await;
         assert_eq!(second.output.unwrap().body, "1:bob");
         assert!(!second.cold);
         assert_eq!(second_pid, Some(pid));
         let (spun, spin_pid) = run_with_budget(
             &runtime,
-            "app:example:v1",
+            "app:v1:server-digest-a",
             &fixture.0,
             "alice",
             "spin",
@@ -1191,11 +1215,17 @@ export function handle(request, context) {
         );
         assert_eq!(spin_pid, Some(pid));
         let (after_spin, after_spin_pid) =
-            run(&runtime, "app:example:v1", &fixture.0, "carol", "").await;
+            run(&runtime, "app:v1:server-digest-a", &fixture.0, "carol", "").await;
         assert_eq!(after_spin.output.unwrap().body, "1:carol");
         assert_eq!(after_spin_pid, Some(pid));
-        let (failed, failed_pid) =
-            run(&runtime, "app:example:v1", &fixture.0, "alice", "fail").await;
+        let (failed, failed_pid) = run(
+            &runtime,
+            "app:v1:server-digest-a",
+            &fixture.0,
+            "alice",
+            "fail",
+        )
+        .await;
         let handler_failure =
             konae_functions_executor::error_code(failed.output.as_ref().unwrap_err());
         assert_eq!(handler_failure, "handler_error");
@@ -1206,7 +1236,7 @@ export function handle(request, context) {
         assert_eq!(failed_pid, Some(pid));
         assert!(alive(pid));
         let (recovered, recovered_pid) =
-            run(&runtime, "app:example:v1", &fixture.0, "alice", "").await;
+            run(&runtime, "app:v1:server-digest-a", &fixture.0, "alice", "").await;
         assert!(!recovered.cold);
         assert_eq!(recovered.output.unwrap().body, "1:alice");
         assert_eq!(recovered_pid, Some(pid));
@@ -1237,7 +1267,8 @@ export function handle(request, context) {
             pids.push(pid.unwrap());
         }
         assert!(pids.iter().all(|pid| alive(*pid)));
-        let (result, third_pid) = run(&runtime, "app:example:v2", &fixture.0, "bob", "").await;
+        let (result, third_pid) =
+            run(&runtime, "app:v2:server-digest-b", &fixture.0, "bob", "").await;
         assert!(result.cold);
         assert_eq!(result.output.unwrap().body, "1:bob");
         assert!(!alive(pids[0]));

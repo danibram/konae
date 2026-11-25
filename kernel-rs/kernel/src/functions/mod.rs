@@ -9,10 +9,8 @@ pub(crate) mod trace;
 mod wasm_validation;
 
 pub use manifest_artifact::*;
-pub use preparation::{
-    PreparedPin, check_preparation, pin_prepared, prepare_artifact, prepare_bundles,
-    prepared_bundles,
-};
+pub(crate) use preparation::ConfigurationError;
+pub use preparation::{PreparedPin, check_preparation, prepare_artifact};
 
 #[cfg(test)]
 pub(crate) use manifest_artifact::tests;

@@ -59,25 +59,37 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "starling-runner")]
 fn native_target() -> Result<()> {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(b"epoch-interruption;pooling;256MiB-memory;component-model");
-    #[cfg(target_os = "macos")]
-    digest.update(b";native-unwind-info=off");
-    if cfg!(target_os = "linux") {
-        digest.update(b";memory-init-cow=false");
-    }
-    digest.update(std::env::consts::ARCH.as_bytes());
-    digest.update(std::env::consts::OS.as_bytes());
-    digest.update(env!("CARGO_PKG_VERSION").as_bytes());
+    let engine = wasmtime::Engine::new(&engine_config::starling())?;
     println!(
         "{}",
         serde_json::json!({
             "wasmtime": "38.0.4",
-            "targetFingerprint": format!("{:x}", digest.finalize()),
+            "targetFingerprint": native_fingerprint(&engine),
         })
     );
     Ok(())
+}
+
+#[cfg(feature = "starling-runner")]
+fn native_fingerprint(engine: &wasmtime::Engine) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hash = DefaultHasher::new();
+    engine.precompile_compatibility_hash().hash(&mut hash);
+    format!("{:016x}", hash.finish())
+}
+
+#[cfg(all(test, feature = "starling-runner"))]
+#[test]
+fn native_fingerprint_tracks_engine_configuration() {
+    let mut config = engine_config::starling();
+    let first = wasmtime::Engine::new(&config).unwrap();
+    assert_eq!(
+        native_fingerprint(&first),
+        native_fingerprint(&wasmtime::Engine::new(&config).unwrap())
+    );
+    config.epoch_interruption(false);
+    let second = wasmtime::Engine::new(&config).unwrap();
+    assert_ne!(native_fingerprint(&first), native_fingerprint(&second));
 }
 
 #[cfg(feature = "starling-runner")]
@@ -95,7 +107,9 @@ fn compile_component(output: &std::path::Path) -> Result<()> {
     let engine = wasmtime::Engine::new(&engine_config::starling())?;
     let component = wasmtime::component::Component::new(&engine, &bytes)?;
     let native = component.serialize()?;
+    use std::os::unix::fs::OpenOptionsExt;
     let mut file = std::fs::OpenOptions::new()
+        .mode(0o600)
         .write(true)
         .create_new(true)
         .open(output)?;

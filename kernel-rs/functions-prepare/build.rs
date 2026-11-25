@@ -103,7 +103,7 @@ fn main() -> Result<()> {
         bail!("Could not bundle the pinned Web API adapter");
     }
     adapter_js.insert_str(0, "import * as web from './web.mjs';\n");
-    adapter_js.push_str("\nObject.assign(globalThis, { AbortController: web.AbortController, AbortSignal: web.AbortSignal, Blob: web.Blob, DOMException: web.DOMException, File: web.File, FormData: web.FormData, Headers: web.Headers, ReadableStream: web.ReadableStream, Request: web.Request, Response: web.Response });\n");
+    adapter_js.push_str("\nrestrictAbortSignalTimeout(web.AbortSignal);\nObject.assign(globalThis, { AbortController: web.AbortController, AbortSignal: web.AbortSignal, Blob: web.Blob, DOMException: web.DOMException, File: web.File, FormData: web.FormData, Headers: web.Headers, ReadableStream: web.ReadableStream, Request: web.Request, Response: web.Response });\n");
     fs::write(&adapter_bundle, adapter_js)?;
     for name in [
         "starling-entry.js",
