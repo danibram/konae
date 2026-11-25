@@ -2,7 +2,7 @@
 
 Use the [runtime contract](../../../docs/architecture/functions-wasm-runtime-contract.md) for author behavior, diagnostic bounds and measurements. Compare the IPC/2 spike at `76d98e32` with a matched IPC/3 Kernel and runner at `0e3bf8e9`. Test production with the IPC/3 StarlingMonkey runner and Kernel from the same build. A mixed pair only verifies ABI mismatch handling.
 
-The test names below identify cases to add or extend. The expected column gives the production result. A case can continue to fail on the frozen spike.
+The table records the cases proposed during the IPC/2 spike. For the current app contract, read [Server functions](../../../docs/functions.md). The [Functions CI workflow](../../../.github/workflows/functions-runner.yml) runs the preparer, both worker suites, and Linux export checks with the current IPC/3 binaries.
 
 | Test | Input and expected result | Baseline and implementation |
 | --- | --- | --- |

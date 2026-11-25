@@ -59,7 +59,7 @@ bun run dev:local
 
 Local data stays under `data/kernel-local`, and `KONAE_DATA_DIR` moves it. Nothing sends real email locally. Account links and invitations land in `data/kernel-local/mailbox.jsonl`, and an app invitation also hands its link to the owner who sent it.
 
-`scripts/dev-compose.sh up --build` builds the native functions runner once, then starts the complete stack with a gateway and S3 store at [http://app.localhost:8080](http://app.localhost:8080). [Operate an installation](./docs/operate.md) covers the stack, environment variables, copies, restores and email.
+`scripts/dev-compose.sh up --build` builds both function runners and the Wasm preparer, then starts the stack with a gateway and S3 store at [http://app.localhost:8080](http://app.localhost:8080). [Operate an installation](./docs/operate.md) covers the stack, environment variables, copies, restores, and email.
 
 ## Run it in Docker
 

@@ -8,10 +8,11 @@ Turn on `functions` in the app's module settings. A function with `access: "auth
 
 An anonymous function also requires a public Deployment. A private Deployment requires an app user session, even for a function whose `access` is `anonymous`.
 
-For example, an anonymous function with no action calls needs only this local module setting:
+For an anonymous function with no action calls, make the local app public and turn on `functions`:
 
 ```json
 {
+  "visibility": "public",
   "modules": {
     "functions": { "on": true }
   }
@@ -55,7 +56,7 @@ The no-framework example needs no npm dependencies. The POST example uses only p
 { "dependencies": { "hono": "4.13.19" } }
 ```
 
-The Hono version above matches the package in the runtime fixture. Choose an exact version supported by your app, install it, then commit the package lock. The bundle builder targets browser-platform ESM and rejects `node:` imports, host modules, URL imports, dynamic imports the builder cannot bundle, and packages not listed in dependencies. This is not Node.js or Deno. Do not assume `node:*`, unrestricted `fetch`, or APIs that the Web runtime does not provide. Hono works as an optional bundled package.
+The Hono version above matches the runtime fixture. Install your exact dependency versions and commit the package lock. The builder targets browser-platform ESM. It refuses Node.js modules outside the supported subset below, host modules, URL imports, dynamic imports it cannot bundle, and undeclared packages.
 
 The context is supplied on every call. `context.actor.userId` is the account ID authenticated when the Kernel admitted the request, or `null`; it is always present. That actor stays fixed for the invocation. `context.actions.call(name, input)` checks the action's access and bindings against that actor. The handler cannot pass an actor ID, SQL, cookies, or a session credential to that operation. Only `Accept` and `Content-Type` request headers reach the handler. Import `actions` and `FunctionContext` from `konae:actions` to type calls from the function's `functions.json` allowlist.
 
@@ -175,20 +176,20 @@ Run installation commands from the folder containing `konae.json`. Use `npm ci -
 
 ```sh
 konae build --dir .
-mkdir -p .konae/wasm-cache
+install -d -m 0700 .konae/wasm-cache
 KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner-wasm \
 KONAE_FUNCTIONS_PREPARER=/absolute/path/to/konae-functions-prepare \
 KONAE_FUNCTIONS_WASM_CACHE="$PWD/.konae/wasm-cache" \
 KONAE_FUNCTIONS_DEVELOPMENT=1 konae dev --dir .
 ```
 
-From a Konae checkout, use its CLI script and Kernel binary as a pair. Build the Kernel from that checkout before this command:
+From a Konae checkout, use its CLI script and Kernel binary as a pair. Build the Kernel from that checkout before running these commands. Follow the [Wasm runner job](../.github/workflows/functions-runner.yml) to install the pinned preparation tools and build the preparer. Build the runner with `cargo build --release --locked --manifest-path kernel-rs/functions-runner-wasm/Cargo.toml`.
 
 ```sh
 KONAE_REPO=/path/to/konae
 APP_DIR=/path/to/my-app
 bun "$KONAE_REPO/scripts/konae.ts" build --dir "$APP_DIR"
-mkdir -p "$APP_DIR/.konae/wasm-cache"
+install -d -m 0700 "$APP_DIR/.konae/wasm-cache"
 KONAE_KERNEL_BIN="$KONAE_REPO/kernel-rs/target/debug/kernel" \
 KONAE_FUNCTIONS_RUNNER=/absolute/path/to/konae-functions-runner-wasm \
 KONAE_FUNCTIONS_PREPARER=/absolute/path/to/konae-functions-prepare \

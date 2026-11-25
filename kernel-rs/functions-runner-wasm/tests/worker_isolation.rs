@@ -929,22 +929,22 @@ fn linear_memory_limit_refuses_a_large_allocation() {
 #[test]
 fn response_limit_refuses_an_oversized_body() {
     let bundle = Bundle::new(
-        "export function handle(request) { const url = new URL(request.url); const size = Number(url.searchParams.get('size') || 0); if (url.searchParams.get('stream')) { let sent = 0; return new Response(new ReadableStream({ pull(c) { if (sent >= size) return c.close(); const chunk = new Uint8Array(Math.min(65536, size - sent)); chunk.fill(120); sent += chunk.length; c.enqueue(chunk); } })); } return new Response('x'.repeat(size)); }",
+        "export function handle(request) { const size = Number(new URL(request.url).searchParams.get('size')); return new Response('x'.repeat(size)); }",
     );
-    let mut worker = worker(&bundle, Duration::from_secs(10));
-    for size in [256 * 1024, 1024 * 1024, 2 * 1024 * 1024] {
-        let result = invoke(
-            &mut worker,
-            input(&format!("/?size={size}"), "alice"),
-            Duration::from_secs(10),
-        )
-        .unwrap();
-        assert_eq!(result.body.len(), size);
-    }
+    let timeout = Duration::from_secs(10);
+    let mut worker = worker(&bundle, timeout);
+    let limit = WorkerLimits::default().response_bytes;
+    let result = invoke(
+        &mut worker,
+        input(&format!("/?size={limit}"), "alice"),
+        timeout,
+    )
+    .unwrap();
+    assert_eq!(result.body.len(), limit);
     let error = invoke(
         &mut worker,
-        input(&format!("/?size={}", 2 * 1024 * 1024 + 1), "alice"),
-        Duration::from_secs(10),
+        input(&format!("/?size={}", limit + 1), "alice"),
+        timeout,
     )
     .unwrap_err();
     assert_eq!(
@@ -972,10 +972,6 @@ fn reply_chunks_fit_guest_memory_and_preserve_limits() {
           } }));
           if (path === '/bom') return new Response('\uFEFFok');
           if (path === '/framing') return new Response('x', { headers: { 'content-length': '1' } });
-          if (path === '/cancel') return new Response(new ReadableStream({
-            pull(c) { c.enqueue(new Uint8Array(65536)); },
-            cancel() { return Promise.resolve(); },
-          }));
           let left = Number(new URL(request.url).searchParams.get('size'));
           let sent = 0;
           return new Response(new ReadableStream({

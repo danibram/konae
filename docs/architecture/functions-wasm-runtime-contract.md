@@ -2,7 +2,7 @@
 
 Konae will use StarlingMonkey for portable Functions. An export carries the built function with its app accounts, data and rules. The destination Kernel runs that artifact without evaluating the app's source again during preparation. It still authorizes each request and Server Action against the app's current configuration. See [Functions](../functions.md), [ADR-0018](../adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md) and [ADR-0019](../adr/0019-functions-stream-request-bodies-with-bounded-ipc.md).
 
-This document specifies the production behavior. The [parity list](../../kernel-rs/functions-runner-wasm/tests/PARITY.md) gives the inputs and expected outputs. The measured baselines are the StarlingMonkey IPC/2 spike at `76d98e32` and the deno_core IPC/3 runner at `0e3bf8e9`. The V8 startup snapshot contains the runtime bootstrap. The Wizer snapshot contains the evaluated app. The [spike report](./functions-wasm-spike.md#build-and-measurement-commands) pins the StarlingMonkey engine and its build tools.
+This document records the parity investigation. Its measured baselines are the StarlingMonkey IPC/2 spike at `76d98e32` and the deno_core IPC/3 runner at `0e3bf8e9`. The V8 startup snapshot contains the runtime bootstrap. The Wizer snapshot contains the evaluated app. For current behavior, read [Server functions](../functions.md) and [the runner decision](../adr/0020-wasm-functions-runner.md). The [parity notes](../../kernel-rs/functions-runner-wasm/tests/PARITY.md) link to the current checks.
 
 ## Module initialization and time
 
