@@ -1,11 +1,11 @@
 use konae_functions_executor::{
-    Budget, MemoryPolicy, Worker,
+    Budget, MemoryPolicy, RequestBody, RequestBodyChunk, Worker,
     protocol::{Input, WorkerLimits},
 };
 use serde_json::{Value, json};
 #[cfg(target_os = "linux")]
 use std::thread;
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 #[path = "fixtures/worker.rs"]
 mod fixtures;
@@ -335,6 +335,37 @@ fn v8_watchdog_reuses_a_synchronized_worker_after_a_loop() {
         json!({"alive": true})
     );
     assert_eq!(worker.pid(), Some(pid));
+}
+
+#[test]
+fn get_does_not_poll_the_request_body() {
+    struct UnexpectedBody;
+
+    impl RequestBody for UnexpectedBody {
+        fn read_chunk(&self, _: usize) -> Result<RequestBodyChunk, String> {
+            panic!("GET requested a body chunk");
+        }
+
+        fn complete(&self) -> bool {
+            true
+        }
+    }
+
+    let bundles = bundle(
+        "export async function handle(request) { await Promise.resolve(); return Response.json({ body: request.body }); }",
+    );
+    let timeout = Duration::from_secs(2);
+    let mut worker = worker(&bundles, timeout);
+    let reply = worker
+        .invoke_with_body(
+            "orders",
+            input("/", "alice"),
+            Arc::new(UnexpectedBody),
+            &Budget::new(timeout),
+            &mut |_, _| Err("forbidden".into()),
+        )
+        .unwrap();
+    assert_eq!(reply.body, r#"{"body":null}"#);
 }
 
 #[test]

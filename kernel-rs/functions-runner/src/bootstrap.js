@@ -199,7 +199,7 @@
     async invoke(handler, input, capability, responseLimit) {
       requestActive = true;
       let bodySequence = 0;
-      const body = new ReadableStream({
+      const body = input.method === 'POST' ? new ReadableStream({
         pull(stream) {
           const chunk = bodyRead(capability, ++bodySequence, 64 * 1024);
           const bytes = new Uint8Array(chunk.bytes);
@@ -207,11 +207,11 @@
           if (chunk.done) stream.close();
         },
         cancel() {},
-      });
+      }) : undefined;
       const request = new requestClass(input.url, {
         method: input.method,
         headers: input.headers,
-        ...(input.method === 'POST' ? { body } : {}),
+        body,
       });
       const context = {
         actor: Object.freeze({ userId: input.actor || null }),
