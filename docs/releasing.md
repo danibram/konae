@@ -27,7 +27,7 @@ A published GitHub Release carries the `kernel` binary and compiled `konae` CLI 
 
 The release workflow configures Linux binaries in `rust:1.91-bookworm` and macOS binaries on `macos-15` runners. Do not infer minimum operating-system support from those build settings; inspect and test each published artifact before stating its requirements. To check a download, run `sha256sum -c --ignore-missing SHA256SUMS` on Linux, or `shasum -a 256 -c --ignore-missing SHA256SUMS` on macOS, in the folder that holds the file. The binaries are not signed or notarized, so macOS may quarantine a file saved from a browser. `xattr -d com.apple.quarantine <file>` clears that, and `curl` and `gh release download` never set it.
 
-The published v0.8.0 release currently has the four Kernel binaries and `SHA256SUMS`, but no CLI assets. Build the CLI with `bun run scripts/build-konae-binary.ts` and copy its output to PATH. It downloads the Kernel binary matching its version and verifies it against `SHA256SUMS`; `KONAE_KERNEL_BIN` selects a local Kernel instead. Only macOS arm64 was verified for this CLI, and its binary requires macOS 13.0. The other configured CLI platforms and release workflow were not tested. [The CLI](./cli.md) covers installation and `dev`.
+The compiled CLI downloads the Kernel matching its version and verifies it against `SHA256SUMS`. Set `KONAE_KERNEL_BIN` to select a local Kernel build. [The CLI](./cli.md) covers installation and `dev`.
 
 ### How the workflow builds it
 

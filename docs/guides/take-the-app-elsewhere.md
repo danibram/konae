@@ -68,7 +68,7 @@ The `kernel` binary serves an exported folder as it is, with its `data/`. The ex
 
 ### Get the binary
 
-The published [v0.8.0 release](https://github.com/danibram/konae/releases/tag/v0.8.0) has Kernel binaries for macOS and Linux on arm64 and x64, plus `SHA256SUMS`. Check the release for the version in the exported folder's `konae.json` before using these download commands; availability varies by release. Replace `X.Y.Z` with that version and `darwin-arm64` with `darwin-x64`, `linux-x64` or `linux-arm64`.
+Find the Kernel binary and `SHA256SUMS` in the [release for the version in the exported folder's `konae.json`](https://github.com/danibram/konae/releases). Replace `X.Y.Z` with that version. Use `darwin-arm64`, `darwin-x64`, `linux-x64`, or `linux-arm64` for your platform.
 
 ```sh
 base=https://github.com/danibram/konae/releases/download/vX.Y.Z
