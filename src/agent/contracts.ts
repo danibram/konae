@@ -88,6 +88,7 @@ export type ValidationResult = {
   errors: ValidationError[];
   warnings?: ValidationWarning[];
   checked: ValidationStage[];
+  functionPreparation?: { status: "accepted" | "pending"; scratchRevision?: string; buildFingerprint?: string };
 };
 
 export interface CapsuleValidator {

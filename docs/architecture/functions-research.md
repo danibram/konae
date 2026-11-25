@@ -1,6 +1,6 @@
 # Functions research and current scope
 
-This note records what the investigation established and what remains outside implementation baseline `43decb081494dbfe854327dd1279f9b9c69f17df`. It does not describe isolated patches as shipped code. The [Functions guide](../functions.md) documents the current implementation behavior.
+This note records the first Functions investigation, starting at `43decb081494dbfe854327dd1279f9b9c69f17df`. References to the current branch describe the implementation at the time of that investigation. The [Functions guide](../functions.md) and [runner decision](../adr/0020-wasm-functions-runner.md) document the current implementation.
 
 ## Current branch and candidate work
 

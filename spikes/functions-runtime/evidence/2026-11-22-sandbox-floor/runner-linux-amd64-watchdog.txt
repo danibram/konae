@@ -1,0 +1,21 @@
+Linux 7.0.14-linuxkit x86_64 GNU/Linux
+    Finished `release` profile [optimized] target(s) in 2.98s
+     Running tests/worker_isolation.rs (/target/release/deps/worker_isolation-cf62c9695bace21f)
+
+running 1 test
+test v8_watchdog_reuses_a_synchronized_worker_after_a_loop ...
+thread 'v8_watchdog_reuses_a_synchronized_worker_after_a_loop' (28) panicked at tests/worker_isolation.rs:139:5:
+assertion `left == right` failed
+  left: None
+ right: Some(29)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    v8_watchdog_reuses_a_synchronized_worker_after_a_loop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.24s
+
+error: test failed, to rerun pass `--test worker_isolation`

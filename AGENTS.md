@@ -16,6 +16,8 @@ That sentence is the yardstick. A review that scores polish without it can call 
 
 A new capability belongs in the product only when the Validation Gate and the Kernel refuse it with the same words, and an export of the app folder can carry the app's accounts, data and rules. Anything else is operator work on the installation, not an app feature.
 
+Functions use a versioned Konae contract independent of the JavaScript engine. Put engine-specific preparation, APIs and lifecycle behavior behind runtime adapters. When an engine lacks required behavior, implement it in its adapter and run the same contract cases on every supported runner. An unresolved gap blocks compatibility for that contract; do not silently remove the feature, weaken permissions or require app code to branch on the engine. [ADR-0018](docs/adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md#adaptadores-y-conformidad) defines the boundary and acceptance checks.
+
 After any write through MCP or the editor, observe the effect through the same door before retrying or telling the owner it worked. `platform_guide` topic `rules` lists the read-back for each write tool. Decide what this credential may do from `session_inspect`'s `can` map, not from memory of login flags.
 
 `CONTEXT.md` holds the words. An owner has a Konae account; an app user has an account in one app; the app folder is the app.
@@ -31,6 +33,7 @@ After any write through MCP or the editor, observe the effect through the same d
 | Work when nobody is looking | `schedule` on a no-input mutation | External cron unless asked |
 | Owner-facing occurrence | `signal` on a mutation, or `kind: signal` | A side table only the agent reads |
 | Another service calls this app | Turn on `http` with `module_set`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| Code between an HTTP request and the rows | A server function in `functions.json`, with its actions allowlist | A Server Action with string-built SQL, or a call action |
 | This app calls another host | Turn on `calls` with `module_set`, then declare `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` | Each upload as public |

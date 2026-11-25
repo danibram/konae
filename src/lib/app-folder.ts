@@ -13,6 +13,9 @@ import { functionsBuildSupport } from "../kernel/functions";
 
 import { generateActionContract, renderActionContractMarkdown } from "./action-contract";
 import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
+import { renderFunctionContextTypes } from "./action-types";
+import { parseFunctions } from "../kernel/functions";
+import { actionsModuleBody } from "../sdk/functions";
 import type { PackageComponentName } from "./portable-package";
 import { readTar } from "./tar";
 import { version } from "../../package.json";
@@ -102,21 +105,25 @@ export function secretNames(actionsSource: string): string[] {
  * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
  * both local build doors run.
  */
-export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string }): FolderEntry[] {
+export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; functionsSource?: string; actionsModuleSource?: string; runtime: string; staticArtifact: string; localBuilder: string; nodeCompat: string; nodeCompatProviders: string; parserSource: string; parserLicense: string; hasFunctions?: boolean }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
+  const functions = input.functionsSource === undefined ? undefined : parseFunctions(input.functionsSource);
   return [
-    { path: "compose.yaml", contents: composeFile(settings) },
-    { path: ".env.example", contents: envExample(settings) },
+    { path: "compose.yaml", contents: composeFile(settings, Boolean(functions)) },
+    { path: ".env.example", contents: envExample(settings, Boolean(functions)) },
     { path: ".gitignore", contents: gitignore },
     { path: "AGENTS.md", contents: agentsGuide(settings, secretNames(input.actionsSource)) },
     { path: "action-contract.md", contents: renderActionContractMarkdown(contract) },
     { path: ACTION_TYPES_FILE, contents: renderActionTypes(contract) },
+    ...(functions ? [{ path: "functions.d.ts", contents: renderFunctionContextTypes(contract, functions) }] : []),
     { path: "package.json", contents: packageManifest(settings) },
     { path: "tsconfig.json", contents: tsconfig },
-    { path: "scripts/build.mjs", contents: buildScript },
+    { path: "scripts/build.mjs", contents: buildScript.replace("__ACTIONS_MODULE_SOURCE__", JSON.stringify(input.actionsModuleSource ?? actionsModuleBody())) },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
     { path: "scripts/local-builder.mjs", contents: input.localBuilder },
+    { path: "scripts/node-compat.js", contents: input.nodeCompat },
+    { path: "scripts/node-compat-providers.js", contents: input.nodeCompatProviders },
     { path: "scripts/babel-parser.cjs", contents: input.parserSource },
     { path: "scripts/BABEL-PARSER-LICENSE", contents: input.parserLicense },
     { path: "scripts/runtime.js", contents: input.runtime },
@@ -130,7 +137,7 @@ node_modules/
 `;
 
 /** The image is the Kernel version konae.json names, so an exported folder runs the Kernel that wrote it. */
-function envExample(settings: AppSettings) {
+function envExample(settings: AppSettings, hasFunctions: boolean) {
   return `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
 # The image to run. A release publishes this tag for linux/amd64 and linux/arm64. A local image can replace it.
 KONAE_KERNEL_IMAGE=ghcr.io/danibram/konae-kernel:${settings.kernel}
@@ -142,10 +149,20 @@ KONAE_HOST_SUFFIX=localhost
 # How account email leaves: resend, smtp or development, which writes it to mailbox.jsonl in the Kernel's volume.
 # Without a transport, invitations and password resets are refused.
 KONAE_MAIL_TRANSPORT=
+${hasFunctions ? `# The StarlingMonkey runner and preparation helper ship in the Kernel image.
+KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner-wasm
+KONAE_FUNCTIONS_RUNNER_KIND=wasm
+KONAE_FUNCTIONS_PREPARER=/usr/local/lib/konae/functions-prepare
+# Prepared components live in this installation volume and survive container restarts.
+KONAE_FUNCTIONS_WASM_CACHE=/kernel/.konae/wasm-cache
+# The Kernel starts isolated workers with this separate Linux identity.
+KONAE_FUNCTIONS_UID=10002
+KONAE_FUNCTIONS_GID=10002
+` : ""}
 `;
 }
 
-function composeFile(settings: AppSettings) {
+function composeFile(settings: AppSettings, hasFunctions: boolean) {
   return `# Runs the Kernel on this folder. The Kernel opens it as apps/${settings.id}
 # of its data directory, checks it as a release, and serves it. Set
 # KONAE_KERNEL_IMAGE in .env to a published or local Kernel image.
@@ -157,12 +174,28 @@ services:
       KONAE_BIND: "0.0.0.0"
       KONAE_KERNEL_PORT: "8787"
       KONAE_DATA_DIR: /kernel
-    ports:
+${hasFunctions ? `      # The image includes the runner built with this Kernel.
+      KONAE_FUNCTIONS_RUNNER: \${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner-wasm}
+      KONAE_FUNCTIONS_RUNNER_KIND: \${KONAE_FUNCTIONS_RUNNER_KIND:-wasm}
+      KONAE_FUNCTIONS_PREPARER: \${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}
+      KONAE_FUNCTIONS_WASM_CACHE: \${KONAE_FUNCTIONS_WASM_CACHE:-/kernel/.konae/wasm-cache}
+      # The Kernel starts isolated workers with this separate Linux identity.
+      KONAE_FUNCTIONS_UID: \${KONAE_FUNCTIONS_UID:-10002}
+      KONAE_FUNCTIONS_GID: \${KONAE_FUNCTIONS_GID:-10002}
+` : ""}    ports:
       - "127.0.0.1:\${KONAE_PORT:-8787}:8787"
+${hasFunctions ? `    # The Kernel keeps only the capabilities needed to start and reap isolated workers.
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
     volumes:
       - ./:/kernel/apps/${settings.id}
       - kernel:/kernel
-volumes:
+` : `    volumes:
+      - ./:/kernel/apps/${settings.id}
+      - kernel:/kernel
+`}volumes:
   kernel:
 `;
 }
@@ -196,7 +229,7 @@ const tsconfig = `${JSON.stringify({
     skipLibCheck: true,
     noEmit: true,
   },
-  include: ["app/src", ACTION_TYPES_FILE],
+  include: ["app/src", "app/functions", ACTION_TYPES_FILE, "functions.d.ts"],
 }, null, 2)}\n`;
 
 function agentsGuide(settings: AppSettings, secrets: string[]) {
@@ -216,7 +249,7 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Rules the Kernel checks
 
-A function exports \`handle(request, context)\` and returns a \`Response\`. Use \`await context.actions.call(name, input)\` for a query or mutation in its declared action allowlist. Functions start off; enable \`functions\` in \`konae.json\`. Authenticated functions need \`auth\`, and a nonempty action allowlist needs \`actions\`. The editor preview does not execute server functions. Try \`konae dev\` or a published Deployment with the experimental function runner configured by the operator.
+A function exports \`handle(request, context)\` and returns a \`Response\`. Use \`await context.actions.call(name, input)\` for a query or mutation in its declared action allowlist. Functions start off; enable \`functions\` in \`konae.json\`. Authenticated functions need \`auth\`, and a nonempty action allowlist needs \`actions\`. The editor preview does not execute server functions. StarlingMonkey is the default production runner. Try \`konae dev\` or a published Deployment with its matching runner and preparer.
 
 An optional \`schema-transforms.json\` records ordered data changes between schema fingerprints. The Kernel stores applied history in \`data/database.sqlite\`; the definition travels with app sources and never ships in \`dist/\`. The Validation Gate checks its shape, order, bounds and SQL subset. It cannot prove a transition against a real database.
 
@@ -287,6 +320,7 @@ const dist = path.join(root, 'dist');
 const development = process.argv.includes('--dev');
 const settings = JSON.parse(await readFile(path.join(root, 'konae.json'), 'utf8'));
 const runtime = await readFile(path.join(root, 'scripts/runtime.js'), 'utf8');
+const actionsModuleSource = __ACTIONS_MODULE_SOURCE__;
 const paths = await walk('');
 const sources = await Promise.all(paths.map(async (file) => [file, await readFile(path.join(app, file), 'utf8').catch(() => '')]));
 const actionsSource = await readFile(path.join(app, 'actions.json'), 'utf8').catch(() => '');
@@ -296,7 +330,8 @@ const functionSource = Object.fromEntries(sources)['functions.json'];
 const functions = functionSource === undefined ? undefined : parseFunctions(functionSource);
 const functionContext = { files: paths, modules: settings.modules, actions: JSON.parse(actionsSource || '{"actions":{}}').actions ?? {} };
 if (functions) validateFunctions(functions, functionContext);
-if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
+if (functions) validateFunctionSources(functions, Object.fromEntries(sources));
+if (paths.some((file) => (file.startsWith('src/') || file.startsWith('functions/')) && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,
   read: async (file) => {
@@ -319,7 +354,7 @@ const artifact = await assembleStaticArtifact({
 let serverArtifact;
 if (functions && Object.keys(functions.functions).length) {
   validateFunctions(functions, { ...functionContext, staticPaths: Object.keys(artifact.files) });
-  serverArtifact = await bundleFunctions(app, functions, development);
+  serverArtifact = await bundleFunctions(app, functions, null, development, actionsModuleSource);
   validateServerArtifact(functions, serverArtifact);
 }
 const server = path.join(root, 'server');

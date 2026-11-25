@@ -1,0 +1,97 @@
+{
+  "app": "/tmp/konae-functions-runner-comparison-node-compat/cli/app",
+  "functionCount": 18,
+  "buildMsSum": 229.86596000000006,
+  "results": [
+    {
+      "name": "zod",
+      "buildMs": 46.784792,
+      "bundleBytes": 283447
+    },
+    {
+      "name": "hono",
+      "buildMs": 14.179375,
+      "bundleBytes": 20209
+    },
+    {
+      "name": "dateFns",
+      "buildMs": 57.137584,
+      "bundleBytes": 1174
+    },
+    {
+      "name": "uuid",
+      "buildMs": 8.219542,
+      "bundleBytes": 1450
+    },
+    {
+      "name": "nanoid",
+      "buildMs": 5.118708,
+      "bundleBytes": 282
+    },
+    {
+      "name": "jose",
+      "buildMs": 18.150333,
+      "bundleBytes": 26965
+    },
+    {
+      "name": "bufferEvents",
+      "buildMs": 5.260708,
+      "bundleBytes": 36040
+    },
+    {
+      "name": "stream",
+      "buildMs": 18.365583,
+      "bundleBytes": 209291
+    },
+    {
+      "name": "createHash",
+      "buildMs": 13.2135,
+      "bundleBytes": 153844
+    },
+    {
+      "name": "dependencyMode",
+      "buildMs": 6.3455,
+      "bundleBytes": 404
+    },
+    {
+      "name": "web",
+      "buildMs": 4.725292,
+      "bundleBytes": 40905
+    },
+    {
+      "name": "modules",
+      "buildMs": 9.023459,
+      "bundleBytes": 49195
+    },
+    {
+      "name": "bareBuiltin",
+      "buildMs": 4.3255,
+      "bundleBytes": 6686
+    },
+    {
+      "name": "npmProcess",
+      "buildMs": 4.297042,
+      "bundleBytes": 2493
+    },
+    {
+      "name": "commonJsEvents",
+      "buildMs": 3.864875,
+      "bundleBytes": 6897
+    },
+    {
+      "name": "dynamicBuiltin",
+      "buildMs": 3.516625,
+      "bundleBytes": 7012
+    },
+    {
+      "name": "reexportBuiltin",
+      "buildMs": 3.962084,
+      "bundleBytes": 6704
+    },
+    {
+      "name": "typeOnlyBuiltin",
+      "buildMs": 3.375458,
+      "bundleBytes": 55
+    }
+  ]
+}

@@ -18,13 +18,13 @@ flowchart TB
     FX["functions-executor crate<br/>Rust supervisor and IPC"]
   end
   subgraph child["On-demand child process"]
-    RUNNER["deno_core Functions runner<br/>source: kernel-rs/functions-runner"]
+    RUNNER["Functions runner<br/>StarlingMonkey or deno_core"]
   end
   OWN -->|"the editor host"| KO
   RUN -->|"each app's own host"| KE
   KO -->|"calls the library"| KE
   KE -->|"supervisor API"| FX
-  FX -->|"spawn, then bounded IPC/2"| RUNNER
+  FX -->|"spawn, then bounded IPC/3"| RUNNER
   subgraph data["One data directory"]
     OWNERS[("owners.sqlite<br/>mcp.sqlite")]
     APPS[("apps/#lt;id#gt;/<br/>one app folder per app")]
@@ -41,7 +41,7 @@ An installation has a main server process and one data directory. Functions may 
 
 ## Kernel, Konae and the functions executor
 
-The Cargo workspace under `kernel-rs` contains the Kernel, Konae, the backup library, and the Functions executor. The JavaScript runner has its own Cargo workspace and lockfile. The Kernel owns identity, authorization, SQLite, and request admission. The executor supervises workers and sends bounded IPC/2 messages to the runner ([ADR-0018](./adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md), [ADR-0019](./adr/0019-functions-stream-request-bodies-with-bounded-ipc.md)).
+The Cargo workspace under `kernel-rs` contains the Kernel, Konae, the backup library, and the Functions executor. Each runner and the preparer have their own Cargo workspace and lockfile. The Kernel owns identity, authorization, SQLite, and request admission. The executor supervises workers and sends bounded IPC/3 messages. StarlingMonkey is the default runner. The Kernel uses its preparer before serving a published bundle. [ADR-0020](./adr/0020-wasm-functions-runner.md)
 
 ```text
 kernel-rs/
@@ -49,12 +49,14 @@ kernel-rs/
 ├── konae/               the Konae binary, which links the Kernel
 ├── backup/              snapshot and copy formats and storage
 ├── functions-executor/  worker supervision and the IPC protocol
-└── functions-runner/    the deno_core worker binary
+├── functions-runner/    the deno_core worker binary
+├── functions-runner-wasm/ the StarlingMonkey worker binary
+└── functions-prepare/   the StarlingMonkey component preparer
 ```
 
 `kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, and applies the schema change `app/schema.sql` asks of `data/database.sqlite` when actions is on. It serves Server Actions, app accounts, files, schedules, notices, HTTP routes, functions, calls and Usage according to each app's modules. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `server/operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
 
-The Functions interface, actor binding, action allowlist, replay behavior and export boundary are documented in [Server functions](./functions.md). Current evidence and isolated candidates are separated in [Functions research](./architecture/functions-research.md).
+The Functions interface, actor binding, action allowlist, replay behavior, and export boundary are documented in [Server functions](./functions.md). [Functions research](./architecture/functions-research.md) records earlier experiments.
 
 `konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics, the project list and, when `KONAE_EDITOR_DIR` names it, the built editor on the editor host. It runs the same installation commands, and adds `owner-code-*` and `owner-account-*` commands that admit and suspend owners.
 

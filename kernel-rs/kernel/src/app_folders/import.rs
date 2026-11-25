@@ -332,6 +332,7 @@ async fn restore_source_release(state: &AppState, current: &Deployment, backup: 
     let artifact: BuildArtifact = serde_json::from_value(release["artifact"].clone())?;
     let files = artifact::decode(&artifact).map_err(anyhow::Error::msg)?;
     let server: Option<crate::functions::ServerArtifact> = serde_json::from_value(release["serverArtifact"].clone())?;
+    let prepared_functions = crate::functions::prepare_artifact(state, server.as_ref()).await?;
     let mut settings: Settings = serde_json::from_value(release["settings"].clone())?;
     let installed: Installed = serde_json::from_value(release["installed"].clone())?;
     ensure!(settings.id == current.id, "The backup belongs to another app.");
@@ -368,6 +369,7 @@ async fn restore_source_release(state: &AppState, current: &Deployment, backup: 
         recorded.put_back().await; staged.put_back().await; remove_staged_dist(state, &current.id, &version).await; return Err(error.into());
     }
     state.deployments.write().await.insert(restored.hostname.clone(), restored.clone());
+    state.functions.retain_prepared(&restored.id, prepared_functions);
     http::routes_published(&restored);
     staged.finish().await; remove_stale_dist(state, &current.id).await;
     Ok(())

@@ -51,8 +51,6 @@ pub async fn deploy_import_held(state: &AppState, input: DeployInput) -> Respons
 }
 
 async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import: bool) -> Response {
-    let _generation = state.copies.generations.read().await;
-    let _release_guard = if restoring_import { None } else { Some(named_lock(state, &format!("publish:{}", input.project.id), true).await) };
     let validation = if restoring_import { runtime::validate_import_release(state, &input, None).await }
         else { runtime::validate_release(state, &input, None).await };
     if let Err(error_value) = validation {
@@ -77,6 +75,25 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
         Ok(server) => server,
         Err(refused) => return refusal_error(&refused),
     };
+    let prepared = match functions::prepare_artifact(state, input.server_artifact.as_ref()).await {
+        Ok(prepared) => prepared,
+        Err(error_value) => {
+            if let Some(refused) = crate::refusal::of(&error_value) {
+                return refusal_error(refused);
+            }
+            return error(StatusCode::SERVICE_UNAVAILABLE, &format!("Function preparation failed: {error_value:#}"));
+        }
+    };
+    let _generation = state.copies.generations.read().await;
+    let _release_guard = if restoring_import { None } else { Some(named_lock(state, &format!("publish:{}", input.project.id), true).await) };
+    let validation = if restoring_import { runtime::validate_import_release(state, &input, None).await }
+        else { runtime::validate_release(state, &input, None).await };
+    if let Err(error_value) = validation {
+        return match refusal::of(&error_value) {
+            Some(refused) => refusal_error(refused),
+            None => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
+        };
+    }
     let release_sources = match input.project.sources() {
         Ok(files) => files,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
@@ -422,6 +439,7 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
         .write()
         .await
         .insert(hostname, deployment.clone());
+    state.functions.retain_prepared(&id, prepared);
     drop(database_guard);
     if swapped {
         remove_database_files(&replaced);

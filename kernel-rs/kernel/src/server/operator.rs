@@ -1,17 +1,32 @@
-
 use std::io::Read;
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, anyhow, bail, ensure};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::installation::Installation;
 use crate::{
-    admin_database, copies, file_store, find_project_deployment, http, invitations, layout, recovery, runtime, AppState, Deployment,
-    Settings, SignupMode, Startup,
+    AppState, Deployment, Settings, SignupMode, Startup, admin_database, copies, file_store,
+    find_project_deployment, http, invitations, layout, recovery, runtime,
 };
 
-const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "module", "modules", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test"];
+const COMMANDS: &[&str] = &[
+    "users",
+    "invite",
+    "suspend",
+    "resume",
+    "signup-policy",
+    "module",
+    "modules",
+    "api-key",
+    "secret",
+    "sql",
+    "events",
+    "import",
+    "maintenance",
+    "enter",
+    "test",
+];
 
 pub fn usage() -> &'static str {
     "Commands on an app this Kernel serves. Add --app <id> when the data directory holds more than one app.
@@ -66,11 +81,19 @@ pub fn mail_key(data_root: &std::path::Path) -> Result<String> {
             Ok(key)
         }
         Err(error_value) if error_value.kind() == std::io::ErrorKind::AlreadyExists => {
-            let kept = std::fs::read_to_string(&path).with_context(|| format!("{} cannot be read", path.display()))?;
-            ensure!(kept.len() >= 32, "{} holds no key. Remove it, and the next start writes a new one; queued links sealed with the old key stop working.", path.display());
+            let kept = std::fs::read_to_string(&path)
+                .with_context(|| format!("{} cannot be read", path.display()))?;
+            ensure!(
+                kept.len() >= 32,
+                "{} holds no key. Remove it, and the next start writes a new one; queued links sealed with the old key stop working.",
+                path.display()
+            );
             Ok(kept)
         }
-        Err(error_value) => Err(anyhow::Error::from(error_value).context(format!("Could not write {}", path.display()))),
+        Err(error_value) => {
+            Err(anyhow::Error::from(error_value)
+                .context(format!("Could not write {}", path.display())))
+        }
     }
 }
 
@@ -80,12 +103,19 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|name| name == "capabilities") {
         ensure!(args.len() == 1, "kernel capabilities takes no arguments.");
-        println!("{}", serde_json::to_string_pretty(&crate::execution::capabilities())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&crate::execution::capabilities())?
+        );
         return Ok(true);
     }
     if args.first().is_some_and(|name| name == "schema") {
         let mut words = Arguments::new(&args[1..]);
-        ensure!(words.next().as_deref() == Some("fingerprint"), "{}", usage());
+        ensure!(
+            words.next().as_deref() == Some("fingerprint"),
+            "{}",
+            usage()
+        );
         let schema = words.option("schema")?;
         let database = words.option("database")?;
         ensure!(words.rest().is_empty(), "{}", usage());
@@ -97,7 +127,10 @@ pub async fn command(installation: &Installation) -> Result<bool> {
         println!("{}", usage());
         return Ok(true);
     }
-    let Some(name) = args.first().filter(|name| COMMANDS.contains(&name.as_str())) else {
+    let Some(name) = args
+        .first()
+        .filter(|name| COMMANDS.contains(&name.as_str()))
+    else {
         return Ok(false);
     };
     let mut words = Arguments::new(&args[1..]);
@@ -105,12 +138,31 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     let startup = Startup::from_env()?;
     let _operation = crate::file_store::external_operation(&startup.data_root)?;
     let _generation = if name == "import" {
-        Some(crate::file_store::external_operation(&layout::apps(&startup.data_root))?)
-    } else { None };
-    let state = crate::state_from_env(&startup, installation.clone(), &mail_key(&startup.data_root)?, Vec::new(), None).await?.0;
+        Some(crate::file_store::external_operation(&layout::apps(
+            &startup.data_root,
+        ))?)
+    } else {
+        None
+    };
+    let state = crate::state_from_env(
+        &startup,
+        installation.clone(),
+        &mail_key(&startup.data_root)?,
+        Vec::new(),
+        None,
+    )
+    .await?
+    .0;
     let id = app_id(&state, app).await?;
-    let answer = if name == "test" { test_command(&state, &id, &mut words).await } else { run(&state, &id, name, &mut words).await };
-    ensure!(crate::usage::flush_status(), "Could not drain operator Usage writes.");
+    let answer = if name == "test" {
+        test_command(&state, &id, &mut words).await
+    } else {
+        run(&state, &id, name, &mut words).await
+    };
+    ensure!(
+        crate::usage::flush_status(),
+        "Could not drain operator Usage writes."
+    );
     println!("{}", serde_json::to_string_pretty(&answer?)?);
     Ok(true)
 }
@@ -118,12 +170,16 @@ pub async fn command(installation: &Installation) -> Result<bool> {
 fn schema_fingerprint(schema: Option<&str>, database: Option<&str>) -> Result<String> {
     match (schema, database) {
         (Some(path), None) => {
-            let sql = std::fs::read_to_string(path).with_context(|| format!("Cannot read {path}"))?;
+            let sql =
+                std::fs::read_to_string(path).with_context(|| format!("Cannot read {path}"))?;
             Ok(crate::schema_transform::fingerprint_schema(&sql)?)
         }
         (None, Some(path)) => {
-            let connection = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .with_context(|| format!("Cannot read {path}"))?;
+            let connection = rusqlite::Connection::open_with_flags(
+                path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .with_context(|| format!("Cannot read {path}"))?;
             Ok(crate::schema_transform::fingerprint(&connection)?)
         }
         _ => bail!("Choose exactly one of --schema <schema.sql> or --database <database.sqlite>."),
@@ -131,12 +187,17 @@ fn schema_fingerprint(schema: Option<&str>, database: Option<&str>) -> Result<St
 }
 
 async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Result<Value> {
-    ensure!(state.execution_mode.is_test(), "Kernel test controls require KONAE_EXECUTION_MODE=test.");
+    ensure!(
+        state.execution_mode.is_test(),
+        "Kernel test controls require KONAE_EXECUTION_MODE=test."
+    );
     match words.next().as_deref() {
         Some("status") => {
             ensure!(words.rest().is_empty(), "{}", usage());
             let deployment = served(state, id).await?;
-            Ok(json!({"mode": "test", "pausedSchedules": crate::schedule::paused_schedules(&deployment)}))
+            Ok(
+                json!({"mode": "test", "pausedSchedules": crate::schedule::paused_schedules(&deployment)}),
+            )
         }
         Some("schedule") => {
             let action = words.required("the scheduled action's name")?;
@@ -152,8 +213,11 @@ async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Resu
             let call = words.required("the captured call's ID")?;
             ensure!(words.rest().is_empty(), "{}", usage());
             let (number, outcome) = read_test_reply(std::io::stdin().lock())?;
-            let result = crate::calls::submit_synthetic_response(state, id, &call, number, outcome).await?;
-            Ok(json!({"accepted": result == crate::calls::SyntheticSubmission::Accepted, "callId": call, "responseNumber": number}))
+            let result =
+                crate::calls::submit_synthetic_response(state, id, &call, number, outcome).await?;
+            Ok(
+                json!({"accepted": result == crate::calls::SyntheticSubmission::Accepted, "callId": call, "responseNumber": number}),
+            )
         }
         Some("reset-effects") => {
             ensure!(words.rest().is_empty(), "{}", usage());
@@ -161,10 +225,17 @@ async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Resu
             let root = state.data_root.clone();
             let app = id.to_owned();
             let mail = tokio::task::spawn_blocking(move || -> Result<usize> {
-                let test = crate::mail::end_pending_for_local_reset(&root.join(crate::mail::TEST_MAIL_DATABASE), &app)?;
-                let legacy = crate::mail::end_pending_for_local_reset(&root.join(crate::mail::MAIL_DATABASE), &app)?;
+                let test = crate::mail::end_pending_for_local_reset(
+                    &root.join(crate::mail::TEST_MAIL_DATABASE),
+                    &app,
+                )?;
+                let legacy = crate::mail::end_pending_for_local_reset(
+                    &root.join(crate::mail::MAIL_DATABASE),
+                    &app,
+                )?;
                 Ok(test + legacy)
-            }).await??;
+            })
+            .await??;
             Ok(json!({"callsRetired": calls, "mailRetired": mail}))
         }
         _ => bail!("{}", usage()),
@@ -180,24 +251,49 @@ fn read_test_reply(reader: impl Read) -> Result<(i64, crate::calls::SyntheticOut
     }
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields, rename_all = "camelCase")]
-    struct HttpReply { response_number: i64, status: u16, body: Value }
+    struct HttpReply {
+        response_number: i64,
+        status: u16,
+        body: Value,
+    }
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields, rename_all = "camelCase")]
-    struct NetworkReply { response_number: i64, error: String }
+    struct NetworkReply {
+        response_number: i64,
+        error: String,
+    }
 
     let mut bytes = Vec::new();
-    reader.take(65_537).read_to_end(&mut bytes).context("Could not read response JSON from standard input")?;
+    reader
+        .take(65_537)
+        .read_to_end(&mut bytes)
+        .context("Could not read response JSON from standard input")?;
     ensure!(bytes.len() <= 65_536, "Synthetic response exceeds 64 KiB.");
     let reply: Reply = serde_json::from_slice(&bytes).context("Reply JSON needs a positive responseNumber and either status (100 to 599) with body, or error.")?;
     let (number, outcome) = match reply {
         Reply::Http(reply) => {
-            ensure!((100..=599).contains(&reply.status), "HTTP status must be between 100 and 599.");
-            let body = match reply.body { Value::String(text) => text.into_bytes(), value => serde_json::to_vec(&value)? };
-            (reply.response_number, crate::calls::SyntheticOutcome::Http { status: reply.status, body })
+            ensure!(
+                (100..=599).contains(&reply.status),
+                "HTTP status must be between 100 and 599."
+            );
+            let body = match reply.body {
+                Value::String(text) => text.into_bytes(),
+                value => serde_json::to_vec(&value)?,
+            };
+            (
+                reply.response_number,
+                crate::calls::SyntheticOutcome::Http {
+                    status: reply.status,
+                    body,
+                },
+            )
         }
         Reply::Network(reply) => {
             ensure!(!reply.error.is_empty(), "Reply error must not be empty.");
-            (reply.response_number, crate::calls::SyntheticOutcome::Network { error: reply.error })
+            (
+                reply.response_number,
+                crate::calls::SyntheticOutcome::Network { error: reply.error },
+            )
         }
     };
     ensure!(number > 0, "Reply JSON needs a positive responseNumber.");
@@ -208,17 +304,32 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
     if name == "secret" {
         let deployment = find_project_deployment(&*state.deployments.read().await, id);
         return match words.next().as_deref() {
-            Some("list") => http::secrets_call(&http::read_secrets(&state.data_root, id)?, id, deployment.as_ref(), "secrets_list", &json!({})),
+            Some("list") => http::secrets_call(
+                &http::read_secrets(&state.data_root, id)?,
+                id,
+                deployment.as_ref(),
+                "secrets_list",
+                &json!({}),
+            ),
             Some("set") => {
                 let usage = words.option("use")?;
                 let secret = words.required("the secret's name")?;
                 let mut value = String::new();
-                std::io::stdin().read_to_string(&mut value).context("Could not read the value from standard input")?;
-                let mut arguments = json!({"name": secret, "value": value.trim_end_matches(['\r', '\n'])});
+                std::io::stdin()
+                    .read_to_string(&mut value)
+                    .context("Could not read the value from standard input")?;
+                let mut arguments =
+                    json!({"name": secret, "value": value.trim_end_matches(['\r', '\n'])});
                 if let Some(usage) = usage {
                     arguments["use"] = json!(usage);
                 }
-                http::secrets_call(&http::secrets_store(&state.data_root, id)?, id, deployment.as_ref(), "secret_set", &arguments)
+                http::secrets_call(
+                    &http::secrets_store(&state.data_root, id)?,
+                    id,
+                    deployment.as_ref(),
+                    "secret_set",
+                    &arguments,
+                )
             }
             _ => bail!("{}", usage()),
         };
@@ -235,7 +346,14 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                     arguments[key] = json!(value);
                 }
             }
-            invitations::run(state, &deployment, &operator(state, id), "app_users_list", &arguments).await
+            invitations::run(
+                state,
+                &deployment,
+                &operator(state, id),
+                "app_users_list",
+                &arguments,
+            )
+            .await
         }
         "invite" => {
             let emails = words.rest();
@@ -245,25 +363,62 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                 queue.run_preflight().await;
             }
             let arguments = json!({"emails": emails, "idempotencyKey": Uuid::new_v4().to_string()});
-            invitations::run(state, &deployment, &operator(state, id), "app_invitations_create", &arguments).await
+            invitations::run(
+                state,
+                &deployment,
+                &operator(state, id),
+                "app_invitations_create",
+                &arguments,
+            )
+            .await
         }
         "suspend" | "resume" => {
             let user = words.required("the user's ID, as kernel users lists it")?;
-            let tool = if name == "suspend" { "app_user_suspend" } else { "app_user_resume" };
-            invitations::run(state, &deployment, &operator(state, id), tool, &json!({"userId": user})).await
+            let tool = if name == "suspend" {
+                "app_user_suspend"
+            } else {
+                "app_user_resume"
+            };
+            invitations::run(
+                state,
+                &deployment,
+                &operator(state, id),
+                tool,
+                &json!({"userId": user}),
+            )
+            .await
         }
         "signup-policy" => signup_policy(state, deployment, words).await,
         "modules" => {
-            ensure!(words.rest().is_empty(), "kernel modules takes no arguments.");
+            ensure!(
+                words.rest().is_empty(),
+                "kernel modules takes no arguments."
+            );
             Ok(crate::modules::read(state, &deployment))
         }
         "module" => {
-            let name = words.next().context("kernel module needs a module name and on or off.")?;
+            let name = words
+                .next()
+                .context("kernel module needs a module name and on or off.")?;
             let value = words.next().context("kernel module needs on or off.")?;
-            ensure!(words.rest().is_empty() && ["on", "off"].contains(&value.as_str()), "kernel module <name> on|off");
-            let result = crate::modules::set(&state.data_root, &deployment.id, &name, Some(value == "on"), None, None).await?;
+            ensure!(
+                words.rest().is_empty() && ["on", "off"].contains(&value.as_str()),
+                "kernel module <name> on|off"
+            );
+            let result = crate::modules::set(
+                &state.data_root,
+                &deployment.id,
+                &name,
+                Some(value == "on"),
+                None,
+                None,
+            )
+            .await?;
             let mut deployments = state.deployments.write().await;
-            if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
+            if let Some(current) = deployments
+                .values_mut()
+                .find(|current| current.id == deployment.id)
+            {
                 current.modules.insert(name, result["state"].clone());
             }
             Ok(result)
@@ -281,11 +436,15 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
             let user = account_with_email(state, id, &email)?;
             // The person at the machine is the operator; their login name, when
             // the shell has one, says which one.
-            let who = std::env::var("USER").ok().filter(|name| !name.trim().is_empty())
+            let who = std::env::var("USER")
+                .ok()
+                .filter(|name| !name.trim().is_empty())
                 .map_or_else(|| "operator".to_owned(), |name| format!("operator:{name}"));
             let link = crate::enter::issue(state, &deployment, &user, &who).await?;
             let account = link["email"].as_str().unwrap_or(&email);
-            eprintln!("{who} may enter app {id} as {account} with this link, once, within 2 minutes. The serving Kernel logs the entry.");
+            eprintln!(
+                "{who} may enter app {id} as {account} with this link, once, within 2 minutes. The serving Kernel logs the entry."
+            );
             Ok(link)
         }
         "api-key" => {
@@ -294,9 +453,15 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                 Some("create") => {
                     let actions = words.options("action")?;
                     let files = words.options("files")?;
-                    ("api_keys_create", json!({"name": words.required("the key's name")?, "actions": actions, "files": files}))
+                    (
+                        "api_keys_create",
+                        json!({"name": words.required("the key's name")?, "actions": actions, "files": files}),
+                    )
                 }
-                Some("revoke") => ("api_keys_revoke", json!({"keyId": words.required("the key's ID")?})),
+                Some("revoke") => (
+                    "api_keys_revoke",
+                    json!({"keyId": words.required("the key's ID")?}),
+                ),
                 _ => bail!("{}", usage()),
             };
             http::api_keys_call(state, &deployment, tool, &arguments).await
@@ -305,7 +470,8 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
             let sql = words.rest().join(" ");
             ensure!(!sql.trim().is_empty(), "Give the statement in quotes.");
             let body = json!({"operation": "sql", "sql": sql});
-            runtime::response_value(admin_database(state, id, body.to_string().as_bytes()).await).await
+            runtime::response_value(admin_database(state, id, body.to_string().as_bytes()).await)
+                .await
         }
         "events" => {
             let (from, to) = (words.required_option("from")?, words.required_option("to")?);
@@ -315,6 +481,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                 "calls": crate::calls::admin_call(state, &deployment, &json!({})).await?["calls"],
                 "notices": crate::mail::notices_tool(state, &deployment, &json!({})).await?["notices"],
                 "signals": crate::usage::admin_call(&state.data_root, &deployment, "signals_read", &json!({})).await?["signals"],
+                "functionTraces": if state.execution_mode.is_test() { crate::usage::read_function_traces(&state.data_root, &deployment.id, &from, &to)? } else { Vec::new() },
             }))
         }
         _ => bail!("{}", usage()),
@@ -322,17 +489,30 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
 }
 
 /// `module_set` on `auth` as Konae's tool runs it. The entries stay when none are given.
-async fn signup_policy(state: &AppState, deployment: Deployment, words: &mut Arguments) -> Result<Value> {
-    let mode: SignupMode = serde_json::from_value(json!(words.required("open, invitation, closed or allowlist")?))
-        .map_err(|_| anyhow!("The Signup Policy is open, invitation, closed or allowlist."))?;
+async fn signup_policy(
+    state: &AppState,
+    deployment: Deployment,
+    words: &mut Arguments,
+) -> Result<Value> {
+    let mode: SignupMode = serde_json::from_value(json!(
+        words.required("open, invitation, closed or allowlist")?
+    ))
+    .map_err(|_| anyhow!("The Signup Policy is open, invitation, closed or allowlist."))?;
     let given = words.rest();
-    crate::set_signup_policy(state, &deployment.id, mode, (!given.is_empty()).then_some(given)).await
+    crate::set_signup_policy(
+        state,
+        &deployment.id,
+        mode,
+        (!given.is_empty()).then_some(given),
+    )
+    .await
 }
 
 async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Value> {
-    use crate::import::{import_folder, Outcome, Target};
+    use crate::import::{Outcome, Target, import_folder};
     let confirmation = words.option("confirm-schema")?;
-    let folder = std::path::PathBuf::from(words.required("the exported folder whose data/ to import")?);
+    let folder =
+        std::path::PathBuf::from(words.required("the exported folder whose data/ to import")?);
     ensure!(words.rest().is_empty(), "{}", usage());
     let served = find_project_deployment(&*state.deployments.read().await, id);
     let deployment = match served {
@@ -341,32 +521,64 @@ async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Val
     };
     let _guard = crate::database_lock(state, &format!("project:{}", deployment.project_id)).await;
     let target = Target::sources(state, id)?;
-    match import_folder(state, &deployment, &folder, &target, confirmation.as_deref()).await? {
+    match import_folder(
+        state,
+        &deployment,
+        &folder,
+        &target,
+        confirmation.as_deref(),
+    )
+    .await?
+    {
         Outcome::NeedsConfirmation(change) => {
-            let mut details = change.losses.iter().map(|loss| loss.sentence.clone()).collect::<Vec<_>>();
+            let mut details = change
+                .losses
+                .iter()
+                .map(|loss| loss.sentence.clone())
+                .collect::<Vec<_>>();
             for transition in change.transformations.iter().flatten() {
-                details.push(format!("Transition {} changes {} rows, with a limit of {}.", transition.id, transition.affected_rows, transition.max_rows));
+                details.push(format!(
+                    "Transition {} changes {} rows, with a limit of {}.",
+                    transition.id, transition.affected_rows, transition.max_rows
+                ));
             }
-            bail!("The imported data requires schema change confirmation. {} To import it, run again with --confirm-schema {}.", details.join(" "), change.confirmation().unwrap_or_default())
+            bail!(
+                "The imported data requires schema change confirmation. {} To import it, run again with --confirm-schema {}.",
+                details.join(" "),
+                change.confirmation().unwrap_or_default()
+            )
         }
-        Outcome::Imported { backup, change } => Ok(json!({"imported": true, "replace": "data", "backup": backup, "schema": change.to_json()})),
+        Outcome::Imported { backup, change } => Ok(
+            json!({"imported": true, "replace": "data", "backup": backup, "schema": change.to_json()}),
+        ),
     }
 }
 
 fn account_with_email(state: &AppState, id: &str, email: &str) -> Result<String> {
     let path = layout::data(&state.data_root, id).join("identity.sqlite");
-    let db = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("{} cannot be read.", path.display()))?;
+    let db =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("{} cannot be read.", path.display()))?;
     use rusqlite::OptionalExtension;
-    let normalized = crate::auth::normalize_email(email).map_err(|error_value| anyhow!(error_value.to_string()))?;
-    db.query_row("SELECT id FROM app_users WHERE email = ?1", [normalized], |row| row.get(0))
-        .optional()?
-        .ok_or_else(|| anyhow!("This app has no account with the email {}.", email.trim()))
+    let normalized = crate::auth::normalize_email(email)
+        .map_err(|error_value| anyhow!(error_value.to_string()))?;
+    db.query_row(
+        "SELECT id FROM app_users WHERE email = ?1",
+        [normalized],
+        |row| row.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| anyhow!("This app has no account with the email {}.", email.trim()))
 }
 
 fn operator(state: &AppState, id: &str) -> invitations::Inviter {
-    let email = Settings::read(&state.data_root, id).ok().and_then(|settings| settings.contact_email);
-    invitations::Inviter { id: "operator".into(), email }
+    let email = Settings::read(&state.data_root, id)
+        .ok()
+        .and_then(|settings| settings.contact_email);
+    invitations::Inviter {
+        id: "operator".into(),
+        email,
+    }
 }
 
 async fn served(state: &AppState, id: &str) -> Result<Deployment> {
@@ -376,7 +588,11 @@ async fn served(state: &AppState, id: &str) -> Result<Deployment> {
 
 async fn app_id(state: &AppState, app: Option<String>) -> Result<String> {
     if let Some(id) = app {
-        ensure!(layout::settings(&state.data_root, &id).exists(), "{} holds no app {id}.", layout::apps(&state.data_root).display());
+        ensure!(
+            layout::settings(&state.data_root, &id).exists(),
+            "{} holds no app {id}.",
+            layout::apps(&state.data_root).display()
+        );
         return Ok(id);
     }
     let mut ids = Vec::new();
@@ -388,7 +604,10 @@ async fn app_id(state: &AppState, app: Option<String>) -> Result<String> {
     }
     match ids.as_slice() {
         [id] => Ok(id.clone()),
-        [] => bail!("{} holds no app folder.", layout::apps(&state.data_root).display()),
+        [] => bail!(
+            "{} holds no app folder.",
+            layout::apps(&state.data_root).display()
+        ),
         _ => {
             ids.sort();
             bail!("Name the app with --app <id>: {}.", ids.join(", "))
@@ -402,14 +621,19 @@ struct Arguments {
 
 impl Arguments {
     fn new(words: &[String]) -> Self {
-        Self { words: words.to_vec() }
+        Self {
+            words: words.to_vec(),
+        }
     }
 
     fn options(&mut self, name: &str) -> Result<Vec<String>> {
         let flag = format!("--{name}");
         let mut values = Vec::new();
         while let Some(index) = self.words.iter().position(|word| *word == flag) {
-            ensure!(index + 1 < self.words.len() && !self.words[index + 1].starts_with("--"), "{flag} needs a value.");
+            ensure!(
+                index + 1 < self.words.len() && !self.words[index + 1].starts_with("--"),
+                "{flag} needs a value."
+            );
             values.push(self.words.remove(index + 1));
             self.words.remove(index);
         }
@@ -423,7 +647,8 @@ impl Arguments {
     }
 
     fn required_option(&mut self, name: &str) -> Result<String> {
-        self.option(name)?.ok_or_else(|| anyhow!("Give --{name}.\n{}", usage()))
+        self.option(name)?
+            .ok_or_else(|| anyhow!("Give --{name}.\n{}", usage()))
     }
 
     fn next(&mut self) -> Option<String> {
@@ -431,7 +656,8 @@ impl Arguments {
     }
 
     fn required(&mut self, what: &str) -> Result<String> {
-        self.next().ok_or_else(|| anyhow!("Name {what}.\n{}", usage()))
+        self.next()
+            .ok_or_else(|| anyhow!("Name {what}.\n{}", usage()))
     }
 
     fn rest(&mut self) -> Vec<String> {
@@ -445,20 +671,29 @@ mod tests {
 
     #[test]
     fn test_reply_requires_one_bounded_outcome() {
-        let (number, outcome) = read_test_reply(br#"{"responseNumber":2,"status":200,"body":{"ok":true}}"#.as_slice()).unwrap();
+        let (number, outcome) =
+            read_test_reply(br#"{"responseNumber":2,"status":200,"body":{"ok":true}}"#.as_slice())
+                .unwrap();
         assert_eq!(number, 2);
-        assert!(matches!(outcome, crate::calls::SyntheticOutcome::Http { status: 200, body } if body == br#"{"ok":true}"#));
+        assert!(
+            matches!(outcome, crate::calls::SyntheticOutcome::Http { status: 200, body } if body == br#"{"ok":true}"#)
+        );
         for input in [
-            r#"null"#, r#"[]"#,
+            r#"null"#,
+            r#"[]"#,
             r#"{"responseNumber":0,"error":"timeout"}"#,
             r#"{"responseNumber":1,"status":600,"body":null}"#,
             r#"{"responseNumber":1,"status":200}"#,
             r#"{"responseNumber":1,"status":200,"body":null,"error":"timeout"}"#,
             r#"{"responseNumber":1,"error":"timeout","extra":true}"#,
             r#"{"responseNumber":1,"error":""}"#,
-        ] { assert!(read_test_reply(input.as_bytes()).is_err(), "{input}"); }
+        ] {
+            assert!(read_test_reply(input.as_bytes()).is_err(), "{input}");
+        }
         assert!(read_test_reply(vec![b' '; 65_537].as_slice()).is_err());
-        assert!(matches!(read_test_reply(br#"{"responseNumber":1,"error":"timeout"}"#.as_slice()).unwrap().1, crate::calls::SyntheticOutcome::Network { error } if error == "timeout"));
+        assert!(
+            matches!(read_test_reply(br#"{"responseNumber":1,"error":"timeout"}"#.as_slice()).unwrap().1, crate::calls::SyntheticOutcome::Network { error } if error == "timeout")
+        );
     }
 
     #[cfg(unix)]
@@ -468,11 +703,19 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-mail-key-{}", Uuid::new_v4()));
         let key = mail_key(&root).unwrap();
         assert!(key.len() >= 32 && key != crate::DEFAULT_SETUP_KEY);
-        let mode = std::fs::metadata(root.join(MAIL_KEY_FILE)).unwrap().permissions().mode();
+        let mode = std::fs::metadata(root.join(MAIL_KEY_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(mail_key(&root).unwrap(), key);
         std::fs::write(root.join(MAIL_KEY_FILE), "short").unwrap();
-        assert!(mail_key(&root).unwrap_err().to_string().contains("holds no key"));
+        assert!(
+            mail_key(&root)
+                .unwrap_err()
+                .to_string()
+                .contains("holds no key")
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

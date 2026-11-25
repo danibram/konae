@@ -39,6 +39,29 @@ describe("system prompt", () => {
     expect(prompt).not.toContain("Before you add a Server Action, read modules_read");
     expect(prompt).not.toContain('"granted"');
   });
+
+  test("teaches when and how to use server functions", () => {
+    const prompt = buildSystemPrompt(cloneStarter());
+    for (const fragment of [
+      "# Server functions",
+      "functions.json",
+      "handle(request, context)",
+      "entry, methods, mount, access and an actions allowlist",
+      "functions module must be on",
+      "Authenticated access also needs auth",
+      "a nonempty allowlist also needs actions",
+      "The editor preview does not execute server functions",
+      "Validation checks declarations, not server JavaScript behavior",
+      "context.actions.call(name, input)",
+      "Never put SQL in a function",
+      "no fetch",
+      "If a declared Server Action with an http route can answer, use that instead",
+      "StarlingMonkey is the default production runner",
+    ]) {
+      expect(prompt).toContain(fragment);
+    }
+    expect(prompt.split("# Server functions")[1].split("\n# ")[0].split("\n").length).toBeLessThan(25);
+  });
 });
 
 describe("what the prompt says a Deployment serves", () => {
@@ -97,8 +120,8 @@ describe("what the prompt leaves to the Validation Gate", () => {
     expect(prompt).toContain("through textContent or the template's escapeHtml, in attributes too");
   });
 
-  test("stays under 30,000 characters, less than half the 66,000 it had before SDK references moved behind read", () => {
-    expect(prompt.length).toBeLessThan(30_000);
+  test("stays under 32,000 characters, less than half the 66,000 it had before SDK references moved behind read", () => {
+    expect(prompt.length).toBeLessThan(32_000);
   });
 });
 

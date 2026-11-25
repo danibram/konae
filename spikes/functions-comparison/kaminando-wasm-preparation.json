@@ -1,0 +1,30 @@
+{
+  "runner": "StarlingMonkey",
+  "nativeCacheBytes": 197484992,
+  "nativeCacheFiles": 4,
+  "functionCount": 4,
+  "helperMsSum": 31255.477,
+  "functions": [
+    {
+      "function": "dashboard",
+      "helperMs": 8108.709,
+      "exitCode": 0
+    },
+    {
+      "function": "files",
+      "helperMs": 7751.434,
+      "exitCode": 0
+    },
+    {
+      "function": "patients",
+      "helperMs": 7716.121,
+      "exitCode": 0
+    },
+    {
+      "function": "profiles",
+      "helperMs": 7679.213,
+      "exitCode": 0
+    }
+  ],
+  "measurementWindowUtc": "2026-11-24 13:00-13:59 UTC"
+}

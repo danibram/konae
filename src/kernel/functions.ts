@@ -61,6 +61,101 @@ function validServerBundle(source: string): boolean {
   }
   return exportsHandle;
 }
+function nodeModuleFromSource(source: string): string | undefined {
+  let program: unknown;
+  try { program = parseEsm(source, { sourceType: "unambiguous", plugins: ["typescript", "jsx"], createImportExpressions: true }).program; } catch { return; }
+  const builtins = new Set(["assert", "async_hooks", "buffer", "child_process", "cluster", "console", "constants", "crypto", "dgram", "diagnostics_channel", "dns", "domain", "events", "fs", "http", "http2", "https", "inspector", "module", "net", "os", "path", "perf_hooks", "process", "punycode", "querystring", "readline", "repl", "sea", "sqlite", "stream", "string_decoder", "sys", "test", "timers", "tls", "trace_events", "tty", "url", "util", "v8", "vm", "wasi", "worker_threads", "zlib"]);
+  const supported = new Set(["assert", "assert/strict", "async_hooks", "buffer", "crypto", "events", "path", "path/posix", "process", "querystring", "stream", "stream/promises", "stream/web", "string_decoder", "timers", "timers/promises", "url", "util", "util/types"]);
+  const nodeName = (value: unknown): string | undefined => {
+    if (typeof value !== "string" || value.endsWith("/")) return;
+    const name = value.startsWith("node:") ? value.slice(5) : value;
+    const root = name.split("/")[0];
+    return builtins.has(root) && !supported.has(name) ? name : undefined;
+  };
+  const shadowedRequire = (() => {
+    const scan = [program];
+    while (scan.length) {
+      const current = scan.pop();
+      if (Array.isArray(current)) { scan.push(...current); continue; }
+      if (!bundleAstNode(current)) continue;
+      const hasRequire = (value: unknown): boolean => bundleAstNode(value) && value.type === "Identifier" && value.name === "require";
+      if (current.type === "VariableDeclarator" && hasRequire(current.id)) return true;
+      if ((current.type === "FunctionDeclaration" || current.type === "FunctionExpression" || current.type === "ArrowFunctionExpression") && Array.isArray(current.params) && current.params.some(hasRequire)) return true;
+      if (current.type === "FunctionDeclaration" && hasRequire(current.id)) return true;
+      for (const child of Object.values(current)) scan.push(child);
+    }
+    return false;
+  })();
+  const pending = [program];
+  const unsupported: string[] = [];
+  while (pending.length) {
+    const current = pending.pop();
+    if (Array.isArray(current)) { pending.push(...current); continue; }
+    if (!bundleAstNode(current)) continue;
+    const sourceValue = current.source;
+    if (current.type === "ImportDeclaration" && current.importKind !== "type"
+      && !(Array.isArray(current.specifiers) && current.specifiers.length > 0 && current.specifiers.every((item) => bundleAstNode(item) && item.importKind === "type"))) {
+      const found = nodeName(bundleAstNode(sourceValue) ? sourceValue.value : undefined); if (found) unsupported.push(found);
+    }
+    if ((current.type === "ExportNamedDeclaration" || current.type === "ExportAllDeclaration") && current.exportKind !== "type" && bundleAstNode(sourceValue)) {
+      const found = nodeName(sourceValue.value); if (found) unsupported.push(found);
+    }
+    if (current.type === "ImportExpression" && bundleAstNode(current.source)) {
+      const found = nodeName(current.source.value); if (found) unsupported.push(found);
+    }
+    if (current.type === "CallExpression" && bundleAstNode(current.callee) && current.callee.type === "Import" && Array.isArray(current.arguments)) {
+      const found = nodeName(bundleAstNode(current.arguments[0]) ? current.arguments[0].value : undefined); if (found) unsupported.push(found);
+    }
+    if (!shadowedRequire && current.type === "CallExpression" && bundleAstNode(current.callee) && current.callee.type === "Identifier" && current.callee.name === "require" && Array.isArray(current.arguments)) {
+      const found = nodeName(bundleAstNode(current.arguments[0]) ? current.arguments[0].value : undefined); if (found) unsupported.push(found);
+    }
+    for (const child of Object.values(current)) pending.push(child);
+  }
+  return unsupported.sort()[0];
+}
+function sourceSpecifiers(source: string): string[] {
+  let program: unknown;
+  try { program = parseEsm(source, { sourceType: "unambiguous", plugins: ["typescript", "jsx"], createImportExpressions: true }).program; } catch { return []; }
+  const found = new Set<string>();
+  const pending = [program];
+  while (pending.length) {
+    const current = pending.pop();
+    if (Array.isArray(current)) { pending.push(...current); continue; }
+    if (!bundleAstNode(current)) continue;
+    if (current.type === "ImportDeclaration" && current.importKind !== "type"
+      && !(Array.isArray(current.specifiers) && current.specifiers.length > 0 && current.specifiers.every((item) => bundleAstNode(item) && item.importKind === "type"))
+      && bundleAstNode(current.source) && typeof current.source.value === "string") found.add(current.source.value);
+    if ((current.type === "ExportNamedDeclaration" || current.type === "ExportAllDeclaration") && current.exportKind !== "type" && bundleAstNode(current.source) && typeof current.source.value === "string") found.add(current.source.value);
+    if (current.type === "ImportExpression" && bundleAstNode(current.source) && typeof current.source.value === "string") found.add(current.source.value);
+    if (current.type === "CallExpression" && bundleAstNode(current.callee) && current.callee.type === "Identifier" && current.callee.name === "require" && Array.isArray(current.arguments)) {
+      const value = current.arguments[0]; if (bundleAstNode(value) && typeof value.value === "string") found.add(value.value);
+    }
+    for (const child of Object.values(current)) pending.push(child);
+  }
+  return [...found].sort(byteOrder);
+}
+function validateFunctionSources(manifest: FunctionsManifest, files: Record<string, string>): void {
+  const visited = new Set<string>();
+  const pending = Object.values(manifest.functions).map((fn) => fn.entry).sort(byteOrder);
+  while (pending.length) {
+    const file = pending.shift()!;
+    if (visited.has(file)) continue;
+    visited.add(file);
+    const source = files[file];
+    if (typeof source !== "string") continue;
+    const nodeModule = nodeModuleFromSource(source);
+    if (nodeModule) throw refusal("function.node-module-unsupported", `Server functions cannot import the Node.js module node:${nodeModule}.`);
+    for (const specifier of sourceSpecifiers(source)) {
+      if (!specifier.startsWith(".")) continue;
+      const parts = [...file.split("/").slice(0, -1)];
+      for (const part of specifier.split("/")) { if (part === "..") parts.pop(); else if (part !== ".") parts.push(part); }
+      const base = parts.join("/");
+      const resolved = [base, ...[".ts", ".tsx", ".js", ".jsx", ".mts", ".mjs", ".cts", ".cjs"].map((ext) => `${base}${ext}`), ...["index.ts", "index.tsx", "index.js", "index.mjs"].map((index) => `${base}/${index}`)].find((candidate) => Object.hasOwn(files, candidate));
+      if (resolved) pending.push(resolved);
+    }
+    pending.sort(byteOrder);
+  }
+}
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -170,6 +265,8 @@ function validateServerArtifact(manifest: FunctionsManifest | undefined, input: 
   if (total > 8388608) throw refusal("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.");
   if (!manifest || canonical(normalized) !== canonical(manifest)) throw refusal("function.artifact-manifest", "Server Artifact manifest does not match functions.json.");
   for (const name of Object.keys(bundles)) {
+    const nodeModule = nodeModuleFromSource(bundles[name]);
+    if (nodeModule) throw refusal("function.node-module-unsupported", `Server functions cannot import the Node.js module node:${nodeModule}.`);
     if (!validServerBundle(bundles[name])) {
       throw refusal("function.bundle-contract", `Function ${name} bundle must be a self-contained ESM module exporting handle.`);
     }
@@ -181,11 +278,11 @@ function serverManifestText(manifest: FunctionsManifest, hashes: Record<string, 
   return JSON.stringify({ version: 1, abi: FUNCTIONS_ABI, manifest, hashes }, null, 2);
 }
 
-  return { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText };
+  return { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText, nodeModuleFromSource, validateFunctionSources };
 }
 
-const { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText } = functionsContract(refusal, parseEsm);
-export { parseFunctions, validateFunctions, serverManifestText, validateServerArtifact };
+const { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText, nodeModuleFromSource, validateFunctionSources } = functionsContract(refusal, parseEsm);
+export { parseFunctions, validateFunctions, serverManifestText, validateServerArtifact, nodeModuleFromSource, validateFunctionSources };
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -217,13 +314,13 @@ export async function verifyServerFolder(files: Record<string, Uint8Array>): Pro
   const artifact = serverArtifactFromFolder(files);
   if (!artifact) return;
   const published: unknown = JSON.parse(new TextDecoder().decode(files["manifest.json"]));
-  if (!object(published) || !object(published.hashes)) throw Error("Server Artifact hashes do not match its bundles.");
+  if (!object(published) || !object(published.hashes)) throw refusal("function.artifact-digest", "Server Artifact hashes do not match its bundles.");
   const hashes = published.hashes;
-  if (Object.keys(hashes).length !== Object.keys(artifact.bundles).length) throw Error("Server Artifact hashes do not match its bundles.");
-  for (const name of Object.keys(artifact.bundles)) if (hashes[name] !== await checksum(files[`${name}.mjs`])) throw Error("Server Artifact hashes do not match its bundles.");
+  if (Object.keys(hashes).length !== Object.keys(artifact.bundles).length) throw refusal("function.artifact-digest", "Server Artifact hashes do not match its bundles.");
+  for (const name of Object.keys(artifact.bundles)) if (hashes[name] !== await checksum(files[`${name}.mjs`])) throw refusal("function.artifact-digest", "Server Artifact hashes do not match its bundles.");
 }
 
 export function functionsBuildSupport(): string {
   return `const parseEsm = createRequire(import.meta.url)('./babel-parser.cjs').parse;
-const { parseFunctions, validateFunctions, validateServerArtifact } = (${functionsContract.toString()})(undefined, parseEsm);`;
+const { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources } = (${functionsContract.toString()})(undefined, parseEsm);`;
 }

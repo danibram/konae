@@ -1,0 +1,42 @@
+{
+  "runner": "wasm",
+  "runs_per_route": 200,
+  "cold_first_request_ms": {
+    "profiles": 319.066375,
+    "dashboard": 21.065708,
+    "patients": 50.477958,
+    "files": 21.453583
+  },
+  "read_route": {
+    "path": "/api/clinic/patients/4",
+    "count": 200,
+    "p50_ms": 41.370041,
+    "p95_ms": 44.59675,
+    "mean_ms": 41.676555785
+  },
+  "write_route": {
+    "path": "/api/clinic/patients/4/archive",
+    "count": 200,
+    "p50_ms": 42.385833,
+    "p95_ms": 46.818583,
+    "mean_ms": 43.073915639999996
+  },
+  "rss_rest": {
+    "kernel_kib": 72432,
+    "workers_kib": [
+      163952
+    ],
+    "workers_total_kib": 163952
+  },
+  "rss_peak_sampled_during_load": {
+    "kernel_kib": 72528,
+    "workers_kib": [
+      164112
+    ],
+    "workers_total_kib": 164112
+  },
+  "rss_samples": 897,
+  "load_concurrency": 1,
+  "spacing_ms": 110.0,
+  "measurementWindowUtc": "2026-11-24 13:00-13:59 UTC"
+}

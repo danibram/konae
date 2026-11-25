@@ -57,6 +57,8 @@ El host autentica antes de validar ID, JSON o tamaño del body. Cuenta los bytes
 npm --prefix spikes/functions-runtime/baselines test
 ```
 
+`npm --prefix spikes/functions-runtime/baselines run test:bun` ejecuta la misma suite con Bun y usa `bun:sqlite` para inspeccionar los datos de prueba. Los dos servidores arrancan con Node en ambas variantes.
+
 El comando arranca y detiene ambos servidores de producción en 43303 y 43304. Crea datos temporales dentro de `.tmp/` y los elimina al terminar. Necesita el build previo de Next y los bundles compartidos. No ejecuta carga.
 
 La prueba cubre salud, rutas desconocidas, sesiones ausentes/ajenas/caducadas, autenticación antes de validación, IDs, JSON estricto, aislamiento por actor y app, 16384/16385 bytes, lectura tras escritura y auditoría. También instala un trigger que fuerza el fallo de auditoría para comprobar que la actualización se revierte. Las preferencias se prueban con y sin cookies y headers. El cliente usa HTTP sin añadir `Accept-Language`, por lo que puede verificar el valor `null`.

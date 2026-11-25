@@ -6,13 +6,17 @@ use crate::{
 use anyhow::Result;
 use serde_json::Value;
 use std::{
-    fmt, fs,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::process::CommandExt},
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::{fs::MetadataExt, process::CommandExt},
+    },
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -20,7 +24,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-const CANCEL_GRACE: Duration = Duration::from_millis(50);
+const CANCEL_GRACE: Duration = Duration::from_millis(100);
+#[cfg(target_os = "linux")]
+const WASM_ADDRESS_SPACE_LIMIT: i64 = 24 * 1024 * 1024 * 1024;
+
+enum WorkerInit {
+    Sources(BTreeMap<String, String>),
+    Prepared(BTreeMap<String, std::fs::File>),
+}
 
 struct BufferedBody {
     bytes: Vec<u8>,
@@ -43,13 +54,26 @@ impl crate::RequestBody for Mutex<BufferedBody> {
 #[derive(Debug)]
 pub struct WorkerError {
     code: String,
+    detail: Option<String>,
 }
 impl WorkerError {
     pub fn new(code: impl Into<String>) -> Self {
-        Self { code: code.into() }
+        Self {
+            code: code.into(),
+            detail: None,
+        }
+    }
+    pub fn with_detail(code: impl Into<String>, detail: Option<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: detail.map(|text| bounded_detail(&text)),
+        }
     }
     pub fn code(&self) -> &str {
         &self.code
+    }
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
     }
 }
 impl fmt::Display for WorkerError {
@@ -63,8 +87,41 @@ pub fn error_code(error: &anyhow::Error) -> &str {
         .downcast_ref::<WorkerError>()
         .map_or("worker_failed", WorkerError::code)
 }
+pub fn error_detail(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<WorkerError>()
+        .and_then(WorkerError::detail)
+}
+fn bounded_detail(detail: &str) -> String {
+    let mut end = detail.len().min(4096);
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    detail[..end].to_owned()
+}
 fn fail(code: &str) -> anyhow::Error {
     WorkerError::new(code).into()
+}
+fn validate_bundles(bundles: &BTreeMap<String, String>) -> Result<()> {
+    let mut total = 0usize;
+    for (name, source) in bundles {
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(fail("invalid_function_name"));
+        }
+        if source.len() > 1024 * 1024 {
+            return Err(fail("bundle_too_large"));
+        }
+        total = total.saturating_add(source.len());
+    }
+    if bundles.is_empty() || total > protocol::MAX_SOURCE_BYTES {
+        return Err(fail("bundle_too_large"));
+    }
+    Ok(())
 }
 fn nonce() -> Result<String> {
     let mut bytes = [0u8; 32];
@@ -91,6 +148,41 @@ impl ExecutionBudget for Until {
     }
 }
 
+struct SpawnRequest {
+    command: Command,
+    reply: mpsc::SyncSender<std::io::Result<Child>>,
+}
+
+fn child_spawner() -> std::io::Result<&'static mpsc::Sender<SpawnRequest>> {
+    static SPAWNER: OnceLock<std::result::Result<mpsc::Sender<SpawnRequest>, ()>> = OnceLock::new();
+    SPAWNER
+        .get_or_init(|| {
+            let (sender, requests) = mpsc::channel::<SpawnRequest>();
+            thread::Builder::new()
+                .name("konae-function-spawner".into())
+                .spawn(move || {
+                    while let Ok(mut request) = requests.recv() {
+                        let result = request.command.spawn();
+                        let _ = request.reply.send(result);
+                    }
+                })
+                .map_err(|_| ())?;
+            Ok(sender)
+        })
+        .as_ref()
+        .map_err(|_| std::io::Error::other("worker_spawner_failed"))
+}
+
+fn spawn_child(command: Command) -> std::io::Result<Child> {
+    let (reply, result) = mpsc::sync_channel(1);
+    child_spawner()?
+        .send(SpawnRequest { command, reply })
+        .map_err(|_| std::io::Error::other("worker_spawner_failed"))?;
+    result
+        .recv()
+        .map_err(|_| std::io::Error::other("worker_spawner_failed"))?
+}
+
 pub struct Worker {
     child: Option<Child>,
     input: Option<ChildStdin>,
@@ -101,57 +193,119 @@ pub struct Worker {
     stderr: Arc<Mutex<Vec<u8>>>,
     limits: WorkerLimits,
     generation: String,
+    functions: BTreeSet<String>,
     request: u64,
     busy: bool,
     synchronized: bool,
     shutdown_invoked: bool,
     containment: Containment,
     oom_kills_at_spawn: Option<u64>,
+    require_rss: bool,
 }
 impl Worker {
     pub fn spawn_with_policy(
         executable: &Path,
-        function: &str,
-        bundle_dir: &Path,
+        bundles: &BTreeMap<String, String>,
         budget: &impl ExecutionBudget,
         limits: WorkerLimits,
         policy: MemoryPolicy,
+    ) -> Result<Self> {
+        Self::spawn_with_expected_engine(
+            executable,
+            bundles,
+            budget,
+            limits,
+            policy,
+            crate::protocol::EngineKind::Deno,
+        )
+    }
+
+    pub fn spawn_with_expected_engine(
+        executable: &Path,
+        bundles: &BTreeMap<String, String>,
+        budget: &impl ExecutionBudget,
+        limits: WorkerLimits,
+        policy: MemoryPolicy,
+        expected_engine: crate::protocol::EngineKind,
+    ) -> Result<Self> {
+        Self::spawn_initialized(
+            executable,
+            WorkerInit::Sources(bundles.clone()),
+            budget,
+            limits,
+            policy,
+            Some(expected_engine),
+        )
+    }
+
+    pub fn spawn_prepared_with_policy(
+        executable: &Path,
+        components: BTreeMap<String, std::fs::File>,
+        budget: &impl ExecutionBudget,
+        limits: WorkerLimits,
+        policy: MemoryPolicy,
+    ) -> Result<Self> {
+        Self::spawn_initialized(
+            executable,
+            WorkerInit::Prepared(components),
+            budget,
+            limits,
+            policy,
+            Some(crate::protocol::EngineKind::Starlingmonkey),
+        )
+    }
+
+    fn spawn_initialized(
+        executable: &Path,
+        init: WorkerInit,
+        budget: &impl ExecutionBudget,
+        limits: WorkerLimits,
+        policy: MemoryPolicy,
+        expected_engine: Option<crate::protocol::EngineKind>,
     ) -> Result<Self> {
         remaining(budget)?;
         if !limits.validate() {
             return Err(fail("invalid_worker_limits"));
         }
-        if function.is_empty()
-            || function.len() > 64
-            || !function
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err(fail("invalid_function_name"));
-        }
-        let primary = bundle_dir.join(format!("{function}.mjs"));
-        let path = if primary.exists() {
-            primary
-        } else {
-            bundle_dir.join(format!("{function}.js"))
+        let functions: BTreeSet<String> = match &init {
+            WorkerInit::Sources(bundles) => {
+                validate_bundles(bundles)?;
+                bundles.keys().cloned().collect()
+            }
+            WorkerInit::Prepared(components) => {
+                anyhow::ensure!(!components.is_empty(), fail("invalid_init"));
+                let mut fds = BTreeSet::new();
+                for (name, file) in components {
+                    anyhow::ensure!(
+                        !name.is_empty()
+                            && name.len() <= 64
+                            && name
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+                        fail("invalid_init")
+                    );
+                    let fd = file.as_raw_fd();
+                    anyhow::ensure!(fd > 2 && fds.insert(fd), fail("invalid_init"));
+                    let metadata = file.metadata()?;
+                    anyhow::ensure!(
+                        metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() },
+                        fail("invalid_init")
+                    );
+                    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                    anyhow::ensure!(
+                        flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY,
+                        fail("invalid_init")
+                    );
+                }
+                components.keys().cloned().collect()
+            }
         };
-        let file = fs::File::open(&path)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.len() > protocol::MAX_SOURCE_BYTES as u64 {
-            return Err(fail("bundle_too_large"));
-        }
-        let mut bytes = Vec::new();
-        file.take(protocol::MAX_SOURCE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > protocol::MAX_SOURCE_BYTES {
-            return Err(fail("bundle_too_large"));
-        }
-        let source = String::from_utf8(bytes).map_err(|_| fail("bundle_invalid_utf8"))?;
         remaining(budget)?;
         let generation = nonce()?;
         let strict_linux = matches!(policy, MemoryPolicy::LinuxCgroup { .. });
+        let wasm_linux = matches!(policy, MemoryPolicy::Wasm);
         #[cfg(target_os = "linux")]
-        let worker_identity = if strict_linux {
+        let worker_identity = if strict_linux || wasm_linux {
             Some(worker_identity()?)
         } else {
             None
@@ -165,19 +319,83 @@ impl Worker {
             .env_clear()
             .env(
                 "KONAE_INTERNAL_FUNCTIONS_SANDBOX",
-                if strict_linux { "linux-v1" } else { "disabled" },
+                if strict_linux {
+                    "linux-v1"
+                } else if wasm_linux {
+                    "wasm-v1"
+                } else {
+                    "disabled"
+                },
             )
             .current_dir("/")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        if let WorkerInit::Prepared(components) = &init {
+            let mut inherited: Vec<RawFd> = components.values().map(AsRawFd::as_raw_fd).collect();
+            inherited.sort_unstable();
+            unsafe {
+                child_command.pre_exec(move || {
+                    for fd in &inherited {
+                        let flags = libc::fcntl(*fd, libc::F_GETFD);
+                        if flags < 0
+                            || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    let close_from = |start: u32, end: u32| -> std::io::Result<()> {
+                        if start > end {
+                            return Ok(());
+                        }
+                        #[cfg(target_os = "linux")]
+                        if libc::syscall(
+                            libc::SYS_close_range,
+                            start,
+                            end,
+                            libc::CLOSE_RANGE_CLOEXEC,
+                        ) == 0
+                        {
+                            return Ok(());
+                        }
+                        let mut limit = std::mem::MaybeUninit::<libc::rlimit>::zeroed();
+                        if libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        let end = end.min(
+                            (limit.assume_init().rlim_cur.min(1_048_576) as u32).saturating_sub(1),
+                        );
+                        for fd in start..=end {
+                            if libc::fcntl(fd as RawFd, libc::F_SETFD, libc::FD_CLOEXEC) != 0 {
+                                let error = std::io::Error::last_os_error();
+                                if error.raw_os_error() != Some(libc::EBADF) {
+                                    return Err(error);
+                                }
+                            }
+                        }
+                        Ok(())
+                    };
+                    let mut start = 3u32;
+                    for fd in &inherited {
+                        let fd = *fd as u32;
+                        close_from(start, fd.saturating_sub(1))?;
+                        start = fd.saturating_add(1);
+                    }
+                    close_from(start, u32::MAX)?;
+                    Ok(())
+                });
+            }
+        }
         #[cfg(target_os = "linux")]
         if let Some((uid, gid)) = worker_identity {
-            child_command
-                .env("KONAE_INTERNAL_FUNCTIONS_UID", uid.to_string())
-                .env("KONAE_INTERNAL_FUNCTIONS_GID", gid.to_string());
+            if !wasm_linux {
+                child_command
+                    .env("KONAE_INTERNAL_FUNCTIONS_UID", uid.to_string())
+                    .env("KONAE_INTERNAL_FUNCTIONS_GID", gid.to_string());
+            }
             let supervisor_pid = std::process::id() as i32;
+            let network_filter = wasm_linux.then(crate::sandbox::network_filter);
             unsafe {
                 child_command.pre_exec(move || {
                     let oom_path = b"/proc/self/oom_score_adj\0";
@@ -190,19 +408,49 @@ impl Worker {
                         return Err(std::io::Error::last_os_error());
                     }
                     libc::close(oom_fd);
-                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    if let Some(network_filter) = &network_filter {
+                        if libc::setgroups(0, std::ptr::null()) != 0
+                            || libc::setresgid(gid, gid, gid) != 0
+                            || libc::setresuid(uid, uid, uid) != 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        crate::sandbox::drop_privileges()?;
+                        network_filter()?;
+                        for (resource, soft, hard) in [
+                            (libc::RLIMIT_CORE, 0, 0),
+                            (libc::RLIMIT_NOFILE, 64, 64),
+                            (libc::RLIMIT_NPROC, 64, 64),
+                            (libc::RLIMIT_FSIZE, 0, 0),
+                            (
+                                libc::RLIMIT_AS,
+                                WASM_ADDRESS_SPACE_LIMIT,
+                                WASM_ADDRESS_SPACE_LIMIT,
+                            ),
+                        ] {
+                            let limit = libc::rlimit {
+                                rlim_cur: soft as libc::rlim_t,
+                                rlim_max: hard as libc::rlim_t,
+                            };
+                            if libc::setrlimit(resource, &limit) != 0 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                        }
+                        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+                            || libc::getppid() != supervisor_pid
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    } else if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+                        || libc::getppid() != supervisor_pid
+                    {
                         return Err(std::io::Error::last_os_error());
-                    }
-                    if libc::getppid() != supervisor_pid {
-                        return Err(std::io::Error::other(
-                            "worker supervisor exited before PDEATHSIG setup",
-                        ));
                     }
                     Ok(())
                 });
             }
         }
-        let mut child = child_command.spawn()?;
+        let mut child = spawn_child(child_command)?;
         if let Err(error) = containment.attach(child.id()) {
             let _ = child.kill();
             let _ = child.wait();
@@ -273,24 +521,34 @@ impl Worker {
             stderr,
             limits: limits.clone(),
             generation: generation.clone(),
+            functions,
             request: 0,
             busy: false,
             synchronized: true,
             shutdown_invoked: false,
             containment,
             oom_kills_at_spawn,
+            require_rss: wasm_linux,
         };
         let initialized = (|| {
-            worker.send(
-                &ParentMessage::Init {
+            let init_message = match &init {
+                WorkerInit::Sources(bundles) => ParentMessage::Init {
                     abi: protocol::ABI.into(),
-                    function: function.into(),
-                    source,
+                    bundles: bundles.clone(),
                     generation,
                     limits,
                 },
-                budget,
-            )?;
+                WorkerInit::Prepared(components) => ParentMessage::InitPrepared {
+                    abi: protocol::ABI.into(),
+                    generation,
+                    limits,
+                    components: components
+                        .iter()
+                        .map(|(name, file)| (name.clone(), file.as_raw_fd() as u32))
+                        .collect(),
+                },
+            };
+            worker.send(&init_message, budget)?;
             let ready = match worker.receive(budget) {
                 Ok(message) => message,
                 Err(error) => {
@@ -309,15 +567,22 @@ impl Worker {
                 }
             };
             match ready {
-                ChildMessage::Ready { abi, generation }
-                    if abi == protocol::ABI && generation == worker.generation =>
+                ChildMessage::Ready {
+                    abi,
+                    generation,
+                    engine,
+                } if abi == protocol::ABI
+                    && generation == worker.generation
+                    && engine.is_some()
+                    && expected_engine.is_none_or(|expected| engine == Some(expected)) =>
                 {
                     Ok(())
                 }
                 ChildMessage::Failure {
                     capability: None,
                     code,
-                } => Err(fail(&code)),
+                    detail,
+                } => Err(WorkerError::with_detail(code, detail).into()),
                 _ => Err(fail("worker_initialization_failed")),
             }
         })();
@@ -340,11 +605,15 @@ impl Worker {
         self.synchronized && self.child.is_some()
     }
     fn memory_check(&self) -> Result<()> {
-        let pid = self.pid().ok_or_else(|| fail("worker_failed"))?;
+        let pid = self
+            .pid()
+            .ok_or_else(|| self.crash_error("worker_failed"))?;
         if let Some(rss) = resident_bytes(pid) {
             if rss > self.limits.rss_bytes {
-                return Err(fail("worker_memory_limit"));
+                return Err(self.crash_error("worker_memory_limit"));
             }
+        } else if self.require_rss {
+            return Err(self.crash_error("worker_memory_limit"));
         }
         Ok(())
     }
@@ -354,19 +623,29 @@ impl Worker {
         while offset < frame.len() {
             remaining(budget)?;
             self.memory_check()?;
-            match self
-                .input
-                .as_mut()
-                .ok_or_else(|| fail("worker_failed"))?
-                .write(&frame[offset..])
-            {
-                Ok(0) => return Err(fail("worker_failed")),
+            let write_result = match self.input.as_mut() {
+                Some(input) => input.write(&frame[offset..]),
+                None => return Err(self.crash_error("worker_failed")),
+            };
+            match write_result {
+                Ok(0) => return Err(self.crash_error("worker_failed")),
                 Ok(n) => offset += n,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(1))
+                    if let Err(error) = poll_writable(
+                        self.input
+                            .as_ref()
+                            .ok_or_else(|| self.crash_error("worker_failed"))?
+                            .as_raw_fd(),
+                        budget,
+                    ) {
+                        if matches!(error_code(&error), "deadline_exceeded" | "cancelled") {
+                            return Err(error);
+                        }
+                        return Err(self.crash_error("worker_failed"));
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => return Err(fail("worker_failed")),
+                Err(_) => return Err(self.crash_error("worker_failed")),
             }
         }
         Ok(())
@@ -391,10 +670,21 @@ impl Worker {
     }
     fn exit_error(&self) -> anyhow::Error {
         if oom_kill_confirmed(self.oom_kills_at_spawn, self.containment.oom_kill_count()) {
-            fail("worker_memory_limit")
+            self.crash_error("worker_memory_limit")
         } else {
-            fail("worker_failed")
+            self.crash_error("worker_failed")
         }
+    }
+    fn crash_error(&self, code: &str) -> anyhow::Error {
+        WorkerError::with_detail(code, self.stderr_tail()).into()
+    }
+    fn stderr_tail(&self) -> Option<String> {
+        let stderr = self
+            .stderr
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let start = stderr.len().saturating_sub(4096);
+        (!stderr.is_empty()).then(|| String::from_utf8_lossy(&stderr[start..]).into_owned())
     }
     fn capability(&mut self) -> Result<Capability> {
         self.request = self
@@ -410,10 +700,14 @@ impl Worker {
     }
     pub fn invoke_with(
         &mut self,
+        function: &str,
         mut input: Input,
         budget: &impl ExecutionBudget,
         callback: &mut dyn FnMut(&str, Value) -> std::result::Result<Value, String>,
     ) -> Result<Output> {
+        if !self.functions.contains(function) {
+            return Err(fail("invalid_function_name"));
+        }
         let body = std::mem::take(&mut input.body);
         if body.len() != input.body_len
             || body.len() > 100_000_000
@@ -426,6 +720,7 @@ impl Worker {
         let capability = self.capability()?;
         let message = ParentMessage::Invoke {
             capability: capability.clone(),
+            function: function.to_owned(),
             input,
         };
         let body: Arc<dyn crate::RequestBody> = Arc::new(Mutex::new(BufferedBody {
@@ -436,11 +731,15 @@ impl Worker {
     }
     pub fn invoke_with_body(
         &mut self,
+        function: &str,
         input: Input,
         body: Arc<dyn crate::RequestBody>,
         budget: &impl ExecutionBudget,
         callback: &mut dyn FnMut(&str, Value) -> std::result::Result<Value, String>,
     ) -> Result<Output> {
+        if !self.functions.contains(function) {
+            return Err(fail("invalid_function_name"));
+        }
         if !input.body.is_empty()
             || input.body_len > 100_000_000
             || header_bytes(&input.headers) > protocol::MAX_HEADER_BYTES
@@ -452,6 +751,7 @@ impl Worker {
         let capability = self.capability()?;
         let message = ParentMessage::Invoke {
             capability: capability.clone(),
+            function: function.to_owned(),
             input,
         };
         self.execute(message, capability, body, budget, callback)
@@ -484,6 +784,18 @@ impl Worker {
         }
         self.busy = true;
         self.synchronized = false;
+        if let Some(pid) = self.pid() {
+            let kill_containment = self.containment.kill_handle();
+            budget.register_abort_handler(Arc::new(move || {
+                if !kill_containment() {
+                    return;
+                }
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }));
+        }
         let mut can_resynchronize = false;
         let result = (|| {
             self.send(&message, budget)?;
@@ -592,9 +904,19 @@ impl Worker {
                     ChildMessage::Failure {
                         capability: Some(received),
                         code,
+                        detail,
                     } if received == capability => {
                         self.synchronized = true;
-                        return Err(fail(native_error.as_deref().unwrap_or(&code)));
+                        let code = native_error.as_deref().unwrap_or(&code);
+                        let code = if code == "cancelled"
+                            && !budget.is_cancelled()
+                            && budget.deadline() <= Instant::now()
+                        {
+                            "deadline_exceeded"
+                        } else {
+                            code
+                        };
+                        return Err(WorkerError::with_detail(code, detail).into());
                     }
                     _ => return Err(fail("worker_protocol_error")),
                 }
@@ -603,6 +925,7 @@ impl Worker {
         if result.is_err() {
             let code = error_code(result.as_ref().err().unwrap());
             let interrupted = matches!(code, "deadline_exceeded" | "cancelled");
+            let reusable_handler_error = code == "handler_error" && self.synchronized;
             if interrupted && can_resynchronize && !self.synchronized {
                 let grace = Until(Instant::now() + CANCEL_GRACE);
                 if self
@@ -633,10 +956,12 @@ impl Worker {
                     }
                 }
             }
-            if !interrupted || !self.synchronized {
+            if (!interrupted && !reusable_handler_error) || !self.synchronized {
                 self.stop();
             }
         }
+        // The worker is either answering again or already stopped; a later abort has nothing to kill.
+        budget.clear_abort_handler();
         self.busy = false;
         result
     }
@@ -691,6 +1016,33 @@ impl Worker {
         self.containment.cleanup()
     }
 }
+
+fn poll_writable(fd: std::os::fd::RawFd, budget: &impl ExecutionBudget) -> Result<()> {
+    loop {
+        let left = remaining(budget)?;
+        let milliseconds = left.min(Duration::from_millis(5)).as_millis().max(1) as i32;
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut descriptor, 1, milliseconds) };
+        if result > 0 {
+            if descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                return Err(fail("worker_failed"));
+            }
+            return Ok(());
+        }
+        if result == 0 {
+            remaining(budget)?;
+            continue;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(fail("worker_failed"));
+        }
+    }
+}
 #[cfg(target_os = "linux")]
 pub fn validate_linux_worker_identity() -> Result<()> {
     worker_identity().map(|_| ())
@@ -717,14 +1069,14 @@ fn worker_identity() -> Result<(libc::uid_t, libc::gid_t)> {
     let uid = std::env::var("KONAE_FUNCTIONS_UID")
         .ok()
         .and_then(|value| value.parse::<libc::uid_t>().ok())
-        .filter(|uid| *uid != u32::MAX && *uid != unsafe { libc::geteuid() })
+        .filter(|uid| *uid != 0 && *uid != u32::MAX && *uid != unsafe { libc::geteuid() })
         .ok_or_else(unavailable)?;
     let gid = std::env::var("KONAE_FUNCTIONS_GID")
         .ok()
         .and_then(|value| value.parse::<libc::gid_t>().ok())
-        .filter(|gid| *gid != u32::MAX && *gid != unsafe { libc::getegid() })
+        .filter(|gid| *gid != 0 && *gid != u32::MAX && *gid != unsafe { libc::getegid() })
         .ok_or_else(unavailable)?;
-    let status = fs::read_to_string("/proc/self/status").map_err(|_| unavailable())?;
+    let status = std::fs::read_to_string("/proc/self/status").map_err(|_| unavailable())?;
     let effective = status
         .lines()
         .find_map(|line| line.strip_prefix("CapEff:\t"))
@@ -755,6 +1107,112 @@ impl Drop for Worker {
 mod tests {
     use super::*;
 
+    struct CancellableBudget {
+        deadline: Instant,
+        cancelled: AtomicBool,
+    }
+
+    impl ExecutionBudget for CancellableBudget {
+        fn deadline(&self) -> Instant {
+            self.deadline
+        }
+
+        fn is_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::SeqCst)
+        }
+    }
+
+    #[test]
+    fn preserves_authored_framing_headers_for_kernel_validation() {
+        let output = Output {
+            status: 200,
+            headers: vec![("content-length".into(), "1".into())],
+            body: "x".into(),
+        };
+        assert!(validate_output(&output, &WorkerLimits::default()).is_ok());
+    }
+
+    #[test]
+    fn blocked_pipe_write_observes_cancellation_before_deadline() {
+        let mut descriptors = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (descriptors[0], descriptors[1]);
+        let flags = unsafe { libc::fcntl(write_fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(write_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+
+        let bytes = [0u8; 8192];
+        loop {
+            let written = unsafe { libc::write(write_fd, bytes.as_ptr().cast(), bytes.len()) };
+            if written < 0 {
+                assert_eq!(
+                    std::io::Error::last_os_error().kind(),
+                    std::io::ErrorKind::WouldBlock
+                );
+                break;
+            }
+        }
+
+        let budget = Arc::new(CancellableBudget {
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancelled: AtomicBool::new(false),
+        });
+        let canceller = Arc::clone(&budget);
+        let cancel_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            canceller.cancelled.store(true, Ordering::SeqCst);
+        });
+        let start = Instant::now();
+        let error = poll_writable(write_fd, budget.as_ref()).unwrap_err();
+        let elapsed = start.elapsed();
+
+        cancel_thread.join().unwrap();
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        assert_eq!(error_code(&error), "cancelled");
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "poll waited {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn validates_bundle_names_and_source_budgets() {
+        let valid = BTreeMap::from([("orders".into(), "export function handle() {}".into())]);
+        assert!(validate_bundles(&valid).is_ok());
+        let oversized = BTreeMap::from([("orders".into(), "x".repeat(1024 * 1024 + 1))]);
+        assert_eq!(
+            error_code(&validate_bundles(&oversized).unwrap_err()),
+            "bundle_too_large"
+        );
+        let total_oversized = (0..9)
+            .map(|index| (format!("function-{index}"), "x".repeat(1024 * 1024)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            error_code(&validate_bundles(&total_oversized).unwrap_err()),
+            "bundle_too_large"
+        );
+        let invalid_name = BTreeMap::from([("orders/1".into(), "x".into())]);
+        assert_eq!(
+            error_code(&validate_bundles(&invalid_name).unwrap_err()),
+            "invalid_function_name"
+        );
+    }
+
+    #[test]
+    fn bounds_worker_error_detail_to_four_kibibytes() {
+        let error = WorkerError::with_detail("handler_error", Some("x".repeat(4097))).to_string();
+        assert_eq!(error, "handler_error");
+        let error: anyhow::Error =
+            WorkerError::with_detail("handler_error", Some("x".repeat(4097))).into();
+        assert_eq!(error_detail(&error).unwrap().len(), 4096);
+    }
+
     #[test]
     fn classifies_only_a_new_cgroup_oom_as_memory_limit() {
         assert!(oom_kill_confirmed(Some(0), Some(1)));
@@ -784,18 +1242,6 @@ fn validate_output(output: &Output, limits: &WorkerLimits) -> Result<()> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
             || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0)
-            || matches!(
-                name.to_ascii_lowercase().as_str(),
-                "connection"
-                    | "transfer-encoding"
-                    | "content-length"
-                    | "upgrade"
-                    | "trailer"
-                    | "keep-alive"
-                    | "proxy-authenticate"
-                    | "proxy-authorization"
-                    | "te"
-            )
         {
             return Err(fail("invalid_response"));
         }
@@ -819,7 +1265,7 @@ fn resident_bytes(pid: u32) -> Option<usize> {
 }
 #[cfg(target_os = "linux")]
 fn resident_bytes(pid: u32) -> Option<usize> {
-    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     status.lines().find_map(|line| {
         line.strip_prefix("VmRSS:")
             .and_then(|s| s.split_whitespace().next())

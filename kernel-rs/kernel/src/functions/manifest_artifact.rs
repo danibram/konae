@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use anyhow::Result;
 use oxc_allocator::Allocator;
@@ -219,9 +219,109 @@ pub fn validate_artifact(manifest: Option<&Manifest>, artifact: Option<&ServerAr
     if total > MAX_SERVER { return Err(refuse("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.")); }
     if manifest != Some(&artifact.manifest) { return Err(refuse("function.artifact-manifest", "Server Artifact manifest does not match functions.json.")); }
     for (name, bundle) in &artifact.bundles {
+        if let Some(module) = unsupported_node_module(bundle) {
+            return Err(refuse("function.node-module-unsupported", format!("Server functions cannot import the Node.js module node:{module}.")));
+        }
         if !valid_bundle(bundle) { return Err(bundle_contract_refusal(name)); }
     }
     Ok(Some(Published { version: 1, abi: ABI.into(), manifest: artifact.manifest.clone(), hashes }))
+}
+
+fn unsupported_node_module(source: &str) -> Option<String> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::mjs()).parse();
+    if !parsed.errors.is_empty() { return None; }
+    unsupported_in_parsed(source, &parsed.module_record)
+}
+
+fn unsupported_in_parsed(source: &str, record: &oxc_syntax::module_record::ModuleRecord<'_>) -> Option<String> {
+    let builtins = ["assert", "async_hooks", "buffer", "child_process", "cluster", "console", "constants", "crypto", "dgram", "diagnostics_channel", "dns", "domain", "events", "fs", "http", "http2", "https", "inspector", "module", "net", "os", "path", "perf_hooks", "process", "punycode", "querystring", "readline", "repl", "sea", "sqlite", "stream", "string_decoder", "sys", "test", "timers", "tls", "trace_events", "tty", "url", "util", "v8", "vm", "wasi", "worker_threads", "zlib"];
+    let mut found = Vec::new();
+    for (specifier, requests) in &record.requested_modules {
+        if requests.iter().all(|request| request.is_type) { continue; }
+        if let Some(name) = canonical_node_name(specifier.as_str(), &builtins) { found.push(name); }
+    }
+    for dynamic in &record.dynamic_imports {
+        let Some(raw) = source.get(dynamic.module_request.start as usize..dynamic.module_request.end as usize) else { continue; };
+        let raw = raw.trim().trim_matches(['\'', '"']);
+        if let Some(name) = canonical_node_name(raw, &builtins) { found.push(name); }
+    }
+    if let Some(name) = commonjs_node_module(source, &builtins) { found.push(name); }
+    found.into_iter().min()
+}
+
+fn commonjs_node_module(source: &str, builtins: &[&str]) -> Option<String> {
+    #[derive(Clone)]
+    enum Token { Word(String), String(String), Symbol(char) }
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() { index += 1; continue; }
+        if bytes[index..].starts_with(b"//") { index += 2; while index < bytes.len() && bytes[index] != b'\n' { index += 1; } continue; }
+        if bytes[index..].starts_with(b"/*") { index += 2; while index + 1 < bytes.len() && !bytes[index..].starts_with(b"*/") { index += 1; } index = (index + 2).min(bytes.len()); continue; }
+        if matches!(bytes[index], b'\'' | b'"') {
+            let quote = bytes[index]; index += 1; let start = index;
+            while index < bytes.len() && bytes[index] != quote { if bytes[index] == b'\\' { index += 1; } index += 1; }
+            tokens.push(Token::String(String::from_utf8_lossy(&bytes[start..index]).into_owned()));
+            index = (index + 1).min(bytes.len()); continue;
+        }
+        if bytes[index] == b'`' { index += 1; while index < bytes.len() && bytes[index] != b'`' { if bytes[index] == b'\\' { index += 1; } index += 1; } index = (index + 1).min(bytes.len()); continue; }
+        if bytes[index].is_ascii_alphabetic() || matches!(bytes[index], b'_' | b'$') {
+            let start = index; index += 1;
+            while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'$')) { index += 1; }
+            tokens.push(Token::Word(String::from_utf8_lossy(&bytes[start..index]).into_owned())); continue;
+        }
+        tokens.push(Token::Symbol(bytes[index] as char)); index += 1;
+    }
+    let shadowed = tokens.windows(2).any(|pair| matches!((&pair[0], &pair[1]), (Token::Word(keyword), Token::Word(name)) if ["const", "let", "var", "function", "class"].contains(&keyword.as_str()) && name == "require"))
+        || tokens.windows(2).any(|pair| matches!((&pair[0], &pair[1]), (Token::Symbol('(' | ','), Token::Word(name)) if name == "require"));
+    if shadowed { return None; }
+    for window in tokens.windows(3) {
+        if let [Token::Word(name), Token::Symbol('('), Token::String(specifier)] = window {
+            if name == "require" { if let Some(module) = canonical_node_name(specifier, builtins) { return Some(module); } }
+        }
+    }
+    None
+}
+
+fn canonical_node_name(raw: &str, builtins: &[&str]) -> Option<String> {
+    let supported = ["assert", "assert/strict", "async_hooks", "buffer", "crypto", "events", "path", "path/posix", "process", "querystring", "stream", "stream/promises", "stream/web", "string_decoder", "timers", "timers/promises", "url", "util", "util/types"];
+    if raw.ends_with('/') { return None; }
+    let name = raw.strip_prefix("node:").unwrap_or(raw);
+    let root = name.split('/').next().unwrap_or(name);
+    (builtins.contains(&root) && !supported.contains(&name)).then(|| name.to_owned())
+}
+
+pub fn validate_function_sources(manifest: &Manifest, files: &HashMap<String, String>) -> Checked<()> {
+    let mut pending: Vec<String> = manifest.functions.values().map(|function| function.entry.clone()).collect();
+    pending.sort();
+    let mut visited = BTreeSet::new();
+    while let Some(file) = pending.first().cloned() {
+        pending.remove(0);
+        if !visited.insert(file.clone()) { continue; }
+        let Some(source) = files.get(&file) else { continue; };
+        let allocator = Allocator::default();
+        let source_type = if file.ends_with(".ts") || file.ends_with(".tsx") || file.ends_with(".mts") { SourceType::ts() } else { SourceType::mjs() };
+        let parsed = Parser::new(&allocator, source, source_type).parse();
+        if !parsed.errors.is_empty() { continue; }
+        if let Some(module) = unsupported_in_parsed(source, &parsed.module_record) {
+            return Err(refuse("function.node-module-unsupported", format!("Server functions cannot import the Node.js module node:{module}.")));
+        }
+        for specifier in parsed.module_record.requested_modules.keys().map(|value| value.as_str()).filter(|value| value.starts_with('.')) {
+            let parent = file.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+            let mut parts: Vec<&str> = parent.split('/').filter(|part| !part.is_empty()).collect();
+            for part in specifier.split('/') { match part { "" | "." => {}, ".." => { parts.pop(); }, other => parts.push(other) } }
+            let base = parts.join("/");
+            let mut candidates = vec![base.clone()];
+            for extension in [".ts", ".tsx", ".js", ".jsx", ".mts", ".mjs", ".cts", ".cjs"] { candidates.push(format!("{base}{extension}")); }
+            for index in ["index.ts", "index.tsx", "index.js", "index.mjs"] { candidates.push(format!("{base}/{index}")); }
+            if let Some(resolved) = candidates.into_iter().find(|candidate| files.contains_key(candidate)) { pending.push(resolved); }
+        }
+        pending.sort();
+        pending.dedup();
+    }
+    Ok(())
 }
 
 fn valid_bundle(source: &str) -> bool {
@@ -240,10 +340,13 @@ fn bundle_contract_refusal(name: &str) -> Refusal {
 }
 
 pub fn read_artifact(directory: &Path) -> Result<Option<ServerArtifact>> {
-    Ok(read_artifact_with_metadata(directory)?.map(|(artifact, _)| artifact))
+    Ok(read_artifact_with_metadata(directory, None)?.map(|(artifact, _)| artifact))
 }
 
-pub(crate) fn read_artifact_with_metadata(directory: &Path) -> Result<Option<(ServerArtifact, Published)>> {
+pub(crate) fn read_artifact_with_metadata(
+    directory: &Path,
+    expected: Option<&Published>,
+) -> Result<Option<(ServerArtifact, Published)>> {
     if !directory.exists() { return Ok(None); }
     if std::fs::read_dir(directory)?.next().is_none() { return Ok(None); }
     let file = directory.join("manifest.json");
@@ -261,8 +364,24 @@ pub(crate) fn read_artifact_with_metadata(directory: &Path) -> Result<Option<(Se
         bundles.insert(name.clone(), std::fs::read_to_string(path)?);
     }
     let artifact = ServerArtifact { version: published.version, abi: published.abi.clone(), manifest: published.manifest.clone(), bundles };
-    let checked = validate_artifact(Some(&published.manifest), Some(&artifact))?.unwrap();
-    anyhow::ensure!(checked == published, "Server Artifact hashes do not match its bundles.");
+    let checked = if let Some(expected) = expected {
+        anyhow::ensure!(expected == &published, "Published server artifact changed");
+        let mut checked = published.clone();
+        checked.hashes = artifact
+            .bundles
+            .iter()
+            .map(|(name, bundle)| (name.clone(), format!("{:x}", Sha256::digest(bundle.as_bytes()))))
+            .collect();
+        checked
+    } else {
+        validate_artifact(Some(&published.manifest), Some(&artifact))?.unwrap()
+    };
+    if checked != published {
+        return Err(anyhow::Error::new(refuse(
+            "function.artifact-digest",
+            "Server Artifact hashes do not match its bundles.",
+        )));
+    }
     let expected: BTreeSet<_> = std::iter::once("manifest.json".to_owned()).chain(published.manifest.functions.keys().map(|name| format!("{name}.mjs"))).collect();
     for entry in std::fs::read_dir(directory)? { anyhow::ensure!(expected.contains(&entry?.file_name().to_string_lossy().into_owned()), "Server directory contains an undeclared file."); }
     Ok(Some((artifact, checked)))
@@ -348,6 +467,42 @@ pub(crate) mod tests {
         assert_eq!(validate_artifact(Some(&changed.manifest), Some(&changed)).unwrap_err().code, "function.artifact-size");
     }
 
+    #[test]
+    fn shared_node_module_cases_match_source_graph_checks() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../functions-node-module-cases.json")).unwrap();
+        for (index, case) in cases.into_iter().enumerate() {
+            let entry = format!("functions/case-{index}.ts");
+            let mut files = HashMap::new();
+            if case["unreferenced"] == true {
+                files.insert(entry.clone(), "export const handle = () => null;".to_owned());
+                files.insert("functions/unreferenced.js".into(), case["source"].as_str().unwrap().to_owned());
+            } else {
+                files.insert(entry.clone(), case["source"].as_str().unwrap().to_owned());
+                if let Some(helper) = case["helper"].as_str() { files.insert("functions/helper.js".into(), helper.to_owned()); }
+            }
+            let manifest = Manifest { version: 1, functions: BTreeMap::from([("test".into(), Function { entry, mount: "/api/test".into(), methods: vec!["GET".into()], access: "anonymous".into(), actions: vec![] })]) };
+            let result = validate_function_sources(&manifest, &files);
+            if let Some(module) = case["module"].as_str() {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, "function.node-module-unsupported", "{}", case["name"]);
+                assert_eq!(error.message, format!("Server functions cannot import the Node.js module node:{module}."), "{}", case["name"]);
+            } else {
+                assert!(result.is_ok(), "{}: {:?}", case["name"], result.err());
+            }
+        }
+    }
+
+    #[test]
+    fn server_artifact_refuses_unsupported_node_modules_before_bundle_contract() {
+        let manifest = read(r#"{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}}"#).unwrap();
+        let artifact = ServerArtifact { version: 1, abi: ABI.into(), manifest: manifest.clone(), bundles: BTreeMap::from([("orders".into(), "import fs from 'node:fs'; export const handle = () => fs;".into())]) };
+        let error = validate_artifact(Some(&manifest), Some(&artifact)).unwrap_err();
+        assert_eq!(error.code, "function.node-module-unsupported");
+        assert_eq!(error.message, "Server functions cannot import the Node.js module node:fs.");
+        let decoy = ServerArtifact { bundles: BTreeMap::from([("orders".into(), "const text = 'node:fs'; export const handle = () => text;".into())]), ..artifact };
+        assert!(validate_artifact(Some(&manifest), Some(&decoy)).is_ok());
+    }
+
     #[tokio::test]
     async fn functions_publish_without_evaluation_and_server_only_changes_get_a_new_version() {
         let root = std::env::temp_dir().join(format!("konae-functions-{}", uuid::Uuid::new_v4()));
@@ -416,6 +571,19 @@ pub(crate) mod tests {
                 validate_artifact(manifest.as_ref(), artifact.as_ref())?;
                 Ok(artifact)
             })();
+            if case["folderDigestMismatch"] == true {
+                let artifact = outcome.unwrap().unwrap();
+                let root = std::env::temp_dir().join(format!("konae-artifact-digest-{}", uuid::Uuid::new_v4()));
+                stage(&root, Some(&artifact)).await.unwrap();
+                std::fs::write(root.join("orders.mjs"), "export const handle=()=>new Response('changed');").unwrap();
+                let error = read_artifact(&root).unwrap_err();
+                let refused = crate::refusal::of(&error).unwrap();
+                assert_eq!(refused.code, case["code"].as_str().unwrap());
+                assert_eq!(refused.message, case["message"].as_str().unwrap());
+                assert_eq!(refused.hint(), case["hint"]);
+                std::fs::remove_dir_all(root).unwrap();
+                continue;
+            }
             match (case.get("code"), outcome) {
                 (Some(code), Err(error)) => {
                     assert_eq!(error.code, code.as_str().unwrap(), "{}", case["name"]);

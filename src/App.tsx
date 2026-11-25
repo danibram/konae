@@ -72,7 +72,8 @@ import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
 import { NotFound } from "./components/NotFound";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
-import { McpError, platformMcp } from "./mcp/client";
+import { McpError, checksum, platformMcp } from "./mcp/client";
+import { checkFunctionCandidate } from "./mcp/function-candidate";
 import type { DurableEffectReceipt } from "./agent/durable-storage";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
@@ -1155,6 +1156,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             isCurrent: current,
             liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
             sourceFiles: () => projectRef.current,
+            functionPreparation: async (files) => {
+              const current = projectRef.current;
+              const candidate = { ...current, files: { ...current.files, ...files } };
+              const { buildProjectInBrowser } = await import("./runtime/browser-build");
+              const built = await buildProjectInBrowser(candidate);
+              if (!built.serverArtifact) return { status: "accepted" as const, scratchRevision: "no-functions", buildFingerprint: "no-functions" };
+              const orderedFiles = Object.fromEntries(Object.entries(files).sort(([left], [right]) => left.localeCompare(right)));
+              const scratchRevision = await checksum(new TextEncoder().encode(JSON.stringify(orderedFiles)));
+              return checkFunctionCandidate((name, args, signal) => platformMcp.call(name, args, signal), current.id, scratchRevision, built.serverArtifact);
+            },
             previewTest: async (files, test, signal) => {
               const { runPreviewTest } = await import("./agent/preview-test");
               const current = projectRef.current;
@@ -1224,6 +1235,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               liveDatabase: options.liveDatabase,
               previewErrors: options.previewErrors,
               sourceFiles: options.sourceFiles,
+              functionPreparation: options.functionPreparation,
             })
             : createKonaeAgent(selectedProject, selectedConfig, keyStore, options);
           if (stagingRecovery) await handle.initialize?.();

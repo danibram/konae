@@ -77,7 +77,10 @@ async fn main() -> Result<()> {
         println!("Serving the editor at {}", running.state.public_origin);
     }
     let service = with_editor(kernel::stack(running.state.clone(), owner_routes(konae)), editor);
-    axum::serve(listener, axum::ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(service)).await?;
+    axum::serve(listener, axum::ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(service))
+        .with_graceful_shutdown(kernel::shutdown_signal())
+        .await?;
+    running.state.shutdown_exporters().await;
     Ok(())
 }
 

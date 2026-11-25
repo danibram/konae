@@ -68,7 +68,7 @@ The `kernel` binary serves an exported folder as it is, with its `data/`. The ex
 
 ### Get the binary
 
-The published [v0.8.0 release](https://github.com/danibram/konae/releases/tag/v0.8.0) has Kernel binaries for macOS and Linux on arm64 and x64, plus `SHA256SUMS`. Check the release for the version in the exported folder's `konae.json` before using these download commands; availability varies by release. Replace `X.Y.Z` with that version and `darwin-arm64` with `darwin-x64`, `linux-x64` or `linux-arm64`.
+Find the Kernel binary and `SHA256SUMS` in the [release for the version in the exported folder's `konae.json`](https://github.com/danibram/konae/releases). Replace `X.Y.Z` with that version. Use `darwin-arm64`, `darwin-x64`, `linux-x64`, or `linux-arm64` for your platform.
 
 ```sh
 base=https://github.com/danibram/konae/releases/download/vX.Y.Z
@@ -118,10 +118,14 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
 
     The export fills `KONAE_KERNEL_IMAGE` with `ghcr.io/danibram/konae-kernel:<the version in konae.json>`. Add a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start. To run a checkout's Kernel instead, build it from the Konae checkout, then set `KONAE_KERNEL_IMAGE=konae-kernel:local` in the exported folder's `.env`.
 
+    If the published app has functions, the export selects the packaged StarlingMonkey runner and preparer, sets the worker identity and keeps the prepared component cache under the installation volume. The entrypoint creates the cache and drops to the Kernel UID before startup. Compose uses Docker's default security profiles and adds only `SETUID`, `SETGID` and `KILL` for the Kernel. The Wasm worker policy does not need cgroup delegation.
+
     ```sh
     scripts/build-functions-runner.sh <amd64|arm64> .konae/functions-runner
     docker buildx build --build-context functions-runner=.konae/functions-runner \
-      --build-arg FUNCTIONS_RUNNER_SHA256="$(shasum -a 256 .konae/functions-runner/konae-functions-runner | awk '{print $1}')" \
+      --build-arg FUNCTIONS_RUNNER_SHA256="$(shasum -a 256 .konae/functions-runner/konae-functions-runner-wasm | awk '{print $1}')" \
+      --build-arg FUNCTIONS_DENO_RUNNER_SHA256="$(shasum -a 256 .konae/functions-runner/konae-functions-runner-deno | awk '{print $1}')" \
+      --build-arg FUNCTIONS_PREPARER_SHA256="$(shasum -a 256 .konae/functions-runner/konae-functions-prepare | awk '{print $1}')" \
       -f Dockerfile.kernel -t konae-kernel:local .
     ```
 
@@ -132,7 +136,7 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
     docker compose logs kernel
     ```
 
-    With the example settings the app answers at `http://<slug>.localhost:8787`. `KONAE_PORT` and `KONAE_PUBLIC_ORIGIN` in `.env` change the port.
+    With the example settings the app answers at `http://<slug>.localhost:8787`. `KONAE_PORT` and `KONAE_PUBLIC_ORIGIN` in `.env` change the port. A function app's routes run through the runner in the matching Kernel image after `docker compose up -d`.
 
 The Kernel runs as the person who owns the folder, so the files it writes into it stay theirs.
 

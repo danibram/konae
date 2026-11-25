@@ -1,0 +1,32 @@
+The Docker Desktop VM reported `7.0.14-linuxkit` for both platform runs.
+
+Executor unit tests:
+  docker run --rm --platform linux/amd64 -v "$PWD:/repo" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-amd64-target:/target -w /repo -e CARGO_TARGET_DIR=/target rust:1.91-bookworm sh -c 'uname -srmo; cargo test --locked --manifest-path kernel-rs/functions-executor/Cargo.toml'
+  docker run --rm --platform linux/arm64 -v "$PWD:/repo" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-arm64-target:/target -w /repo -e CARGO_TARGET_DIR=/target rust:1.91-bookworm sh -c 'uname -srmo; cargo test --locked --manifest-path kernel-rs/functions-executor/Cargo.toml'
+
+Runner release tests:
+  docker run --rm --platform linux/amd64 -v "$PWD:/repo" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-amd64-target:/target -w /repo -e CARGO_TARGET_DIR=/target -e CARGO_BUILD_JOBS=2 -e RUST_TEST_THREADS=1 rust:1.91-bookworm sh -c 'uname -srmo; cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml'
+  docker run --rm --platform linux/arm64 -v "$PWD:/repo" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-arm64-target:/target -w /repo -e CARGO_TARGET_DIR=/target -e CARGO_BUILD_JOBS=2 rust:1.91-bookworm sh -c 'uname -srmo; cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml'
+  docker run --rm --platform linux/amd64 -v "$PWD:/repo" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-amd64-target:/target -w /repo -e CARGO_TARGET_DIR=/target -e CARGO_BUILD_JOBS=2 -e RUST_TEST_THREADS=1 rust:1.91-bookworm sh -c 'uname -srmo; cargo test --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml --test worker_isolation v8_watchdog_reuses_a_synchronized_worker_after_a_loop -- --exact --nocapture'
+
+Runner artifact for the ARM64 Kernel image:
+  docker run --rm --platform linux/arm64 -v "$PWD:/repo" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-arm64-target:/target -w /repo -e CARGO_TARGET_DIR=/target -e CARGO_BUILD_JOBS=2 rust:1.91-bookworm sh -c 'uname -srmo; cargo build --release --locked --manifest-path kernel-rs/functions-runner/Cargo.toml'
+  docker run --rm --platform linux/arm64 -v konae-sandbox-arm64-target:/target -v /tmp/konae-sandbox-floor-runner-arm64:/out alpine:3.21 cp /target/release/konae-functions-runner /out/konae-functions-runner
+  shasum -a 256 /tmp/konae-sandbox-floor-runner-arm64/konae-functions-runner
+  docker buildx build --load --platform linux/arm64 --build-context functions-runner=/tmp/konae-sandbox-floor-runner-arm64 --build-arg FUNCTIONS_RUNNER_SHA256=276b6fa831155bffc47af330142d59abda4bb9f9cfa44adbc0b516103c41eaec -f Dockerfile.kernel -t konae-sandbox-floor:arm64 .
+
+Delegated-cgroup worker tests. `prepare-and-run-ignored.sh` creates a private cgroup v2 mount, enables `memory` and `pids`, verifies `cgroup.kill`, builds the Kernel test binary, and runs ignored worker tests with the built runner.
+  docker run --name konae-sandbox-floor-ignored-arm64 --cap-add SYS_ADMIN --security-opt seccomp=unconfined --cgroupns private --platform linux/arm64 -v "$PWD:/repo:ro" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-arm64-target:/target -v /tmp/konae-sandbox-floor-runner-arm64:/bundle:ro -v "$PWD/spikes/functions-runtime/evidence/2026-11-22-sandbox-floor:/evidence:ro" -w /repo -e CARGO_BUILD_JOBS=2 rust:1.91-bookworm sh /evidence/prepare-and-run-ignored.sh
+  docker run --name konae-sandbox-floor-ignored-arm64 --cap-add SYS_ADMIN --security-opt seccomp=unconfined --cgroupns private --platform linux/arm64 -v "$PWD:/repo:ro" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-arm64-target:/target -v /tmp/konae-sandbox-floor-runner-arm64:/bundle:ro -v "$PWD/spikes/functions-runtime/evidence/2026-11-22-sandbox-floor:/evidence:ro" -w /repo -e CARGO_BUILD_JOBS=2 -e FUNCTION_TEST_FILTER=functions_export_import_executes_the_published_bundle_with_imported_identity rust:1.91-bookworm sh /evidence/prepare-and-run-ignored.sh
+  docker run --name konae-sandbox-floor-ignored-arm64 --cap-add SYS_ADMIN --security-opt seccomp=unconfined --cgroupns private --platform linux/arm64 -v "$PWD:/repo:ro" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v konae-sandbox-arm64-target:/target -v /tmp/konae-sandbox-floor-runner-arm64:/bundle:ro -v "$PWD/spikes/functions-runtime/evidence/2026-11-22-sandbox-floor:/evidence:ro" -w /repo -e CARGO_BUILD_JOBS=2 -e FUNCTION_TEST_FILTER=real_functions_http_auth_transaction_publish_deadline_and_usage rust:1.91-bookworm sh /evidence/prepare-and-run-ignored.sh
+
+Real image requests used `image-strict-request.sh`. The authenticated-read container used `--security-opt seccomp=unconfined`; the denied run used the supplied profile. Both used `--cap-add SYS_ADMIN` only for the cgroup v2 mount.
+  docker run --rm --cap-add SYS_ADMIN --security-opt seccomp=unconfined --cgroupns private --platform linux/arm64 -v /tmp/konae-sandbox-floor-preserved:/preserve:ro -v "$PWD/spikes/functions-runtime/evidence/2026-11-22-sandbox-floor:/evidence:ro" -e TEST_KIND=authenticated-read --entrypoint /bin/sh konae-sandbox-floor:arm64 /evidence/image-strict-request.sh
+  docker run --cap-add SYS_ADMIN --security-opt seccomp="$PWD/spikes/functions-runtime/evidence/2026-11-22-sandbox-floor/deny-landlock.json" --cgroupns private --platform linux/arm64 -v /tmp/konae-sandbox-floor-preserved:/preserve:ro -v "$PWD/spikes/functions-runtime/evidence/2026-11-22-sandbox-floor:/evidence:ro" -e TEST_KIND=sandbox-denied --entrypoint /bin/sh konae-sandbox-floor:arm64 /evidence/image-strict-request.sh
+  docker cp konae-sandbox-floor-denied-arm64:/kernel/apps/http_functions/data/database.sqlite /tmp/konae-sandbox-floor-denied.sqlite
+  sqlite3 /tmp/konae-sandbox-floor-denied.sqlite 'select id, quantity from orders order by id;'
+
+Full suites:
+  cargo test -p kernel -p konae   # from kernel-rs/
+  LITTLEBOX_MCP_TEST_PORT=39427 bun test --timeout 30000
+  bun run build

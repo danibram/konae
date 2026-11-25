@@ -1,0 +1,2 @@
+Linux 7.0.14-linuxkit aarch64 GNU/Linux
+    Finished `release` profile [optimized] target(s) in 1.88s

@@ -19,7 +19,7 @@ Las Server Actions actuales expresan consultas y mutaciones declarativas. Alguna
 
 - El módulo `functions` sigue ADR-0015. El dueño lo gestiona mediante el contrato común de módulos y su configuración viaja con la carpeta.
 - Una app con el módulo apagado no crea instancias JavaScript ni tareas de funciones. Declarar o publicar una función tampoco ejecuta su handler.
-- La primera llamada que requiere JavaScript carga la función. El Kernel mantiene hasta cuatro procesos y admite hasta 64 peticiones de funciones en total, incluidas las que esperan la publicación, el cuerpo o la instancia. La caché identifica app, función, versión y bundle. Cada petición evalúa el bundle en un isolate nuevo. Cada proceso atiende una petición a la vez y termina al vencer su TTL, al ceder sitio o al cambiar la versión publicada.
+- La primera llamada que requiere JavaScript carga la función. El Kernel mantiene hasta `KONAE_FUNCTIONS_INSTANCES` procesos, ocho por defecto, y admite hasta `KONAE_FUNCTIONS_ADMISSION` peticiones autenticadas y dentro del límite, 64 por defecto. La admisión empieza después de autenticación y rate limiting; las peticiones admitidas pueden esperar el cuerpo o una instancia. Cada Deployment puede tener hasta `KONAE_FUNCTIONS_APP_SLOTS` procesos, dos por defecto. La caché identifica app, versión publicada y digest del artefacto de servidor; un proceso recibe todos los bundles de esa versión y cada Invoke nombra la función (IPC/3). Cada petición evalúa el bundle en un isolate nuevo creado desde un snapshot de V8 con las extensiones Web y el bootstrap. Cada proceso atiende una petición a la vez y termina al vencer su TTL, al ceder sitio o al cambiar la versión publicada.
 - El supervisor configura 64 MiB de heap y un límite de memoria de 256 MiB por hijo según la política del operador. ADR-0019 fija el límite HTTP actual en 100000000 bytes decimales, entregados por stream al worker. El Kernel conserva el límite de 64 operaciones nativas por petición, hasta 16 KiB de cabeceras de respuesta y hasta 1 MiB para la respuesta codificada. Los 256 MiB se observan por RSS en el modo de desarrollo. El límite de respuesta y el límite de cuerpo son independientes.
 - El runner descarta el isolate anterior antes de crear el de la siguiente petición. Las capacidades del actor vencen al terminar su petición. La app guarda el estado duradero mediante Server Actions.
 - Una versión nueva no comparte instancias con la anterior. Las llamadas pendientes terminan o se cancelan de forma definida antes de liberar sus recursos.
@@ -42,6 +42,39 @@ Las Server Actions actuales expresan consultas y mutaciones declarativas. Alguna
 La app usa TypeScript y APIs documentadas del entorno. Los paquetes compatibles se resuelven al construir la función. Un paquete que necesita una API no implementada debe fallar con una explicación concreta. No se promete compatibilidad con cualquier paquete npm.
 
 Los snapshots y caches compilados, si se incorporan, los genera la instalación a partir de fuente validada y los liga a la versión del motor. No son el artefacto portable de la app ni se aceptan como estado nativo confiable procedente de una exportación.
+
+#### Adaptadores y conformidad
+
+La independencia del motor es un requisito de Functions. Esta decisión define lo que debe cumplir cada adaptador; no certifica que los runners experimentales ya sean intercambiables. La app depende de una versión del contrato Konae, con sus APIs y comportamiento documentados. Cambiar de motor no debe exigir cambios en sus handlers, dependencias, cuentas, datos o reglas. La instalación puede reconstruir los artefactos específicos del motor a partir de los archivos portables de la app.
+
+El contrato público, el protocolo privado de workers y el formato de los artefactos preparados tienen versiones distintas. Un cambio del transporte o del compilador no cambia por sí solo el contrato de la app. La instalación selecciona el runner y comprueba su compatibilidad antes de activar una versión. Una carencia del runner no se presenta como un error del código de la app. No se cambia de motor a mitad de una invocación ni se repite una mutación para intentar ocultar un fallo.
+
+| Responsabilidad | Lugar |
+| --- | --- |
+| Firma del handler, tipos de entrada y salida, APIs permitidas, códigos de rechazo y semántica de petición | Contrato compartido de Functions |
+| Transformación TypeScript, resolución de paquetes y adaptaciones JavaScript independientes del motor | Build compartido por editor y CLI |
+| Preparación, snapshots, componentes Wasm, compilación nativa y claves de caché del motor | Adaptador de preparación del runner |
+| Web APIs, promesas, streams, reloj, aleatoriedad, errores nativos y traducción de llamadas al host | Adaptador de ejecución del runner |
+| Creación y descarte del estado, cancelación y aplicación de presupuestos del motor | Adaptador de ejecución, bajo la supervisión del executor |
+| Actor, autorización de cada operación, transacciones, recibos, admisión y reglas de filas | Kernel, compartido por todos los runners |
+| Tiempos de admisión, cola y Server Actions, y resultado de la petición | Instrumentación común del Kernel y executor |
+| Diagnóstico de GC, JIT y operaciones internas | Instrumentación específica del adaptador |
+
+Los tipos de V8, deno_core, SpiderMonkey o Wasmtime quedan dentro de sus adaptadores. El Kernel puede conocer la identidad del runner y gestionar artefactos preparados sin importar objetos del motor ni repartir reglas de negocio según el motor. El executor y su protocolo existentes son el punto de integración; una interfaz nueva requiere una necesidad que ese límite no cubra.
+
+Cuando una API del contrato falta o difiere en un motor, su adaptador debe proporcionar el comportamiento acordado. Las adaptaciones puramente JavaScript que sirven a todos los runners se comparten en el build. Una adaptación que necesita datos, archivos o red llama a las capacidades autorizadas del Kernel. No sustituye una operación por un no-op, no devuelve éxito ficticio y no abre acceso directo al sistema para que un paquete cargue. Mientras falte esa adaptación, el runner no cumple esa versión del contrato. Una capacidad fuera del contrato requiere primero una decisión común, sus rechazos y sus pruebas; no se admite solo porque un motor la incluya.
+
+La conformidad se comprueba con los mismos casos y resultados esperados en cada runner. Los casos viven fuera del adaptador que verifican y las exclusiones cuentan como pendientes. Las diferencias internas de heap, memoria lineal o JIT no obligan a igual consumo o latencia, pero cada runner debe imponer sus presupuestos declarados y conservar el comportamiento observable acordado.
+
+Antes de declarar intercambiables dos runners, la comprobación incluye:
+
+- El mismo código de app y dependencias fijadas, construidos por editor y CLI, con las mismas respuestas y rechazos conocidos.
+- Streams y bytes binarios, límites, errores de handler y llamadas asíncronas, con comparación de estado persistido además de códigos HTTP.
+- Dos actores sucesivos y peticiones concurrentes, sin transferencia de estado de petición, permisos, timers o tareas pendientes. Reutilizar un proceso no autoriza reutilizar estado JavaScript entre peticiones.
+- Cancelación, bucles, agotamiento de memoria, recuperación y publicación de una versión nueva, sin llamadas tardías con capacidades vencidas.
+- Reloj y aleatoriedad de petición que no hereden valores congelados durante la preparación.
+- Exportación desde una instalación con un runner e importación en otra con el otro runner y caché vacía. La prueba usa la cuenta trasladada, una lectura autorizada, una mutación y una lectura de su efecto, y se repite en ambas direcciones.
+- Una incompatibilidad de contrato detectada antes de activar la versión, conservando la versión publicada y sus datos.
 
 La comparación original comparte proceso para medir el coste de integración. La implementación posterior ejecuta JavaScript en un hijo separado y conserva autenticación y SQLite en el padre. Un fallo del hijo no debe terminar el Kernel. El supervisor limita el protocolo y revoca capacidades. Si JavaScript sigue bloqueado tras la cancelación, el runner termina su isolate desde otro hilo. El supervisor mata y recoge al hijo si este no responde.
 
@@ -109,7 +142,7 @@ La [ronda final del runner](../../spikes/functions-runtime/evidence/2026-11-20-w
 
 ### Condiciones pendientes para producción
 
-La [prueba Linux ARM64 anterior](../../spikes/functions-runtime/evidence/2026-11-20-linux-v8-final/README.md) ejecutó el worker V8 real con una delegación cgroup v2. La nueva [ronda de hardening](../../spikes/functions-runtime/evidence/2026-11-20-production-hardening/README.md) ejecutó el mismo runner desde una imagen limpia sin checkout ni Cargo, y verificó la política nativa de Landlock, seccomp, UID/GID separados, capacidades vacías, entorno limpio y cierre de descriptores heredados. El runner no puede abrir archivos, conectar a red, alterar cgroups ni señalizar el supervisor. Landlock ABI 5 y cgroup v2 son requisitos de Linux. macOS conserva solo la política de desarrollo.
+The [earlier Linux ARM64 run](../../spikes/functions-runtime/evidence/2026-11-20-linux-v8-final/README.md) ran a real V8 worker under delegated cgroup v2. The [hardening run](../../spikes/functions-runtime/evidence/2026-11-20-production-hardening/README.md) ran the same runner from a clean image without a checkout or Cargo. It checked Landlock, seccomp, separate worker IDs, empty worker capabilities, a clean environment and closed inherited descriptors. The runner cannot open files, connect to the network, change cgroups or signal the supervisor. Linux requires Landlock ABI 2 and cgroup v2. macOS uses development policy only.
 
 El supervisor compara `oom_kill` y `oom_group_kill` en `memory.events` antes de atribuir un EOF a memoria. Con el runner empaquetado, un OOM real del cgroup produjo `worker_memory_limit`; un SIGKILL ordinario produjo `worker_failed` sin incremento OOM. Ambas rutas recogieron el proceso y retiraron su subgrupo. La ronda también forzó `pids.max=64`, mató un supervisor con un worker activo, comprobó `PDEATHSIG`, reaped el subgrupo huérfano al iniciar el siguiente worker y preservó un grupo hermano. El registro y los hashes están en la [evidencia de hardening](../../spikes/functions-runtime/evidence/2026-11-20-production-hardening/README.md).
 
@@ -117,7 +150,7 @@ Una ronda anterior de integración Linux ejerció KernelHTTP, sesión, autorizac
 
 En una comprobación posterior, un runner candidato ARM64 empaquetado arrancó en una imagen Kernel bajo cgroup delegado y pasó health sin apps. Dos pruebas HTTP separadas, ejecutadas por un arnés con ese runner empaquetado, pasaron casos de autenticación, SQLite, OOM y cuerpos de 100.000.000 bytes. El arnés no envió peticiones de una app a través de la imagen final. La configuración de un servicio de destino tampoco se probó. Consulta [Functions research](../architecture/functions-research.md#linux-checks-and-the-current-branch) para separar revisiones y alcance.
 
-El [informe](../../spikes/functions-runtime/evidence/2026-11-20-production-hardening/README.md) registra muestras pequeñas del recorrido autenticado con V8, cada una con una llamada fría y cinco calientes. No son benchmarks comparables ni de producción. La adopción sigue experimental. El procedimiento de operador está en [Operar una instalación](../operate.md#comprobación-de-despliegue-linux-estricto). Requiere Linux x86-64 o ARM64, cgroup v2, Landlock ABI 5, seccomp, subárbol delegado y namespaces cgroup y PID privados. systemd puede conceder `memory` y `pids` mediante `Delegate=`, pero no es una dependencia del executor. Antes de activar tráfico se debe verificar el contrato dentro del runtime de destino, con la imagen de su arquitectura, el entrypoint real, una lectura autenticada de SQLite, un rechazo del sandbox antes de entregar el bundle y limpieza limitada a los grupos de esa instalación. La evidencia prueba el contrato cgroup en un entorno desechable, no una instalación de producción ni la configuración de cada runtime.
+The [report](../../spikes/functions-runtime/evidence/2026-11-20-production-hardening/README.md) records small authenticated V8 request samples, each with one cold call and five warm calls. They are not comparable benchmarks or production measurements. Adoption remains experimental. The operator procedure is [Operate an installation](../operate.md#strict-linux-deployment-check). It requires Linux x86-64 or ARM64, cgroup v2, Landlock ABI 2 (Linux 5.19) or later, seccomp, a delegated subtree, and private cgroup and PID namespaces. systemd can delegate `memory` and `pids` with `Delegate=`, but the executor does not depend on systemd. Before enabling traffic, verify the contract inside the target runtime with its architecture-matched image and real entrypoint. Send an authenticated SQLite read, confirm a sandbox refusal before bundle delivery, and confirm cleanup stays within that installation. The evidence tests the cgroup contract in a disposable environment. It does not prove a production installation or every runtime configuration.
 
 ## Alternativas
 

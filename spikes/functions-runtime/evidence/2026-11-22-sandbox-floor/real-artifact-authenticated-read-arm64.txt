@@ -1,0 +1,11 @@
+Linux 7.0.14-linuxkit aarch64 GNU/Linux
+delegated_cgroup_kill=present
+curl: (7) Failed to connect to 127.0.0.1 port 8787 after 0 ms: Couldn't connect to server
+{"copies":{"alert":null,"intervalSeconds":null,"maxCutAgeMs":null,"targets":[]},"files":{"maxFileBytes":2097152,"quotaBytes":20971520,"store":"local"},"kernel":"konae-rust","mail":null,"ok":true,"version":1}kernel_cap_eff=CapEff:	00000000000000c0
+CapEff:	00000000000000c0
+authenticated_login_http=200
+authenticated_sqlite_http=200 body={"version":"A","calls":1,"rows":[{"id":1,"quantity":7}],"cookie":false,"authorization":false}{"version":"A","calls":1,"rows":[{"id":1,"quantity":7}],"cookie":false,"authorization":false}
+{"version":"A","calls":1,"rows":[{"id":1,"quantity":7}],"cookie":false,"authorization":false}
+Serving Functions at http://http-functions.localhost:8080
+Kernel listening on 8787
+worker_cgroups_after_read=1

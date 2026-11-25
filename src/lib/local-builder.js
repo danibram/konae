@@ -1,6 +1,7 @@
-import { build } from "esbuild";
+import { build, transform } from "esbuild";
 import path from "node:path";
 import { readFile, realpath } from "node:fs/promises";
+import { nodeCompatBuildError, nodeCompatGlobals, nodeCompatPlugin } from "./node-compat.js";
 
 export async function bundleModule(app, entry, development = false) {
   app = await realpath(app);
@@ -19,7 +20,7 @@ export async function bundleModule(app, entry, development = false) {
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
-export async function bundleFunctions(app, manifest, development = false) {
+export async function bundleFunctions(app, manifest, actionContract, development = false, actionsModuleSource = "export function actions(context) { return context.actions; }\n") {
   app = await realpath(app);
   const bundles = {};
   const packages = JSON.parse(await readFile(path.join(app, "package.json"), "utf8").catch((error) => {
@@ -32,11 +33,26 @@ export async function bundleFunctions(app, manifest, development = false) {
     }
   }
   for (const [name, declaration] of Object.entries(manifest.functions)) {
-    const result = await build({
+    let result;
+    try { result = await build({
       entryPoints: [path.join(app, declaration.entry)], absWorkingDir: path.resolve(app), bundle: true, write: false,
       platform: "browser", format: "esm", target: "es2022", outdir: "out", metafile: true,
       minify: !development, logOverride: { "unsupported-dynamic-import": "error", "unsupported-require-call": "error" },
-      plugins: [{ name: "declared-server-packages", setup(build) {
+      inject: [nodeCompatGlobals()], define: { process: "process", global: "globalThis" },
+      plugins: [nodeCompatPlugin(), { name: "konae-actions", setup(build) {
+        build.onResolve({ filter: /^konae:actions$/ }, () => ({ path: "konae:actions", namespace: "konae-actions" }));
+        build.onLoad({ filter: /.*/, namespace: "konae-actions" }, () => ({ contents: actionsModuleSource, loader: "js" }));
+      } }, { name: "npm-node-env", setup(build) {
+        build.onLoad({ filter: /\.[cm]?js$/ }, async (args) => {
+          if (!args.path.includes(`${path.sep}node_modules${path.sep}`)) return;
+          const source = await readFile(args.path, "utf8");
+          if (!source.includes("NODE_ENV")) return { contents: source, resolveDir: path.dirname(args.path), loader: "js" };
+          const compiled = await transform(source, { loader: "js", sourcefile: args.path, define: {
+            "process.env.NODE_ENV": '"production"', "global.process.env.NODE_ENV": '"production"',
+          } });
+          return { contents: compiled.code, resolveDir: path.dirname(args.path), loader: "js" };
+        });
+      } }, { name: "declared-server-packages", setup(build) {
         build.onResolve({ filter: /.*/ }, (args) => {
           if (args.kind === "entry-point") return;
           if (!args.importer.includes(`${path.sep}node_modules${path.sep}`) && (args.path.startsWith(".") || path.isAbsolute(args.path))) {
@@ -52,7 +68,7 @@ export async function bundleFunctions(app, manifest, development = false) {
           }
         });
       } }],
-    });
+    }); } catch (error) { throw nodeCompatBuildError(error); }
     const output = Object.entries(result.metafile.outputs).find(([file]) => file.endsWith(".js"));
     if (!output || output[1].imports.length || !output[1].exports.includes("handle") || result.outputFiles.length !== 1) {
       throw Object.assign(new Error(`Function ${name} bundle must be a self-contained ESM module exporting handle.`), { code: "function.bundle-contract" });

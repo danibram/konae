@@ -1,5 +1,6 @@
-use crate::{ActionProgram, refusal::Refusal};
 use super::Function;
+use super::trace::{TraceBuffer, TraceRecord};
+use crate::{ActionProgram, refusal::Refusal};
 use konae_functions_executor::{Budget, BudgetError, MutationOutcomeState, Output};
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
@@ -199,6 +200,8 @@ pub struct Invocation {
     poisoned: Option<Failure>,
     operations: usize,
     active: bool,
+    trace: Option<TraceBuffer>,
+    transaction_recorded: bool,
 }
 
 /// El caller ya comprobó identidad, módulos y permisos actuales y mantiene el bloqueo de publicación.
@@ -289,6 +292,8 @@ pub fn admit(config: InvocationConfig, budget: Budget) -> Result<Admission> {
         poisoned: None,
         operations: 0,
         active: true,
+        trace: None,
+        transaction_recorded: false,
     };
     if invocation.key.is_some() {
         invocation.open_connection()?;
@@ -317,6 +322,25 @@ pub fn admit(config: InvocationConfig, budget: Budget) -> Result<Admission> {
 
 impl Invocation {
     pub fn action(&mut self, name: &str, input: &Value) -> Result<Value> {
+        self.action_inner_recorded(name, input, None, 0)
+    }
+    pub(super) fn action_traced(
+        &mut self,
+        name: &str,
+        input: &Value,
+        trace: &TraceBuffer,
+        sequence: u16,
+    ) -> Result<Value> {
+        self.trace = Some(trace.clone());
+        self.action_inner_recorded(name, input, Some(trace), sequence)
+    }
+    fn action_inner_recorded(
+        &mut self,
+        name: &str,
+        input: &Value,
+        trace: Option<&TraceBuffer>,
+        sequence: u16,
+    ) -> Result<Value> {
         if !self.active {
             return Err(Failure::new(
                 "function.invocation-closed",
@@ -327,13 +351,83 @@ impl Invocation {
         if let Some(error) = &self.poisoned {
             return Err(error.clone());
         }
-        let result = self.action_inner(name, input);
+        let started = std::time::Instant::now();
+        let trace_start_us = trace.map(TraceBuffer::elapsed_us);
+        let resolved = self.allowed.contains(name) && self.program.actions.contains_key(name);
+        let span_index = trace.map(|trace| {
+            trace.push(TraceRecord {
+                parent: Some(0),
+                name: "konae.action",
+                start_us: trace_start_us.unwrap_or_default(),
+                duration_us: 0,
+                action_name: Some(if resolved { name } else { "<unknown>" }),
+                origin: Some("function"),
+                sequence: Some(sequence),
+                rows_read: None,
+                rows_written: None,
+                reply_bytes: None,
+                sqlite_us: None,
+                error_code: None,
+            })
+        });
+        let result = self.action_inner(name, input, trace, sequence, span_index.flatten());
+        if let Some(trace) = trace {
+            let (rows_read, rows_written, reply_bytes) =
+                result.as_ref().ok().map_or((None, None, None), |answer| {
+                    let read = answer
+                        .as_array()
+                        .map(|rows| rows.len().min(u32::MAX as usize) as u32);
+                    let written = answer
+                        .get("changes")
+                        .and_then(Value::as_u64)
+                        .map(|n| n.min(u32::MAX as u64) as u32);
+                    (read, written, None)
+                });
+            let code = result.as_ref().err().map(|error| match error.code {
+                "function.invocation-closed" => "function.invocation-closed",
+                "function.action-not-allowed" => "function.action-not-allowed",
+                "function.operation-limit" => "function.operation-limit",
+                "function.input-too-large" => "function.input-too-large",
+                "function.action-refused" => "function.action-refused",
+                "function.action-failed" => "function.action-failed",
+                "authentication-required" => "authentication-required",
+                "function.get-mutation" => "function.get-mutation",
+                _ => "function.action-failed",
+            });
+            let duration_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            if let Some(index) = span_index.flatten() {
+                trace.update(
+                    index,
+                    TraceRecord {
+                        parent: Some(0),
+                        name: "konae.action",
+                        start_us: trace_start_us.unwrap_or_default(),
+                        duration_us,
+                        action_name: Some(if resolved { name } else { "<unknown>" }),
+                        origin: Some("function"),
+                        sequence: Some(sequence),
+                        rows_read,
+                        rows_written,
+                        reply_bytes,
+                        sqlite_us: None,
+                        error_code: code,
+                    },
+                );
+            }
+        }
         if let Err(error) = &result {
             self.poisoned = Some(error.clone());
         }
         result
     }
-    fn action_inner(&mut self, name: &str, input: &Value) -> Result<Value> {
+    fn action_inner(
+        &mut self,
+        name: &str,
+        input: &Value,
+        trace: Option<&TraceBuffer>,
+        sequence: u16,
+        action_span: Option<u8>,
+    ) -> Result<Value> {
         self.budget.check()?;
         if !self.allowed.contains(name) {
             return Err(Failure::new(
@@ -387,11 +481,29 @@ impl Invocation {
             .map_err(|message| Failure::new("function.input-invalid", 400, message))?;
         self.open_connection()?;
         let conn = self.connection.as_ref().unwrap();
+        let sqlite_started = std::time::Instant::now();
         let result = if action.kind == "query" {
             crate::run_query_on_connection(&conn.db, &action, params).map(Value::from)
         } else {
             crate::run_mutation_on_connection(&conn.db, &action, params).map(|ran| ran.answer)
         };
+        let sqlite_us = sqlite_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        if let Some(trace) = trace {
+            let _ = trace.push(TraceRecord {
+                parent: Some(action_span.unwrap_or(0)),
+                name: "konae.sqlite",
+                start_us: trace.elapsed_us().saturating_sub(sqlite_us),
+                duration_us: sqlite_us,
+                action_name: None,
+                origin: None,
+                sequence: Some(sequence),
+                rows_read: None,
+                rows_written: None,
+                reply_bytes: None,
+                sqlite_us: Some(sqlite_us),
+                error_code: result.as_ref().err().map(|_| "function.action-failed"),
+            });
+        }
         self.budget.check()?;
         let answer = result
             .map_err(|error| Failure::new("function.action-failed", 400, error.to_string()))?;
@@ -437,8 +549,9 @@ impl Invocation {
             self.abort()?;
             return Ok(output);
         }
-        if let Some(key) = &self.key {
+        if let Some(key) = self.key.clone() {
             let conn = self.connection.as_ref().ok_or_else(Failure::storage)?;
+            let commit_started = std::time::Instant::now();
             let result = (|| {
                 conn.ensure_receipt_schema()?;
                 conn.internal(|| conn.sql(|| conn.db.execute(
@@ -452,7 +565,21 @@ impl Invocation {
                 }
                 Ok(())
             })();
+            if result.is_ok() {
+                self.record_transaction("committed", commit_started.elapsed(), None);
+            }
             if let Err(error) = result {
+                let code = if self.budget.mutation_outcome().may_have_committed() {
+                    "mutation_outcome_unknown"
+                } else {
+                    error.code
+                };
+                let result_outcome = if code == "mutation_outcome_unknown" {
+                    "unknown"
+                } else {
+                    "rolled_back"
+                };
+                self.record_transaction(result_outcome, commit_started.elapsed(), Some(code));
                 self.abort()?;
                 if self.budget.mutation_outcome().may_have_committed() {
                     return Err(Failure::unknown());
@@ -465,9 +592,52 @@ impl Invocation {
     pub fn abort(&mut self) -> Result<()> {
         self.active = false;
         if let Some(conn) = &self.connection {
-            conn.rollback()?;
+            let started = std::time::Instant::now();
+            let result = conn.rollback();
+            if !self.transaction_recorded {
+                let outcome = if result.is_ok() {
+                    "rolled_back"
+                } else {
+                    "unknown"
+                };
+                self.record_transaction(
+                    outcome,
+                    started.elapsed(),
+                    result.as_ref().err().map(|_| "mutation_outcome_unknown"),
+                );
+            }
+            result?;
         }
         Ok(())
+    }
+
+    fn record_transaction(
+        &mut self,
+        outcome: &'static str,
+        duration: std::time::Duration,
+        error_code: Option<&'static str>,
+    ) {
+        if self.transaction_recorded {
+            return;
+        }
+        if let Some(trace) = &self.trace {
+            let duration_us = duration.as_micros().min(u64::MAX as u128) as u64;
+            let _ = trace.push(TraceRecord {
+                parent: Some(0),
+                name: "konae.transaction",
+                start_us: trace.elapsed_us().saturating_sub(duration_us),
+                duration_us,
+                action_name: Some(outcome),
+                origin: None,
+                sequence: None,
+                rows_read: None,
+                rows_written: None,
+                reply_bytes: None,
+                sqlite_us: None,
+                error_code,
+            });
+        }
+        self.transaction_recorded = true;
     }
 }
 impl Drop for Invocation {
@@ -618,67 +788,6 @@ impl Drop for RequestConnection {
 fn normalize_sql(sql: &str) -> String {
     sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
-pub fn request_fingerprint(
-    method: &str,
-    path: &str,
-    body: &[u8],
-    headers: &[(String, String)],
-) -> Result<String> {
-    let mut canonical: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut bytes = 0usize;
-    if headers.len() > MAX_HEADERS {
-        return Err(Failure::new(
-            "invalid_input",
-            400,
-            "The function request has too many headers.",
-        ));
-    }
-    for (name, value) in headers {
-        bytes = bytes.saturating_add(name.len()).saturating_add(value.len());
-        if bytes > MAX_RESPONSE_HEADER_BYTES
-            || axum::http::HeaderName::from_bytes(name.as_bytes()).is_err()
-            || axum::http::HeaderValue::from_str(value).is_err()
-        {
-            return Err(Failure::new(
-                "invalid_input",
-                400,
-                "The function request has invalid headers.",
-            ));
-        }
-        let name = name.to_ascii_lowercase();
-        if [
-            "cookie",
-            "authorization",
-            "proxy-authorization",
-            "idempotency-key",
-            "host",
-        ]
-        .contains(&name.as_str())
-        {
-            continue;
-        }
-        canonical
-            .entry(name)
-            .or_default()
-            .push(value.trim_matches([' ', '\t']).to_owned());
-    }
-    let mut digest = Sha256::new();
-    digest.update(b"konae-function-request-v2");
-    for part in [method.as_bytes(), path.as_bytes(), body] {
-        digest.update((part.len() as u64).to_be_bytes());
-        digest.update(part);
-    }
-    digest.update((canonical.len() as u64).to_be_bytes());
-    for (name, values) in canonical {
-        let value = values.join(", ");
-        for part in [name.as_bytes(), value.as_bytes()] {
-            digest.update((part.len() as u64).to_be_bytes());
-            digest.update(part);
-        }
-    }
-    Ok(hex::encode(digest.finalize()))
-}
-
 pub fn request_fingerprint_v3(
     method: &str,
     path: &str,
@@ -763,8 +872,10 @@ fn validate_output(output: &Output) -> Result<String> {
         if header_bytes > MAX_RESPONSE_HEADER_BYTES {
             return Err(output_too_large());
         }
+        let canonical_name = name.to_ascii_lowercase();
         if axum::http::HeaderName::from_bytes(name.as_bytes()).is_err()
             || axum::http::HeaderValue::from_str(value).is_err()
+            || canonical_name.starts_with("content-security-policy")
             || [
                 "connection",
                 "transfer-encoding",
@@ -775,8 +886,11 @@ fn validate_output(output: &Output) -> Result<String> {
                 "proxy-authorization",
                 "te",
                 "trailer",
+                "set-cookie",
+                "service-worker-allowed",
+                "clear-site-data",
             ]
-            .contains(&name.to_ascii_lowercase().as_str())
+            .contains(&canonical_name.as_str())
         {
             return Err(Failure::new(
                 "function.output-invalid",

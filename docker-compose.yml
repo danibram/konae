@@ -58,6 +58,8 @@ services:
         functions-runner: ${KONAE_FUNCTIONS_RUNNER_CONTEXT:-.konae/functions-runner}
       args:
         FUNCTIONS_RUNNER_SHA256: ${KONAE_FUNCTIONS_RUNNER_SHA256:?run scripts/dev-compose.sh or set the runner hash}
+        FUNCTIONS_PREPARER_SHA256: ${KONAE_FUNCTIONS_PREPARER_SHA256:?run scripts/dev-compose.sh or set the preparer hash}
+        FUNCTIONS_DENO_RUNNER_SHA256: ${KONAE_FUNCTIONS_DENO_RUNNER_SHA256:?run scripts/dev-compose.sh or set the Deno runner hash}
     depends_on:
       minio-init:
         condition: service_completed_successfully

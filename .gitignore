@@ -5,7 +5,7 @@ dist/
 *.log
 .env*
 data/
-kernel-rs/target/
+/kernel-rs/**/target/
 test-results/
 playwright-report/
 *.tsbuildinfo

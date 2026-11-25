@@ -31,10 +31,11 @@ import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-
 import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
-import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
+import { ACTION_TYPES_FILE, renderActionTypes, renderFunctionContextTypes } from "../src/lib/action-types";
+import { actionsModuleBody } from "../src/sdk/functions";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule, bundleFunctions } from "../src/lib/local-builder.js";
-import { parseFunctions, validateFunctions, validateServerArtifact, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
+import { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
 import { readTar } from "../src/lib/tar";
 import { readAppFolder } from "../src/lib/import-folder";
 import { buildProjectEntries } from "../src/lib/build-project";
@@ -46,7 +47,7 @@ import { importWithLocalKernel, rehearsePulledSnapshot } from "./rehearse";
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
-type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; parserSource: string; parserLicense: string; typeScriptLibs: Record<string, string> };
+type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; nodeCompat: string; nodeCompatProviders: string; parserSource: string; parserLicense: string; typeScriptLibs: Record<string, string> };
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -516,6 +517,7 @@ async function hasPackageBuild(root: string) {
 async function refreshPageBuilder(root: string, sdk: boolean, authored: ReadonlySet<string> = new Set()) {
   const generated = await folderFiles(root, await readSettings(root));
   const resources = generated.filter((entry) => entry.path === "scripts/build.mjs" || entry.path === "scripts/local-builder.mjs"
+    || entry.path === "scripts/node-compat.js" || entry.path === "scripts/node-compat-providers.js"
     || entry.path === "scripts/static-artifact.mjs" || entry.path === "scripts/babel-parser.cjs" || entry.path === "scripts/BABEL-PARSER-LICENSE"
     || sdk && entry.path === "scripts/runtime.js").map(({ path: relative, contents }) => [relative, contents] as const);
   for (const [relative, contents] of resources) {
@@ -583,8 +585,12 @@ export async function buildLocal(root: string, options: { development?: boolean;
   const functionsSource = files["functions.json"];
   const functions = functionsSource === undefined ? undefined : parseFunctions(functionsSource);
   const functionsContext = { files: Object.keys(files), modules: settings?.modules, actions: JSON.parse(files["actions.json"] ?? '{"actions":{}}').actions ?? {} };
-  if (functions) validateFunctions(functions, functionsContext);
-  const serverArtifact = functions && Object.keys(functions.functions).length ? await bundleFunctions(appDir(root), functions, options.development) : undefined;
+  if (functions) {
+    validateFunctionSources(functions, files);
+    validateFunctions(functions, functionsContext);
+  }
+  const contract = generateActionContract({ actionsSource: files["actions.json"] ?? '{"version":1,"actions":{}}', schemaSource: files["schema.sql"] ?? "" }).contract;
+  const serverArtifact = functions && Object.keys(functions.functions).length ? await bundleFunctions(appDir(root), functions, contract, options.development, actionsModuleBody()) : undefined;
   validateServerArtifact(functions, serverArtifact);
   const saveServer = async (staticPaths: string[]) => {
     if (functions) validateFunctions(functions, { ...functionsContext, staticPaths });
@@ -594,7 +600,7 @@ export async function buildLocal(root: string, options: { development?: boolean;
   const sdkEnabled = sdkRequired(settings?.modules, files, settings?.visibility ?? "private");
   await refreshActionTypes(root);
   const paths = await capsulePaths(root);
-  if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
+  if (paths.some((file) => (file.startsWith("src/") || file.startsWith("functions/")) && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
     await refreshPageBuilder(root, sdkEnabled, authoredBuildFiles);
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
@@ -893,11 +899,20 @@ async function writeDist(root: string, artifact: { files: Record<string, string>
 /** The files beside app/, dist/ and data/ that every app folder carries. */
 async function folderFiles(root: string, settings: AppSettings) {
   const read = (file: string) => readFile(path.join(appDir(root), file), "utf8").catch(() => "");
+  const publishedServer = await readFile(path.join(root, "server/manifest.json"), "utf8").catch(() => "");
+  let hasFunctions = false;
+  if (publishedServer) {
+    const manifest = JSON.parse(publishedServer) as { manifest?: { functions?: Record<string, unknown> } };
+    hasFunctions = Object.keys(manifest.manifest?.functions ?? {}).length > 0;
+  }
   return generatedFiles({
-    settings, actionsSource: await read("actions.json") || '{"version":1,"actions":{}}', schemaSource: await read("schema.sql"),
+    settings, actionsSource: await read("actions.json") || '{"version":1,"actions":{}}', schemaSource: await read("schema.sql"), functionsSource: await read("functions.json") || undefined,
+    hasFunctions,
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
     localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),
+    nodeCompat: embeddedResources?.nodeCompat ?? await readFile(path.join(toolRoot!, "src/lib/node-compat.js"), "utf8"),
+    nodeCompatProviders: embeddedResources?.nodeCompatProviders ?? await readFile(path.join(toolRoot!, "src/lib/node-compat-providers.js"), "utf8"),
     parserSource: embeddedResources?.parserSource ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/lib/index.js"), "utf8"),
     parserLicense: embeddedResources?.parserLicense ?? await readFile(path.join(toolRoot!, "node_modules/@babel/parser/LICENSE"), "utf8"),
   });
@@ -1000,8 +1015,25 @@ async function refreshActionTypes(root: string) {
   const actionsSource = await readFile(path.join(appDir(root), "actions.json"), "utf8").catch(() => undefined);
   if (actionsSource === undefined) return;
   const schemaSource = await readFile(path.join(appDir(root), "schema.sql"), "utf8").catch(() => "");
+  const functionsSource = await readFile(path.join(appDir(root), "functions.json"), "utf8").catch(() => undefined);
   try {
-    await writeActionTypes(root, generateActionContract({ actionsSource, schemaSource }).contract);
+    const contract = generateActionContract({ actionsSource, schemaSource }).contract;
+    await writeActionTypes(root, contract);
+    const declarations = functionsSource === undefined ? undefined : renderFunctionContextTypes(contract, parseFunctions(functionsSource));
+    if (declarations !== undefined) {
+      const file = path.join(root, "functions.d.ts");
+      if (await readFile(file, "utf8").catch(() => undefined) !== declarations) await writeFile(file, declarations);
+      const tsconfigFile = path.join(root, "tsconfig.json");
+      const tsconfigSource = await readFile(tsconfigFile, "utf8").catch(() => undefined);
+      if (tsconfigSource !== undefined) {
+        const tsconfig = JSON.parse(tsconfigSource) as { include?: unknown };
+        const include = Array.isArray(tsconfig.include) ? tsconfig.include.filter((entry): entry is string => typeof entry === "string") : [];
+        if (!include.includes("app/functions")) {
+          tsconfig.include = [...include, "app/functions"];
+          await writeFile(tsconfigFile, `${JSON.stringify(tsconfig, null, 2)}\n`);
+        }
+      }
+    }
   } catch (error) {
     console.warn(`${ACTION_TYPES_FILE} stays as it was: ${error instanceof Error ? error.message : error}`);
   }
@@ -1117,8 +1149,11 @@ export async function localKernel(root: string, settings: AppSettings, options: 
   const env: Record<string, string | undefined> = {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_"))),
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => [
-      "KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP",
-      "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID",
+      "KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_RUNNER_KIND", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP",
+      "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID", "KONAE_FUNCTIONS_PREPARER",
+      "KONAE_FUNCTIONS_WASM_CACHE", "KONAE_FUNCTIONS_WASM_CACHE_BYTES",
+      "KONAE_OTLP_TRACES_ENDPOINT", "KONAE_OTLP_TRACES_HEADERS", "KONAE_OTLP_TRACES_SAMPLE_RATE",
+      "KONAE_TRUSTED_PROXIES",
     ].includes(name))),
     KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
@@ -1721,7 +1756,7 @@ export async function main() {
       if (shuttingDown) return undefined;
       await refreshActionTypes(root);
       if (shuttingDown) return undefined;
-      await buildLocal(root, { development: true });
+      const { serverArtifact } = await buildLocal(root, { development: true });
       if (shuttingDown) return undefined;
       if (reset) {
         reset = false;
@@ -1742,12 +1777,18 @@ export async function main() {
         const decoder = new TextDecoder();
         for await (const block of started.stderr as ReadableStream<Uint8Array>) { const text = decoder.decode(block); output += text; process.stderr.write(text); }
       })();
-      for (let attempt = 0; attempt < 150 && !/listening on/.test(output) && !shuttingDown; attempt++) {
+      const functionCount = Object.keys(serverArtifact?.bundles ?? {}).length;
+      // Preparation and native compilation each have a 90 second deadline.
+      const startupDeadline = performance.now() + 15_000 + 180_000 * functionCount;
+      while (performance.now() < startupDeadline && !/listening on/.test(output) && !shuttingDown) {
         if (started.exitCode !== null) break;
         await Bun.sleep(100);
       }
       if (shuttingDown) return undefined;
-      if (!/listening on/.test(output)) throw Error(`The Kernel stopped before it served the app.\n${output.trim()}`);
+      if (!/listening on/.test(output)) {
+        const message = started.exitCode === null ? "The Kernel took too long to start." : "The Kernel stopped before it served the app.";
+        throw Error(`${message}\n${output.trim()}`);
+      }
       const served = /Serving .+ at (\S+)/.exec(output)?.[1];
       if (!served) throw Error("The Kernel does not serve this folder. It said why above.");
       return served;

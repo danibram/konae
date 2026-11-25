@@ -2,6 +2,9 @@ use super::*;
 use super::runtime::*;
 use super::transfers::{ADMIN_CHUNK, ADMIN_MCP_BODY_BYTES, MAX_TRANSFER, transfer, transfer_call, transfer_path};
 use rusqlite::params;
+
+#[path = "function_candidate.rs"]
+mod function_candidate;
 use crate::projects::sources::{ensure_no_component, validate_sources};
 #[cfg(test)]
 use crate::projects::release::source_revision_refusal;
@@ -536,6 +539,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     ];
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
+            tool("function_candidate_check", "Check a completed candidate Server Artifact before Apply. The upload must belong to projectId, fit its write grant and match buildFingerprint, the SHA-256 of the exact uploaded bytes. This changes no project or Deployment.", json!({"projectId":text,"transferId":text,"scratchRevision":text,"buildFingerprint":{"type":"string","pattern":"^[0-9a-f]{64}$"}}), &["projectId","transferId","scratchRevision","buildFingerprint"], false),
             tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. To save the editor's files with it, upload the project JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
         tool("project_sources_save", "Save project sources if expectedRevision still matches. Upload the full document for compatibility, or { format: \"delta\", metadata: { name, slug, directories, manifest, updatedAt }, files: { changedPath: contents }, encodings, removedPaths } to send changed files only. Base64 files use encodings: { path: \"base64\" }.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
@@ -1518,6 +1522,7 @@ async fn admin_call(
             Ok(answer)
         }
         "project_export" => crate::projects::release::export(state, owner, principal, &a).await,
+        "function_candidate_check" => function_candidate::check(state, owner, principal, &a).await,
         "release_plan" => crate::projects::release::plan(state, owner, principal, &a).await,
         "release_apply" => crate::projects::release::apply(state, owner, principal, &a).await,
         "project_import" => crate::copies::Pending::through_catalogue(crate::projects::release::import(state, owner, principal, &a)).await?,

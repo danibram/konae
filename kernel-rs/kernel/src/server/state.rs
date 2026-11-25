@@ -37,6 +37,13 @@ pub struct AppState {
     /// Where an app user's file uploads and deletes are recorded.
     pub audit: Option<runtime::AuditSink>,
     pub functions: Arc<functions::runtime::Runtime>,
+    pub otlp: Option<functions::otlp::Exporter>,
+}
+
+impl AppState {
+    pub async fn shutdown_exporters(&self) {
+        if let Some(exporter) = &self.otlp { exporter.shutdown().await; }
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -62,6 +69,7 @@ impl AppState {
             installation: Arc::new(installation::Installation::for_test()),
             audit: None,
             functions: Arc::new(functions::runtime::Runtime::disabled()),
+            otlp: None,
         }
     }
 }

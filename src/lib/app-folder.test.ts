@@ -23,12 +23,14 @@ const settings: AppSettings = {
 const repo = path.resolve(import.meta.dir, "../..");
 const parserSource = readFileSync(path.join(repo, "node_modules/@babel/parser/lib/index.js"), "utf8");
 const parserLicense = readFileSync(path.join(repo, "node_modules/@babel/parser/LICENSE"), "utf8");
-const generated = (input: Omit<Parameters<typeof generatedFiles>[0], "parserSource" | "parserLicense">) => generatedFiles({ ...input, parserSource, parserLicense });
+const generated = (input: Omit<Parameters<typeof generatedFiles>[0], "parserSource" | "parserLicense" | "nodeCompat" | "nodeCompatProviders">) => generatedFiles({ ...input, nodeCompat: readFileSync(path.join(repo, "src/lib/node-compat.js"), "utf8"), nodeCompatProviders: readFileSync(path.join(repo, "src/lib/node-compat-providers.js"), "utf8"), parserSource, parserLicense });
+const folderSettings = (hasFunctions = false) => generated({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", functionsSource: hasFunctions ? JSON.stringify({ version: 1, functions: { hello: { entry: "functions/hello.js", methods: ["GET"], mount: "/api/hello", access: "anonymous", actions: [] } } }) : undefined, runtime: "", staticArtifact: "", localBuilder: "", hasFunctions });
 
 test("the app folder's AGENTS.md tells a person or agent to escape text written into the page", () => {
   const files = generated({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", runtime: "", staticArtifact: "", localBuilder: "" });
   const guide = files.find((file) => file.path === "AGENTS.md")?.contents as string;
   expect(guide).toContain("`textContent` or the template's `escapeHtml`, in attributes too");
+  expect(guide).toContain("StarlingMonkey is the default production runner.");
 });
 
 test("the folder's .env.example names the image of the Kernel version its konae.json carries", () => {
@@ -39,6 +41,54 @@ test("the folder's .env.example names the image of the Kernel version its konae.
   expect(env("0.6.0")).toContain("A release publishes this tag for linux/amd64 and linux/arm64. A local image can replace it.");
   const compose = entries("0.6.0").find((file) => file.path === "compose.yaml")?.contents as string;
   expect(compose).toContain("${KONAE_KERNEL_IMAGE:?");
+});
+
+test("the generated compose stays unchanged when the published app has no functions", () => {
+  const files = folderSettings();
+  const compose = files.find((file) => file.path === "compose.yaml")?.contents as string;
+  const env = files.find((file) => file.path === ".env.example")?.contents as string;
+  expect(compose).not.toContain("KONAE_FUNCTIONS_RUNNER");
+  expect(compose).not.toContain("cgroup:");
+  expect(compose).not.toContain("cap_add:");
+  expect(compose).not.toContain("/sys/fs/cgroup");
+  expect(env).not.toContain("KONAE_FUNCTIONS_");
+});
+
+test("the generated compose configures the packaged Wasm runner and persistent cache for published functions", () => {
+  const files = folderSettings(true);
+  const compose = files.find((file) => file.path === "compose.yaml")?.contents as string;
+  const env = files.find((file) => file.path === ".env.example")?.contents as string;
+  expect(compose).toContain("KONAE_FUNCTIONS_RUNNER: ${KONAE_FUNCTIONS_RUNNER:-/usr/local/lib/konae/functions-runner-wasm}");
+  expect(compose).toContain("KONAE_FUNCTIONS_RUNNER_KIND: ${KONAE_FUNCTIONS_RUNNER_KIND:-wasm}");
+  expect(compose).toContain("KONAE_FUNCTIONS_PREPARER: ${KONAE_FUNCTIONS_PREPARER:-/usr/local/lib/konae/functions-prepare}");
+  expect(compose).toContain("KONAE_FUNCTIONS_WASM_CACHE: ${KONAE_FUNCTIONS_WASM_CACHE:-/kernel/.konae/wasm-cache}");
+  expect(compose).toContain('KONAE_FUNCTIONS_UID: ${KONAE_FUNCTIONS_UID:-10002}');
+  expect(compose).toContain('KONAE_FUNCTIONS_GID: ${KONAE_FUNCTIONS_GID:-10002}');
+  expect(compose).not.toContain("cgroup:");
+  expect(compose).toContain("- SETUID\n      - SETGID\n      - KILL");
+  expect(compose).not.toContain("SYS_ADMIN");
+  expect(compose).not.toContain("security_opt:");
+  expect(compose).not.toContain("cgroup_parent");
+  expect(compose).not.toContain("/sys/fs/cgroup");
+  expect(compose.match(/volumes:/g)).toHaveLength(2);
+  expect(env).toContain("KONAE_FUNCTIONS_RUNNER_KIND=wasm");
+  expect(env).toContain("KONAE_FUNCTIONS_RUNNER=/usr/local/lib/konae/functions-runner-wasm");
+  expect(env).toContain("KONAE_FUNCTIONS_PREPARER=/usr/local/lib/konae/functions-prepare");
+  expect(env).toContain("KONAE_FUNCTIONS_WASM_CACHE=/kernel/.konae/wasm-cache");
+  expect(env).not.toContain("KONAE_FUNCTIONS_CGROUP");
+  expect(env).toContain("KONAE_FUNCTIONS_UID=10002");
+  expect(env).toContain("KONAE_FUNCTIONS_GID=10002");
+});
+
+test("the dev Compose passes the deno runner checksum required by the image build", () => {
+  const compose = readFileSync(path.join(repo, "docker-compose.yml"), "utf8");
+  expect(compose).toContain("FUNCTIONS_DENO_RUNNER_SHA256: ${KONAE_FUNCTIONS_DENO_RUNNER_SHA256");
+});
+
+test("an exported function app selects the packaged Wasm runner from its parsed declaration", () => {
+  const files = generated({ settings, actionsSource: `{"version":1,"actions":{}}`, schemaSource: "", functionsSource: JSON.stringify({ version: 1, functions: { hello: { entry: "functions/hello.js", methods: ["GET"], mount: "/api/hello", access: "anonymous", actions: [] } } }), runtime: "", staticArtifact: "", localBuilder: "" });
+  const compose = files.find((file) => file.path === "compose.yaml")?.contents as string;
+  expect(compose).toContain("KONAE_FUNCTIONS_RUNNER_KIND: ${KONAE_FUNCTIONS_RUNNER_KIND:-wasm}");
 });
 
 test("the folder's AGENTS.md says when dist/ needs npm install and when it does not", () => {

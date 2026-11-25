@@ -607,6 +607,9 @@ enum Target {
     Outside(SocketAddr),
 }
 
+#[cfg(test)]
+static TEST_IN_PROCESS_TRACEPARENTS: OnceLock<std::sync::Mutex<Vec<String>>> = OnceLock::new();
+
 async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static str, bool)> {
     let host = host_of(url);
     let rules = crate::domain::Rules::of(state);
@@ -661,6 +664,7 @@ fn connection(data_root: &Path) -> Result<Connection> {
         ("request_body", "TEXT"),
         ("request_headers", "TEXT"),
         ("response_body", "BLOB"),
+        ("traceparent", "TEXT"),
     ] {
         let exists: bool = connection
             .query_row(
@@ -921,6 +925,10 @@ pub async fn submit_synthetic_response(state: &AppState, app_id: &str, id: &str,
 /// Queues a call whose caller and inputs `invoke_action` has checked, and
 /// answers `{ callId, queued: true }`.
 pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, input: &Value) -> Response {
+    enqueue_with_traceparent(state, deployment, name, input, None).await
+}
+
+pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment, name: &str, input: &Value, traceparent: Option<&str>) -> Response {
     if let Err(refused) = crate::modules::require_on(&deployment.modules, "calls") { return crate::refusal_error(&refused); }
     let data_root = state.data_root.clone();
     let deployment_id = deployment.id.clone();
@@ -928,6 +936,16 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
     let input = input.clone();
     let limit = per_minute();
     let execution_mode = if state.execution_mode.is_test() { "test" } else { "live" };
+    let traceparent = if execution_mode == "live" && state.otlp.is_some() {
+        traceparent.and_then(|value| {
+            let trace_id = crate::functions::trace::traceparent_id(value)?;
+            let sampled = state.otlp.as_ref().map_or_else(
+                || crate::functions::trace::traceparent_sampled(value).unwrap_or(false),
+                |exporter| exporter.should_sample(&trace_id),
+            );
+            crate::functions::trace::normalize_traceparent(value, sampled)
+        })
+    } else { None };
     let queued = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let db = connection(&data_root)?;
         let at = now();
@@ -941,9 +959,9 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
         }
         let id = format!("call_{}", Uuid::new_v4().simple());
         db.execute(
-            "INSERT INTO calls (id, deployment, action, input, state, attempts, next_attempt_at, execution_mode, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?5, ?5)",
-            rusqlite::params![id, deployment_id, action, input.to_string(), at, execution_mode],
+            "INSERT INTO calls (id, deployment, action, input, state, attempts, next_attempt_at, execution_mode, traceparent, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?5, ?5)",
+            rusqlite::params![id, deployment_id, action, input.to_string(), at, execution_mode, traceparent],
         )?;
         db.execute(
             "DELETE FROM calls WHERE deployment = ?1 AND state <> 'pending' AND id NOT IN
@@ -971,6 +989,7 @@ struct Claimed {
     action: String,
     input: Value,
     attempts: i64,
+    traceparent: Option<String>,
 }
 
 fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
@@ -982,7 +1001,7 @@ fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
            SELECT id FROM calls WHERE state = 'pending' AND execution_mode = 'live' AND next_attempt_at <= ?2
              AND (leased_until IS NULL OR leased_until < ?2)
            ORDER BY next_attempt_at LIMIT ?3)
-         RETURNING id, deployment, action, input, attempts",
+         RETURNING id, deployment, action, input, attempts, traceparent",
     )?;
     let rows = statement
         .query_map(rusqlite::params![at + LEASE_MS, at, BATCH], |row| {
@@ -992,6 +1011,7 @@ fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
                 action: row.get(2)?,
                 input: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or(json!({})),
                 attempts: row.get(4)?,
+                traceparent: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1326,7 +1346,7 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
     let extra_headers = request_headers(&call, &job.input);
     let mut attempt = Attempt { method: Some(call.method.clone()), url: Some(url.to_string()), ..Default::default() };
     let mut retry = false;
-    match send(state, &deployment, &call, &url, &body, &extra_headers).await {
+    match send(state, &deployment, &call, &url, &body, &extra_headers, job.traceparent.as_deref()).await {
         Ok((status, answer)) => {
             attempt.status = Some(status);
             attempt.answer = answer;
@@ -1355,8 +1375,23 @@ async fn send(
     url: &url::Url,
     body: &[u8],
     extra_headers: &[(String, String)],
+    traceparent: Option<&str>,
 ) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
     let target = target(state, url).await?;
+    send_to_target(state, deployment, call, url, body, extra_headers, traceparent, target).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_to_target(
+    state: &AppState,
+    deployment: &Deployment,
+    call: &Call,
+    url: &url::Url,
+    body: &[u8],
+    extra_headers: &[(String, String)],
+    traceparent: Option<&str>,
+    target: Target,
+) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
     let secret = match &call.auth {
         None => None,
         Some(auth) => {
@@ -1379,6 +1414,12 @@ async fn send(
         }
         (Some(Auth::Key { .. }), Some(secret)) => headers.push(("authorization".into(), format!("Bearer {secret}"))),
         _ => {}
+    }
+    if let Some(traceparent) = traceparent.filter(|_| !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("traceparent"))) {
+        headers.retain(|(name, _)| !name.eq_ignore_ascii_case("traceparent"));
+        if let Some(attempt_traceparent) = crate::functions::trace::child_traceparent(traceparent) {
+            headers.push(("traceparent".into(), attempt_traceparent));
+        }
     }
     match target {
         Target::App(app) => Ok(send_in_process(state, deployment, &app, &call.method, &path, &query, &headers, body).await?),
@@ -1405,6 +1446,14 @@ async fn send_in_process(
     for (name, value) in headers {
         let name = axum::http::HeaderName::from_bytes(name.as_bytes()).map_err(|_| ("invalid-header", false))?;
         map.insert(name, HeaderValue::from_str(value).map_err(|_| ("invalid-header", false))?);
+    }
+    #[cfg(test)]
+    if let Some(value) = map.get("traceparent").and_then(|value| value.to_str().ok()) {
+        TEST_IN_PROCESS_TRACEPARENTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(value.to_owned());
     }
     let response = crate::http::call_route(state, app, method, path, query, body, &map, caller_address(&caller.id)).await;
     let status = response.status().as_u16();
@@ -1800,8 +1849,19 @@ mod tests {
     }
 
     async fn publish(state: &AppState, actions: Value, schema: &str) -> Result<Deployment, String> {
+        publish_named(state, "caller", "Caller", "caller", actions, schema).await
+    }
+
+    async fn publish_named(
+        state: &AppState,
+        id: &str,
+        name: &str,
+        slug: &str,
+        actions: Value,
+        schema: &str,
+    ) -> Result<Deployment, String> {
         let body = json!({
-            "project": {"id": "caller", "name": "Caller", "slug": "caller", "manifest": {},
+            "project": {"id": id, "name": name, "slug": slug, "manifest": {},
                 "files": {"actions.json": actions.to_string(), "schema.sql": schema}},
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>caller</p>"}}
@@ -1811,7 +1871,7 @@ mod tests {
             let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
             return Err(serde_json::from_slice::<Value>(&bytes).unwrap()["error"].as_str().unwrap_or("").to_owned());
         }
-        Ok(state.deployments.read().await.values().next().cloned().unwrap())
+        Ok(state.deployments.read().await.values().find(|deployment| deployment.id == id).cloned().unwrap())
     }
 
     fn call_action(url: &str) -> Value {
@@ -1822,6 +1882,116 @@ mod tests {
                 "bindings": [{"source": "input", "key": "status", "type": "number", "nullable": true},
                              {"source": "input", "key": "error", "type": "string", "nullable": true}]}
         }})
+    }
+
+    fn captured_headers(request: &[u8]) -> (std::collections::HashMap<String, String>, Vec<u8>) {
+        let text = String::from_utf8_lossy(request);
+        let (head, body) = text.split_once("\r\n\r\n").unwrap();
+        let headers = head.lines().skip(1).filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.to_ascii_lowercase(), value.trim().to_owned()))
+        }).collect();
+        (headers, body.as_bytes().to_vec())
+    }
+
+    async fn verify_captured_signature(root: &Path, signature: &str, body: &[u8]) {
+        let db = crate::http::secrets_store(root, "caller").unwrap();
+        let request = crate::http::SignedRequest { method: "POST", path: "/hook", query: "", body };
+        let result = crate::http::verify_signature(&db, &request, "synthetic-call-secret", Some(signature), now_ms() / 1000).unwrap();
+        assert_eq!(result, crate::http::SignatureCheck::Valid);
+    }
+
+    #[tokio::test]
+    async fn pending_outbox_trace_context_retries_deliver_signed_requests_with_fresh_children() {
+        let root = std::env::temp_dir().join(format!("konae-call-trace-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let action_json = json!({"version":1,"actions":{
+            "hook.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://hooks.example.net/hook",
+                "bindings":[{"source":"input","key":"message","type":"string"}],"body":{"message":"message"},
+                "auth":{"secret":"hook_secret","header":"X-Signature"}}
+        }});
+        let secrets = crate::http::secrets_store(&root, "caller").unwrap();
+        crate::http::secrets_call(&secrets, "caller", None, "secret_set", &json!({"name":"hook_secret","value":"synthetic-call-secret","use":"call"})).unwrap();
+        let deployment = publish(&state, action_json.clone(), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let action_program: ActionProgram = serde_json::from_str(&deployment.actions).unwrap();
+        let call = declaration("hook.send", &action_program.actions["hook.send"]).unwrap();
+        let url = url::Url::parse("http://hooks.example.net/hook").unwrap();
+        let body = br#"{"message":"synthetic"}"#;
+        let db = connection(&root).unwrap();
+        db.execute(
+            "INSERT INTO calls (id, deployment, action, input, state, next_attempt_at, traceparent, created_at, updated_at) VALUES ('pending', 'caller', 'hook.send', '{\"message\":\"synthetic\"}', 'pending', 0, ?1, 1, 1)",
+            [parent],
+        ).unwrap();
+        drop(db);
+        let first = claim(&root).unwrap().pop().unwrap();
+        assert_eq!(first.traceparent.as_deref(), Some(parent));
+        let (address, request) = server(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n".to_vec(), Duration::ZERO).await;
+        let first_answer = send_to_target(&state, &deployment, &call, &url, body, &[], first.traceparent.as_deref(), Target::Outside(address)).await.unwrap();
+        assert_eq!(first_answer.0, 503);
+        let (first_headers, first_body) = captured_headers(&request.await.unwrap());
+        assert_eq!(first_body, body);
+        verify_captured_signature(&root, &first_headers["x-signature"], &first_body).await;
+        let first_attempt = first_headers["traceparent"].clone();
+        assert_eq!(crate::functions::trace::traceparent_id(&first_attempt), crate::functions::trace::traceparent_id(parent));
+        release(&root, "pending", FIRST_BACKOFF_MS, true, &Attempt { status: Some(503), ..Default::default() }).unwrap();
+        connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0 WHERE id = 'pending'", []).unwrap();
+        let retry = claim(&root).unwrap().pop().unwrap();
+        assert_eq!(retry.traceparent, first.traceparent);
+        assert_eq!(retry.attempts, first.attempts + 1);
+        let (address, request) = server(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}".to_vec(), Duration::ZERO).await;
+        assert_eq!(send_to_target(&state, &deployment, &call, &url, body, &[], retry.traceparent.as_deref(), Target::Outside(address)).await.unwrap(), (200, b"{}".to_vec()));
+        let (retry_headers, retry_body) = captured_headers(&request.await.unwrap());
+        verify_captured_signature(&root, &retry_headers["x-signature"], &retry_body).await;
+        let retry_attempt = &retry_headers["traceparent"];
+        assert_eq!(crate::functions::trace::traceparent_id(retry_attempt), crate::functions::trace::traceparent_id(parent));
+        assert_ne!(&first_attempt[36..52], &retry_attempt[36..52]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn declared_in_process_trace_context_route_receives_signed_payload_on_retries() {
+        let root = std::env::temp_dir().join(format!("konae-call-in-process-trace-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let receiver_actions = json!({"version":1,"actions":{
+            "hook.receive":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO received(message) VALUES (?1)",
+                "bindings":[{"source":"input","key":"message","type":"string"}],
+                "http":{"method":"POST","path":"/hooks/signed","signature":{"header":"X-Signature","secret":"hook_secret"},"callers":["signature"]}}
+        }});
+        let receiver_secrets = crate::http::secrets_store(&root, "receiver").unwrap();
+        crate::http::secrets_call(&receiver_secrets, "receiver", None, "secret_set", &json!({"name":"hook_secret","value":"synthetic-call-secret","use":"route"})).unwrap();
+        let receiver = publish_named(&state, "receiver", "Receiver", "receiver", receiver_actions,
+            "CREATE TABLE IF NOT EXISTS received (message TEXT);").await.unwrap();
+        let caller_actions = json!({"version":1,"actions":{
+            "hook.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://receiver.apps.example.org/hooks/signed",
+                "bindings":[{"source":"input","key":"message","type":"string"}],"body":{"message":"message"},
+                "auth":{"secret":"hook_secret","header":"X-Signature"}}
+        }});
+        let caller_secrets = crate::http::secrets_store(&root, "caller").unwrap();
+        crate::http::secrets_call(&caller_secrets, "caller", None, "secret_set", &json!({"name":"hook_secret","value":"synthetic-call-secret","use":"call"})).unwrap();
+        let caller = publish(&state, caller_actions.clone(), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let action_program: ActionProgram = serde_json::from_str(&caller.actions).unwrap();
+        let call = declaration("hook.send", &action_program.actions["hook.send"]).unwrap();
+        let url = call.url.clone();
+        let body = br#"{"message":"synthetic"}"#;
+        TEST_IN_PROCESS_TRACEPARENTS.get_or_init(Default::default).lock().unwrap().clear();
+        for _ in 0..2 {
+            let answer = send_to_target(&state, &caller, &call, &url, body, &[], Some(parent), Target::App(receiver.clone())).await.unwrap();
+            assert_eq!(answer.0, 200);
+        }
+        assert_eq!(send_to_target(&state, &caller, &call, &url, body, &[], None, Target::App(receiver.clone())).await.unwrap().0, 200);
+        let observed = TEST_IN_PROCESS_TRACEPARENTS.get_or_init(Default::default).lock().unwrap().clone();
+        assert_eq!(observed.len(), 2);
+        assert!(observed.iter().all(|header| crate::functions::trace::traceparent_id(header) == crate::functions::trace::traceparent_id(parent)));
+        assert_ne!(&observed[0][36..52], &observed[1][36..52]);
+        let db = Connection::open(crate::layout::database(&root, &receiver.id)).unwrap();
+        let received = db.query_row("SELECT group_concat(message, ',') FROM received", [], |row| row.get::<_, String>(0)).unwrap();
+        assert_eq!(received, "synthetic,synthetic,synthetic");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
