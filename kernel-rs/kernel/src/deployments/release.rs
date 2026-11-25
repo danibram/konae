@@ -77,7 +77,10 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
     };
     let prepared = match functions::prepare_artifact(input.server_artifact.as_ref()).await {
         Ok(prepared) => prepared,
-        Err(error_value) => return error(StatusCode::SERVICE_UNAVAILABLE, &format!("Wasm function preparation failed: {error_value:#}")),
+        Err(error_value) => return match crate::refusal::of(&error_value) {
+            Some(refused) => refusal_error(refused),
+            None => error(StatusCode::SERVICE_UNAVAILABLE, &format!("Wasm function preparation failed: {error_value:#}")),
+        },
     };
     let _pending_pin = functions::pin_prepared(&prepared);
     let _generation = state.copies.generations.read().await;

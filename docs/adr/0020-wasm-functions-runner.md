@@ -1,6 +1,6 @@
 # Build StarlingMonkey functions on the destination
 
-Status: Proposed.
+Status: Accepted.
 
 An app leaves Konae with the same sign-in and data rules. The editor and CLI both send ESM, including the dependencies each function needs. Startup on the destination must work with the released files even when the saved draft has changed. The owner selected StarlingMonkey as the production runner path on 2026-11-23.
 

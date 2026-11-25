@@ -112,7 +112,8 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_BIND` | `127.0.0.1` (`0.0.0.0` in both images) | Address the Kernel listens on. |
 | `KONAE_DATA_DIR` | `/data` (`/kernel` in the `kernel` image, `data/kernel-local` under `bun run dev:local` and `bun run kernel`) | Data directory. See [Data directory and copies](#data-directory-and-copies). |
 | `KONAE_FUNCTIONS_RUNNER` | unset | Absolute path to the packaged function worker. |
-| `KONAE_FUNCTIONS_RUNNER_KIND` | `deno` | Set to `wasm` when `KONAE_FUNCTIONS_RUNNER` names the StarlingMonkey runner. The Kernel prepares published bundles before release planning, release apply and app-folder startup. |
+| `KONAE_FUNCTIONS_RUNNER_KIND` | `wasm` | Set to `deno` when `KONAE_FUNCTIONS_RUNNER` names the deno_core runner. The Kernel prepares published bundles before release planning, release apply and app-folder startup. |
+| `KONAE_FUNCTIONS_DEPLOYMENT_ADMISSION` | `8` | Maximum admitted function requests per Deployment. The installation-wide cap remains `KONAE_FUNCTIONS_ADMISSION`. |
 | `KONAE_FUNCTIONS_PREPARER` | unset | Absolute path to the packaged Rust component preparer. Required for Wasm. |
 | `KONAE_FUNCTIONS_WASM_CACHE` | unset | Absolute path to the operator-owned native component cache. Generated Compose puts it under the installation volume. |
 | `KONAE_FUNCTIONS_WASM_CACHE_BYTES` | `4294967296` | Maximum native cache size and in-flight reservation budget. |

@@ -936,7 +936,7 @@ pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment,
     let input = input.clone();
     let limit = per_minute();
     let execution_mode = if state.execution_mode.is_test() { "test" } else { "live" };
-    let traceparent = if execution_mode == "live" {
+    let traceparent = if execution_mode == "live" && state.otlp.is_some() {
         traceparent.and_then(|value| {
             let trace_id = crate::functions::trace::traceparent_id(value)?;
             let sampled = state.otlp.as_ref().map_or_else(
@@ -1415,7 +1415,7 @@ async fn send_to_target(
         (Some(Auth::Key { .. }), Some(secret)) => headers.push(("authorization".into(), format!("Bearer {secret}"))),
         _ => {}
     }
-    if let Some(traceparent) = traceparent {
+    if let Some(traceparent) = traceparent.filter(|_| !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("traceparent"))) {
         headers.retain(|(name, _)| !name.eq_ignore_ascii_case("traceparent"));
         if let Some(attempt_traceparent) = crate::functions::trace::child_traceparent(traceparent) {
             headers.push(("traceparent".into(), attempt_traceparent));

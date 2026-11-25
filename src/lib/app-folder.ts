@@ -110,8 +110,8 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
   const functions = input.functionsSource === undefined ? undefined : parseFunctions(input.functionsSource);
   return [
-    { path: "compose.yaml", contents: composeFile(settings, input.hasFunctions === true) },
-    { path: ".env.example", contents: envExample(settings, input.hasFunctions === true) },
+    { path: "compose.yaml", contents: composeFile(settings, Boolean(functions)) },
+    { path: ".env.example", contents: envExample(settings, Boolean(functions)) },
     { path: ".gitignore", contents: gitignore },
     { path: "AGENTS.md", contents: agentsGuide(settings, secretNames(input.actionsSource)) },
     { path: "action-contract.md", contents: renderActionContractMarkdown(contract) },
@@ -249,7 +249,7 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Rules the Kernel checks
 
-A function exports \`handle(request, context)\` and returns a \`Response\`. Use \`await context.actions.call(name, input)\` for a query or mutation in its declared action allowlist. Functions start off; enable \`functions\` in \`konae.json\`. Authenticated functions need \`auth\`, and a nonempty action allowlist needs \`actions\`. The editor preview does not execute server functions. Try \`konae dev\` or a published Deployment with the experimental function runner configured by the operator.
+A function exports \`handle(request, context)\` and returns a \`Response\`. Use \`await context.actions.call(name, input)\` for a query or mutation in its declared action allowlist. Functions start off; enable \`functions\` in \`konae.json\`. Authenticated functions need \`auth\`, and a nonempty action allowlist needs \`actions\`. The editor preview does not execute server functions. StarlingMonkey is the default production runner. Try \`konae dev\` or a published Deployment with its matching runner and preparer.
 
 An optional \`schema-transforms.json\` records ordered data changes between schema fingerprints. The Kernel stores applied history in \`data/database.sqlite\`; the definition travels with app sources and never ships in \`dist/\`. The Validation Gate checks its shape, order, bounds and SQL subset. It cannot prove a transition against a real database.
 

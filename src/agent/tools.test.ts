@@ -7,6 +7,7 @@ import { createCapsuleWorkspace } from "./capsule-env";
 import type { AgentTool, CapsuleFiles, CapsuleValidator, CapsuleWorkspace } from "./contracts";
 import { createCapsuleValidator } from "./gate";
 import { createCapsuleTools, formatValidation, readLiveDatabase, readReleaseFacts } from "./tools";
+import { refusal } from "../kernel/refusal";
 
 let sql: Promise<SqlJsStatic> | undefined;
 const loadSql = () => (sql ??= initSqlJs());
@@ -257,6 +258,26 @@ describe("validate_capsule", () => {
       hint: { fix: "capsule", remedy: "Make top-level initialization finish before the function handles requests." },
     }] });
     expect(textOf(result)).toContain("Make top-level initialization finish before the function handles requests.");
+  });
+
+  test("maps an editor-local function refusal by code", async () => {
+    const files = {
+      ...starterProject.files,
+      "functions.json": JSON.stringify({ version: 1, functions: { main: { entry: "functions/main.ts", mount: "/api", methods: ["GET"], access: "anonymous", actions: [] } } }),
+      "functions/main.ts": "export const handle = () => new Response('ok');",
+    };
+    const workspace = createCapsuleWorkspace(files);
+    const localRefusal = refusal("function.wasm-init", "Function initialization failed.");
+    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), {
+      releaseFacts: async () => ({ modules: { functions: { on: true }, auth: { on: true } } }),
+      functionPreparation: async () => { throw localRefusal; },
+    });
+    const result = await call(tools, "validate_capsule", {});
+    expect(result.details).toMatchObject({ ok: false, errors: [{
+      code: localRefusal.code,
+      message: localRefusal.message,
+      hint: localRefusal.hint,
+    }] });
   });
 
   test("keeps a disconnected function preparation pending", async () => {

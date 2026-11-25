@@ -54,9 +54,9 @@ describe("system prompt", () => {
       "Validation checks declarations, not server JavaScript behavior",
       "context.actions.call(name, input)",
       "Never put SQL in a function",
-      "no timers, crypto or fetch",
+      "no fetch",
       "If a declared Server Action with an http route can answer, use that instead",
-      "experimental function runner configured by the operator",
+      "StarlingMonkey is the default production runner",
     ]) {
       expect(prompt).toContain(fragment);
     }

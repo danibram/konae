@@ -5,7 +5,7 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -19,6 +19,7 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, OwnedSemaphorePermit, Se
 
 const INSTANCES: usize = 8;
 const ADMISSION: usize = 64;
+const DEPLOYMENT_ADMISSION: usize = 8;
 const SHUTDOWN: Duration = Duration::from_millis(10);
 
 #[derive(Clone)]
@@ -48,6 +49,7 @@ pub struct Runtime {
     idle: Duration,
     state: Mutex<State>,
     admission: Arc<Semaphore>,
+    deployment_admission: Mutex<HashMap<String, Weak<Semaphore>>>,
     active: Arc<Semaphore>,
     allocations: Arc<Semaphore>,
     app_slots: usize,
@@ -84,10 +86,16 @@ pub struct Lease {
     _reservation: Reservation,
     active: Option<OwnedSemaphorePermit>,
     active_limit: Arc<Semaphore>,
-    _admission: Option<OwnedSemaphorePermit>,
+    _admission: Option<Admission>,
     config: Config,
     progress: Arc<Mutex<RunProgress>>,
     protocol_failure: Arc<AtomicBool>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Admission {
+    _global: OwnedSemaphorePermit,
+    _deployment: OwnedSemaphorePermit,
 }
 
 impl Runtime {
@@ -139,6 +147,7 @@ impl Runtime {
                 "KONAE_FUNCTIONS_ADMISSION",
                 ADMISSION,
             ))),
+            deployment_admission: Mutex::new(HashMap::new()),
             active: Arc::new(Semaphore::new(env_capacity(
                 "KONAE_FUNCTIONS_INSTANCES",
                 INSTANCES,
@@ -196,10 +205,11 @@ impl Runtime {
         env_capacity_result("KONAE_FUNCTIONS_INSTANCES", INSTANCES)?;
         env_capacity_result("KONAE_FUNCTIONS_APP_SLOTS", 2)?;
         env_capacity_result("KONAE_FUNCTIONS_ADMISSION", ADMISSION)?;
+        env_capacity_result("KONAE_FUNCTIONS_DEPLOYMENT_ADMISSION", DEPLOYMENT_ADMISSION)?;
         kernel_environment::create()
     }
 
-    pub(crate) fn admit(&self, budget: &Budget) -> Result<OwnedSemaphorePermit, String> {
+    pub(crate) fn admit(&self, deployment: &str, budget: &Budget) -> Result<Admission, String> {
         if self.config.is_none() {
             return Err("function.runner-unavailable".into());
         }
@@ -207,22 +217,42 @@ impl Runtime {
         if self.protocol_failure.load(Ordering::SeqCst) {
             return Err("worker_protocol_mismatch".into());
         }
-        self.admission
+        let global = self.admission
             .clone()
             .try_acquire_owned()
-            .map_err(|_| "queue_full".into())
+            .map_err(|_| "queue_full".to_owned())?;
+        let per_deployment = {
+            let mut limits = self.deployment_admission.lock().unwrap();
+            limits.retain(|_, limit| limit.strong_count() > 0);
+            if let Some(limit) = limits.get(deployment).and_then(Weak::upgrade) {
+                limit
+            } else {
+                let limit = Arc::new(Semaphore::new(env_capacity(
+                    "KONAE_FUNCTIONS_DEPLOYMENT_ADMISSION",
+                    DEPLOYMENT_ADMISSION,
+                )));
+                limits.insert(deployment.to_owned(), Arc::downgrade(&limit));
+                limit
+            }
+        };
+        let deployment = match per_deployment.try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => return Err("queue_full".into()),
+        };
+        Ok(Admission { _global: global, _deployment: deployment })
     }
 
     #[cfg(test)]
     async fn lease(self: &Arc<Self>, key: String, budget: &Budget) -> Result<Lease, String> {
-        self.lease_admitted(key, budget, self.admit(budget)?).await
+        let deployment = key.split(':').next().unwrap_or(&key).to_owned();
+        self.lease_admitted(key, budget, self.admit(&deployment, budget)?).await
     }
 
     pub(crate) async fn lease_admitted(
         self: &Arc<Self>,
         key: String,
         budget: &Budget,
-        admission: OwnedSemaphorePermit,
+        admission: Admission,
     ) -> Result<Lease, String> {
         let config = self.config.clone().ok_or("function.runner-unavailable")?;
         check(budget)?;
@@ -421,7 +451,7 @@ impl Drop for Lease {
 }
 
 impl Lease {
-    pub fn take_admission(&mut self) -> Option<OwnedSemaphorePermit> {
+    pub(crate) fn take_admission(&mut self) -> Option<Admission> {
         self._admission.take()
     }
 
@@ -865,7 +895,7 @@ mod tests {
         )
         .unwrap();
         let first_budget = budget();
-        let admission = runtime.admit(&first_budget).unwrap();
+        let admission = runtime.admit("a", &first_budget).unwrap();
         let lease = runtime
             .lease_admitted("a:orders".into(), &first_budget, admission)
             .await
@@ -892,7 +922,7 @@ mod tests {
         assert!(lease.worker.is_none());
         drop(lease);
         assert_eq!(
-            runtime.admit(&budget()).unwrap_err(),
+            runtime.admit("a", &budget()).unwrap_err(),
             "worker_protocol_mismatch"
         );
         let output = std::process::Command::new("ps")
@@ -1010,7 +1040,7 @@ mod tests {
     async fn admission_is_bounded_and_released_with_its_permits() {
         let runtime = runtime(Duration::from_secs(60));
         let mut permits = (0..ADMISSION)
-            .map(|_| runtime.admit(&budget()).unwrap())
+            .map(|index| runtime.admit(&format!("app-{index}"), &budget()).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(
             runtime.lease("b".into(), &budget()).await.err().unwrap(),
@@ -1020,6 +1050,18 @@ mod tests {
         assert_eq!(runtime.admission.available_permits(), 1);
         drop(permits);
         assert_eq!(runtime.admission.available_permits(), ADMISSION);
+    }
+
+    #[tokio::test]
+    async fn one_deployment_cannot_consume_another_deployments_admission_slots() {
+        let runtime = runtime(Duration::from_secs(60));
+        let permits = (0..DEPLOYMENT_ADMISSION)
+            .map(|_| runtime.admit("busy", &budget()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(runtime.admit("busy", &budget()).err().unwrap(), "queue_full");
+        assert!(runtime.admit("available", &budget()).is_ok());
+        drop(permits);
+        assert!(runtime.admit("busy", &budget()).is_ok());
     }
 
     #[tokio::test]

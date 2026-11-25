@@ -20,6 +20,7 @@ import type {
 import type { ReleaseFacts } from "./release-check";
 import type { ValidationFacts } from "./contracts";
 import type { SourceFiles } from "../lib/source-files";
+import { refusalOf, type Refusal } from "../kernel/refusal";
 
 const references: Record<string, string> = { ...sdkReferences, "/reference/schema-transforms.md": schemaTransformsGuide };
 
@@ -282,9 +283,9 @@ export async function validateCapsuleCandidate(validator: CapsuleValidator, file
     try {
       validation = { ...validation, functionPreparation: await hooks.functionPreparation(files) };
     } catch (error) {
-      const refusal = error && typeof error === "object" && "refusal" in error
-        ? (error as { refusal?: { code?: string; message?: string; hint?: { fix: "capsule" | "owner" | "operator"; remedy: string } } }).refusal
-        : undefined;
+      const refusal = refusalOf(error) ?? (error && typeof error === "object" && "refusal" in error
+        ? (error as { refusal?: Refusal }).refusal
+        : null);
       if (refusal?.code && refusal.message && refusal.hint) {
         validation = { ...validation, ok: false, errors: [...validation.errors, { stage: "actions", code: refusal.code as any, message: refusal.message, hint: refusal.hint }] };
       } else validation = { ...validation, functionPreparation: { status: "pending" } };

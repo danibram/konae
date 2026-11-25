@@ -309,8 +309,17 @@ async fn prelookup_receipt(
     budget: &Budget,
     started: Instant,
 ) -> Result<ReceiptPrelookup, Response> {
-    let candidate = function_data::lookup_receipt(database, actor, function_name, key, budget)
-        .map_err(|error| failure(error.status, error.code, &error.message))?;
+    let database = database.clone();
+    let actor = actor.map(str::to_owned);
+    let function_name = function_name.to_owned();
+    let key = key.to_owned();
+    let lookup_budget = budget.clone();
+    let candidate = tokio::task::spawn_blocking(move || {
+        function_data::lookup_receipt(&database, actor.as_deref(), &function_name, &key, &lookup_budget)
+    })
+    .await
+    .map_err(|_| failure(500, "receipt_lookup_failed", "The function receipt lookup failed."))?
+    .map_err(|error| failure(error.status, error.code, &error.message))?;
     let Some(stored_fingerprint) = candidate else {
         return Ok(ReceiptPrelookup::Continue(body));
     };
@@ -689,7 +698,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
         }
         let admission = state
             .functions
-            .admit(&budget)
+            .admit(&deployment.id, &budget)
             .map_err(|code| executor_failure(&code))?;
         let actor_id = actor.map(|user| user.user_id);
         let headers = [header::ACCEPT, header::CONTENT_TYPE]
