@@ -23,6 +23,9 @@ import type { SourceFiles } from "../lib/source-files";
 import { refusalOf, type Refusal } from "../kernel/refusal";
 
 const references: Record<string, string> = { ...sdkReferences, "/reference/schema-transforms.md": schemaTransformsGuide };
+const jsonDeclarations = ["actions.json", "functions.json", "crons.json"];
+const gateFiles = ["schema.sql", ...jsonDeclarations];
+const gatePaths = gateFiles.map((file) => `/workspace/${file}`).join(", ");
 
 export type PreviewFailureReport = {
   kind: string;
@@ -103,8 +106,8 @@ function editTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
     description:
       "Replace one exact snippet in a Capsule file. This is the preferred way to change a file: keep edits small and targeted " +
       "instead of rewriting whole files. old_string is matched literally, including indentation and newlines, and must appear " +
-      "exactly once — add surrounding lines until it is unique. After editing /workspace/schema.sql or /workspace/actions.json " +
-      "you must call validate_capsule.",
+      "exactly once. Add surrounding lines until it is unique. " +
+      `Call validate_capsule after editing any of these files: ${gatePaths}.`,
     parameters: Type.Object({
       path: Type.String({ description: "Capsule file path, for example /workspace/styles.css" }),
       old_string: Type.String({ description: "Exact text to replace. Must occur exactly once in the file." }),
@@ -142,7 +145,8 @@ function editTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
 function editJsonTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
   return defineTool({
     name: "edit_json", label: "Edit JSON", executionMode: "sequential",
-    description: "Change JSON by exact JSON Pointer, such as /actions/clients.create/bindings/2/nullable. Use this for repeated bindings in actions.json. All changes succeed together or nothing is written. add requires a missing key; replace and remove require the current expected value. Call validate_capsule after changing actions.json.",
+    description: "Change JSON by exact JSON Pointer, such as /crons/digest/cron or /actions/clients.create/bindings/2/nullable. All changes succeed together or nothing is written. For add, the key must be missing. For replace and remove, pass the current value as expected. " +
+      `Call validate_capsule after changing any of these files: ${jsonDeclarations.join(", ")}.`,
     parameters: Type.Object({
       path: Type.String(),
       changes: Type.Array(Type.Object({
@@ -171,7 +175,7 @@ function writeTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
     description:
       "Replace an existing Capsule file or create a new one at any nested path inside /workspace. " +
       "Prefer edit unless you are genuinely rewriting the file, because a full rewrite is slow and easily drops unrelated details. " +
-      "After writing /workspace/schema.sql or /workspace/actions.json you must call validate_capsule.",
+      `Call validate_capsule after writing any of these files: ${gatePaths}.`,
     parameters: Type.Object({
       path: Type.String({ description: "Capsule file path, for example /workspace/index.html" }),
       content: Type.String({ description: "The complete new contents of the file." }),
@@ -260,10 +264,8 @@ function validateTool(
     label: "Validate capsule",
     executionMode: "sequential",
     description:
-      "Run the Validation Gate on the current workspace: schema.sql must execute — twice, because it is re-run on every database " +
-      "open — on a fresh SQLite database and on a copy of the live one, actions.json must be a valid server action program, and " +
-      "every action statement must prepare against that schema with its declared bindings. " +
-      "Call it after every change to schema.sql or actions.json, and again after fixing reported errors. " +
+      "Run the Validation Gate on the current workspace. It checks that schema.sql can run twice, that actions prepare against the schema, and that scheduled jobs name valid Functions. " +
+      `Call it after changing any of these files: ${gateFiles.join(", ")}. Run it again after fixing reported errors. ` +
       "The change cannot be applied to the Project until this passes.",
     parameters: Type.Object({}),
     async execute() {
@@ -355,7 +357,7 @@ function requireCapsuleFile(path: string): ProjectFile {
 }
 
 function validationReminder(file: ProjectFile): string {
-  return file === "schema.sql" || file === "actions.json" ? " Call validate_capsule now." : "";
+  return gateFiles.includes(file) ? " Call validate_capsule now." : "";
 }
 
 type Snippet = { matches: number; index: number; needle: string };

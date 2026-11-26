@@ -72,7 +72,7 @@ All three need `read`. `usage_summary` and `signals_read` also need the named pr
 | `login` | | a password sign-in or an answered recovery link |
 | `refused` | the action | a mutation's [guard](#guards) refused |
 | `notify` | `<action>: queued`, or `<action>: <reason>` | a mutation with [`notify`](#notices) changed a row |
-| `scheduled` | the action | the timer ran a [scheduled](#scheduled-work) mutation, whether it succeeded or failed |
+| `scheduled` | the action or `cron:<id>` | a [scheduled](#scheduled-work) mutation or cron job ran, whether it succeeded or failed |
 | `call` | the action | a call action queued a call |
 
 Nothing else the Kernel refuses is counted. The Kernel writes Usage off the request path, and the read tools wait up to five seconds for the queue to drain, so they include every call that finished before them.
@@ -181,7 +181,9 @@ A mutation that takes no input may declare when the Kernel's own timer runs it (
 | Notice | A run that changes a row sends its `notify`. `to: "owner"` sends to the app's contact email once per run. `to: "actor"` records `no-account` |
 | Usage | Each run counts under `scheduled`, and `usage_summary` returns the newest 500 runs with `action`, `at`, `outcome`, `changes` and, for a failed run, `error` |
 
-The editor preview runs no schedule; `konae dev` does. `KONAE_SCHEDULE_MIN_SECONDS` runs every schedule every few seconds for a test, and the Kernel refuses it unless `KONAE_BIND` is a loopback address. Nothing is pushed to a page, so a page polls a query with an `after` cursor.
+In `konae dev`, the timer is paused. Run a mutation with `konae test schedule <action>`. A loopback Kernel in live mode can set `KONAE_SCHEDULE_MIN_SECONDS` to shorten mutation schedules for tests. Pages can poll a query with an `after` cursor.
+
+For [cron jobs](../functions.md#run-a-function-on-a-cron-schedule), `usage.scheduled` sets `action` to `cron:<id>` and includes `at`, `outcome` and `error` when the Function fails. Row counts apply only to scheduled mutations.
 
 | Declaration | Message |
 | --- | --- |

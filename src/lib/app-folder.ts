@@ -249,7 +249,9 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Rules the Kernel checks
 
-A function exports \`handle(request, context)\` and returns a \`Response\`. Use \`await context.actions.call(name, input)\` for a query or mutation in its declared action allowlist. Functions start off; enable \`functions\` in \`konae.json\`. Authenticated functions need \`auth\`, and a nonempty action allowlist needs \`actions\`. The editor preview does not execute server functions. StarlingMonkey is the default production runner. Try \`konae dev\` or a published Deployment with its matching runner and preparer.
+A function exports \`handle(request, context)\` and returns a \`Response\`. Use \`await context.actions.call(name, input)\` for a query or mutation in its declared action allowlist. For HTTP Functions in an app without cron jobs, enable \`functions\` in \`konae.json\`. Authenticated functions need \`auth\`, and a nonempty action allowlist needs \`actions\`. The editor preview does not execute server functions. StarlingMonkey is the default production runner. Try \`konae dev\` or a published Deployment with its matching runner and preparer.
+
+Declare cron jobs in \`app/crons.json\`, with \`version: 1\` and a \`crons\` map from each job ID to \`{ cron, function }\`. Use a five-field UTC expression. The target in \`app/functions.json\` needs \`access: "scheduled"\`. Omit its \`mount\` and \`methods\`. The declaration enables Functions and any Actions the target needs for this release. Read the changed source, run \`konae build\`, and use \`konae test schedule cron:<id>\` on \`konae dev\` to verify the Function with the configured runner.
 
 An optional \`schema-transforms.json\` records ordered data changes between schema fingerprints. The Kernel stores applied history in \`data/database.sqlite\`; the definition travels with app sources and never ships in \`dist/\`. The Validation Gate checks its shape, order, bounds and SQL subset. It cannot prove a transition against a real database.
 
@@ -325,12 +327,13 @@ const paths = await walk('');
 const sources = await Promise.all(paths.map(async (file) => [file, await readFile(path.join(app, file), 'utf8').catch(() => '')]));
 const actionsSource = await readFile(path.join(app, 'actions.json'), 'utf8').catch(() => '');
 const schemaSource = await readFile(path.join(app, 'schema.sql'), 'utf8').catch(() => '');
-const sdk = sdkRequired(settings.modules, Object.fromEntries(sources), settings.visibility);
-const functionSource = Object.fromEntries(sources)['functions.json'];
-const functions = functionSource === undefined ? undefined : parseFunctions(functionSource);
-const functionContext = { files: paths, modules: settings.modules, actions: JSON.parse(actionsSource || '{"actions":{}}').actions ?? {} };
+const functionSources = Object.fromEntries(sources);
+const functions = parseFunctionSources(functionSources['functions.json'], functionSources['crons.json']);
+const actions = JSON.parse(actionsSource || '{"actions":{}}').actions ?? {};
+const functionContext = { files: paths, modules: withCronModules(functions, settings.modules, actions), actions };
+const sdk = sdkRequired(functionContext.modules, functionSources, settings.visibility);
 if (functions) validateFunctions(functions, functionContext);
-if (functions) validateFunctionSources(functions, Object.fromEntries(sources));
+if (functions) validateFunctionSources(functions, functionSources);
 if (paths.some((file) => (file.startsWith('src/') || file.startsWith('functions/')) && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,

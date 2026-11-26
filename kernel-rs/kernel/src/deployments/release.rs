@@ -249,6 +249,7 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
             if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("http")) && uses_http { modules.get_mut("http").expect("http is switchable")["on"] = json!(true); }
             if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("calls")) && uses_calls { modules.get_mut("calls").expect("calls is switchable")["on"] = json!(true); }
             modules::complete(&mut modules);
+            functions::enable_cron_modules(&mut modules, server.as_ref().map(|server| &server.manifest));
             modules
         },
         contact_email: input.contact_email.clone(),

@@ -3332,5 +3332,61 @@
    }
   },
   "error": null
- }
+ },
+{
+  "case": "a then naming a scheduled mutation",
+  "actions": {
+    "inbox.tell": {
+      "kind": "call",
+      "access": "anonymous",
+      "method": "POST",
+      "url": "https://inbox.example.org/hooks/events",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "title",
+          "type": "string",
+          "maxLength": 200
+        },
+        {
+          "source": "input",
+          "key": "taskId",
+          "type": "number"
+        }
+      ],
+      "body": {
+        "title": "title",
+        "id": "taskId"
+      },
+      "then": {
+        "action": "tasks.noted",
+        "inputs": {
+          "id": "/input/taskId",
+          "notice": "/body/error"
+        }
+      }
+    },
+    "tasks.noted": {
+      "kind": "mutation",
+      "access": "scheduled",
+      "statement": "UPDATE tasks SET notice = ?2 WHERE id = ?1",
+      "bindings": [
+        {
+          "source": "input",
+          "key": "id",
+          "type": "number"
+        },
+        {
+          "source": "input",
+          "key": "notice",
+          "type": "string",
+          "maxLength": 200,
+          "nullable": true
+        }
+      ]
+    }
+  },
+  "error": "Action inbox.tell names tasks.noted as its then, but that action runs only inside a scheduled Function.",
+  "code": "call.then-scheduled"
+}
 ]

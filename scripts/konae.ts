@@ -35,7 +35,7 @@ import { ACTION_TYPES_FILE, renderActionTypes, renderFunctionContextTypes } from
 import { actionsModuleBody } from "../src/sdk/functions";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule, bundleFunctions } from "../src/lib/local-builder.js";
-import { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
+import { parseFunctionSources, withCronModules, validateFunctions, validateServerArtifact, validateFunctionSources, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
 import { readTar } from "../src/lib/tar";
 import { readAppFolder } from "../src/lib/import-folder";
 import { buildProjectEntries } from "../src/lib/build-project";
@@ -582,9 +582,9 @@ export async function buildLocal(root: string, options: { development?: boolean;
   await writeEntries(root, buildProject);
   const authoredBuildFiles = new Set(buildProject.map((entry) => entry.path));
   const settings = await readSettings(root).catch(() => undefined);
-  const functionsSource = files["functions.json"];
-  const functions = functionsSource === undefined ? undefined : parseFunctions(functionsSource);
-  const functionsContext = { files: Object.keys(files), modules: settings?.modules, actions: JSON.parse(files["actions.json"] ?? '{"actions":{}}').actions ?? {} };
+  const functions = parseFunctionSources(files["functions.json"], files["crons.json"]);
+  const actions = JSON.parse(files["actions.json"] ?? '{"actions":{}}').actions ?? {};
+  const functionsContext = { files: Object.keys(files), modules: withCronModules(functions, settings?.modules, actions), actions };
   if (functions) {
     validateFunctionSources(functions, files);
     validateFunctions(functions, functionsContext);
@@ -597,7 +597,7 @@ export async function buildLocal(root: string, options: { development?: boolean;
     await rm(path.join(root, "server"), { recursive: true, force: true });
     if (serverArtifact) await writeEntries(root, await serverFolderEntries(serverArtifact));
   };
-  const sdkEnabled = sdkRequired(settings?.modules, files, settings?.visibility ?? "private");
+  const sdkEnabled = sdkRequired(functionsContext.modules, files, settings?.visibility ?? "private");
   await refreshActionTypes(root);
   const paths = await capsulePaths(root);
   if (paths.some((file) => (file.startsWith("src/") || file.startsWith("functions/")) && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
@@ -1672,7 +1672,7 @@ export async function main() {
     } else if (action === "scenario" && rest.length === 1) {
       const scenario = await resolveScenarioPath(root, path.resolve(root, rest[0]));
       result = await runScenario(kernel, scenario);
-    } else throw Error("Use konae test status, calls, reply <call-id> --stdin|--file <json>, schedule <action>, or scenario <file>.");
+    } else throw Error("Use konae test status, calls, reply <call-id> --stdin|--file <json>, schedule <action|cron:id>, or scenario <file>.");
     console.log(JSON.stringify(result, null, 2));
     if (action === "reply" && result && typeof result === "object" && (result as { accepted?: unknown }).accepted === false) process.exitCode = 1;
     return;

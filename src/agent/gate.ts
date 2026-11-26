@@ -1,4 +1,4 @@
-import { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources } from "../kernel/functions";
+import { parseFunctionSources, withCronModules, validateFunctions, validateServerArtifact, validateFunctionSources } from "../kernel/functions";
 import { servedPath } from "../lib/static-artifact.js";
 import type { Database, SqlJsStatic } from "sql.js";
 import { notifyColumnRefusal, notifyReturning, notifyReturningStatement, parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
@@ -62,14 +62,22 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       });
     }
     const functionsSource = files["functions.json"];
+    const cronsSource = files["crons.json"];
+    const actionsSource = files["actions.json"] ?? `{"version":1,"actions":{}}`;
+    let modules = facts.modules;
+    let checkedActions: ServerActionProgram | undefined;
     let hasFunctions = false;
-    if (functionsSource !== undefined || facts.serverArtifact !== undefined) {
+    if (functionsSource !== undefined || cronsSource !== undefined || facts.serverArtifact !== undefined) {
       try {
-        const manifest = functionsSource === undefined ? undefined : parseFunctions(functionsSource);
+        const manifest = parseFunctionSources(functionsSource, cronsSource);
         if (manifest) {
           validateFunctionSources(manifest, Object.fromEntries(Object.entries(files).filter((entry): entry is [string, string] => typeof entry[1] === "string")));
-          const actions = JSON.parse(files["actions.json"] ?? '{"actions":{}}');
-          validateFunctions(manifest, { files: Object.keys(files), modules: facts.modules, actions: actions?.actions ?? {}, staticPaths: facts.staticPaths ?? Object.keys(files).flatMap((path) => { const served = servedPath(path); return served ? [served] : []; }) });
+          const actions = JSON.parse(actionsSource)?.actions ?? {};
+          modules = withCronModules(manifest, modules, actions);
+          if (Object.values(actions).some((action) => typeof action === "object" && action !== null && "access" in action && action.access === "scheduled")) {
+            checkedActions = parseServerActionSource(actionsSource);
+          }
+          validateFunctions(manifest, { files: Object.keys(files), modules, actions, staticPaths: facts.staticPaths ?? Object.keys(files).flatMap((path) => { const served = servedPath(path); return served ? [served] : []; }) });
           hasFunctions = Object.keys(manifest.functions).length > 0;
         }
         if (facts.serverArtifact !== undefined) validateServerArtifact(manifest, facts.serverArtifact);
@@ -80,25 +88,24 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     }
     const SQL = await this.loadSql();
     const schemaSource = files["schema.sql"] ?? "";
-    const actionsSource = files["actions.json"] ?? `{"version":1,"actions":{}}`;
     const filesCall = sourcesUseFiles(Object.values(files));
     const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files) };
     for (const module of moduleCheckOrder) {
       if (!used[module as keyof typeof used]) continue;
-      const state = facts.modules?.[module];
+      const state = modules?.[module];
       const off = state ? checkModuleChange({ rule: "on", module, state }) : null;
       if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
-    const actionsState = facts.modules?.actions;
+    const actionsState = modules?.actions;
     for (const module of ["http", "calls"] as const) {
-      const state = facts.modules?.[module];
+      const state = modules?.[module];
       if (state?.on === true) {
         const required = checkModuleChange({ rule: "requires", module, required: "actions", requiredState: actionsState });
         if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
       }
     }
-    const filesState = facts.modules?.files;
-    const authState = facts.modules?.auth;
+    const filesState = modules?.files;
+    const authState = modules?.auth;
     if (facts.visibility === "private" && authState && authState.on !== true) {
       const required = checkModuleChange({ rule: "private-auth", module: "auth", requiredState: authState });
       if (required) return failure({ stage: "actions", message: required.message, code: required.code as "module.requires", hint: hintOf(required.code as "module.requires") }, ["sources"]);
@@ -173,7 +180,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
 
       let program: ServerActionProgram | undefined;
       try {
-        program = parseServerActionSource(actionsSource);
+        program = checkedActions ?? parseServerActionSource(actionsSource);
       } catch (error) {
         const refused = refusalOf(error);
         errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) });
@@ -220,7 +227,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       clone?.close();
     }
 
-    const sdk = sdkRequired(facts.modules, files, facts.visibility);
+    const sdk = sdkRequired(modules, files, facts.visibility);
     const neverRuns = entryNeverRunsMessage(Object.keys(files), files, sdk);
     if (neverRuns) errors.push({ stage: "actions", message: neverRuns });
     warnings.push(...rootRelativeWarnings(files).map(({ message }) => ({ stage: "actions" as const, message })));

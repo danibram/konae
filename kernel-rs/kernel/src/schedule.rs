@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use crate::functions::cron;
 
 /// The shortest period a declaration may name, in minutes.
 pub const MIN_MINUTES: u64 = 5;
@@ -153,12 +154,25 @@ pub fn spawn(state: AppState, clock: Clock) {
         println!("Scheduled work runs every {seconds} seconds ({TEST_CLOCK}).");
     }
     let running: Arc<Mutex<HashSet<String>>> = Arc::default();
+    let running_crons: Arc<Mutex<HashSet<String>>> = Arc::default();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(clock.tick());
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut test_ticker = clock.test_seconds.map(|_| {
+            let mut ticker = tokio::time::interval(clock.tick());
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker
+        });
+        let mut last_cron_slot = None;
         loop {
-            ticker.tick().await;
-            tick(&state, clock, &running).await;
+            if let Some(ticker) = &mut test_ticker { ticker.tick().await; }
+            let at = super::now_ms();
+            let slot = cron::slot(at);
+            let check_crons = last_cron_slot.is_none_or(|last| last < slot);
+            if check_crons { last_cron_slot = Some(slot); }
+            tick(&state, clock, &running, &running_crons, check_crons.then_some(at)).await;
+            if test_ticker.is_none() {
+                let delay = cron::MINUTE_MS - super::now_ms() % cron::MINUTE_MS;
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
         }
     });
 }
@@ -169,6 +183,11 @@ pub fn paused_schedules(deployment: &super::Deployment) -> Vec<Value> {
     let mut schedules = program.actions.into_iter().filter_map(|(name, action)| {
         declaration(&name, &action).ok().flatten().map(|schedule| json!({"action": name, "schedule": schedule.key(), "paused": true}))
     }).collect::<Vec<_>>();
+    if let Some(crons) = cron::declarations(deployment) {
+        schedules.extend(crons.iter().map(|(id, cron)| {
+            json!({"action": crate::functions::cron::run_name(id), "cron": id, "function": cron.function, "schedule": cron.cron.text(), "paused": true})
+        }));
+    }
     schedules.sort_by(|left, right| left["action"].as_str().cmp(&right["action"].as_str()));
     schedules
 }
@@ -176,6 +195,9 @@ pub fn paused_schedules(deployment: &super::Deployment) -> Vec<Value> {
 /// Runs one declared schedule on demand from an operator command.
 pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name: &str) -> anyhow::Result<Value> {
     anyhow::ensure!(state.execution_mode.is_test(), "Manual schedule runs are available only in local test mode.");
+    if let Some(id) = name.strip_prefix("cron:") {
+        return cron::run(state, deployment, id, super::now_ms(), true).await;
+    }
     let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
     let action = program.actions.get(name).ok_or_else(|| anyhow::anyhow!("Action {name} does not exist."))?;
     let schedule = declaration(name, action)?.ok_or_else(|| anyhow::anyhow!("Action {name} does not declare a schedule."))?;
@@ -215,9 +237,19 @@ pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name
     }
 }
 
-async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String>>>) {
+async fn tick(
+    state: &AppState,
+    clock: Clock,
+    running: &Arc<Mutex<HashSet<String>>>,
+    running_crons: &Arc<Mutex<HashSet<String>>>,
+    cron_at: Option<u64>,
+) {
+    let cron_time = cron_at.and_then(|at| time::OffsetDateTime::from_unix_timestamp((at / 1_000) as i64).ok().map(|time| (at, time)));
     let deployments = state.deployments.read().await.values().cloned().collect::<Vec<_>>();
     for deployment in deployments {
+        if let Some((at, time)) = cron_time {
+            cron::tick(state, &deployment, running_crons, at, time);
+        }
         let Ok(program) = serde_json::from_str::<ActionProgram>(&deployment.actions) else { continue };
         let mut work = program
             .actions

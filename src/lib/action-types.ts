@@ -73,7 +73,7 @@ function inputArgumentType(inputs: ContractInput[]): string {
 }
 
 function callableFromPage(action: ContractAction): boolean {
-  return !action.schedule && !action.thenOf && action.http?.onlyDoor !== "always";
+  return action.access !== "scheduled" && !action.schedule && !action.thenOf && action.http?.onlyDoor !== "always";
 }
 
 function inputType(inputs: ContractInput[]): string {

@@ -357,7 +357,7 @@
       "index.html"
     ],
     "code": "function.access-invalid",
-    "message": "Function orders access must be authenticated or anonymous."
+    "message": "Function orders access must be authenticated, anonymous or scheduled."
   },
   {
     "name": "actions ['read', 'read']",
@@ -655,5 +655,76 @@
     "staticPaths": [],
     "code": "function.count-over",
     "message": "functions.json may declare at most 32 functions."
-  }
+  },
+{
+  "files": [
+    "functions/digest.ts"
+  ],
+  "modules": {
+    "functions": {
+      "on": true
+    },
+    "actions": {
+      "on": true
+    }
+  },
+  "staticPaths": [],
+  "name": "a scheduled Function declares a public mount",
+  "source": "{\"version\": 1, \"functions\": {\"digest\": {\"entry\": \"functions/digest.ts\", \"access\": \"scheduled\", \"mount\": \"/public\"}}}",
+  "actions": {},
+  "code": "function.scheduled-route",
+  "message": "Function digest with access scheduled uses mount / and method POST internally. Omit mount and methods."
+},
+{
+  "files": [
+    "functions/digest.ts"
+  ],
+  "modules": {
+    "functions": {
+      "on": true
+    },
+    "actions": {
+      "on": true
+    }
+  },
+  "staticPaths": [],
+  "name": "a scheduled Function names an authenticated action",
+  "source": "{\"version\": 1, \"functions\": {\"digest\": {\"entry\": \"functions/digest.ts\", \"access\": \"scheduled\", \"actions\": [\"sessions.expire\"]}}}",
+  "actions": {
+    "sessions.expire": {
+      "kind": "mutation",
+      "access": "authenticated",
+      "statement": "DELETE FROM sessions",
+      "bindings": []
+    }
+  },
+  "code": "function.scheduled-action",
+  "message": "Scheduled Function digest can only call anonymous or scheduled actions. Check sessions.expire."
+},
+{
+  "files": [
+    "functions/digest.ts"
+  ],
+  "modules": {
+    "functions": {
+      "on": true
+    },
+    "actions": {
+      "on": true
+    }
+  },
+  "staticPaths": [],
+  "name": "an HTTP Function names a scheduled action",
+  "source": "{\"version\": 1, \"functions\": {\"digest\": {\"entry\": \"functions/digest.ts\", \"mount\": \"/digest\", \"methods\": [\"POST\"], \"access\": \"anonymous\", \"actions\": [\"sessions.expire\"]}}}",
+  "actions": {
+    "sessions.expire": {
+      "kind": "mutation",
+      "access": "scheduled",
+      "statement": "DELETE FROM sessions",
+      "bindings": []
+    }
+  },
+  "code": "function.scheduled-action",
+  "message": "Function digest cannot call action sessions.expire. That action runs only inside a scheduled Function."
+}
 ]

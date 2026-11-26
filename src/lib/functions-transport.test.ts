@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseFunctions, serverFolderEntries, verifyServerFolder, type ServerArtifact } from "../kernel/functions";
+import { parseFunctions, parseFunctionSources, serverFolderEntries, verifyServerFolder, type ServerArtifact } from "../kernel/functions";
 import { createTar, readTar } from "./tar";
 import { readAppFolder, sourcesPayload, dataManifest } from "./import-folder";
 import { createProjectExport } from "./export-project";
@@ -48,7 +48,7 @@ test("published export keeps server bytes when edited source no longer declares 
   expect(sourcesPayload(imported, project, "public").serverArtifact).toEqual(serverArtifact);
 });
 
-test("release upload puts serverArtifact beside artifact and preserves portable source files", async () => {
+test("release upload checks cron declarations and preserves them beside the portable bundles", async () => {
   const uploaded: unknown[] = [];
   class ReleaseClient extends McpClient {
     override async call<T>(name: string): Promise<T> {
@@ -60,8 +60,16 @@ test("release upload puts serverArtifact beside artifact and preserves portable 
     }
     override async cancel() { return { cancelled: true }; }
   }
-  await publishProject(new ReleaseClient("http://unused.invalid"), project, () => ({ project: { ...project, files: { ...project.files, "functions.json": JSON.stringify(manifest) } }, visibility: "public", artifact: { files: { "index.html": "<html>Public</html>" }, serverArtifact } }), async () => true);
-  expect(uploaded[0]).toMatchObject({ files: { ...project.files, "functions.json": JSON.stringify(manifest) } });
-  expect(uploaded[1]).toMatchObject({ serverArtifact, artifact: { files: { "index.html": "<html>Public</html>" } } });
+  const functions = JSON.stringify({ version: 1, functions: { orders: { entry: "functions/orders.ts", access: "scheduled" } } });
+  const crons = JSON.stringify({ version: 1, crons: { orders: { cron: "0 8 * * *", function: "orders" } } });
+  const cronManifest = parseFunctionSources(functions, crons);
+  if (!cronManifest) throw new Error("Missing cron manifest");
+  const built = { ...serverArtifact, manifest: cronManifest };
+  const files = { ...project.files, "functions.json": functions, "crons.json": crons };
+  await publishProject(new ReleaseClient("http://unused.invalid"), project, () => ({
+    project: { ...project, files }, visibility: "public", artifact: { files: { "index.html": "<html>Public</html>" }, serverArtifact: built },
+  }), async () => true);
+  expect(uploaded[0]).toMatchObject({ files });
+  expect(uploaded[1]).toMatchObject({ serverArtifact: built, artifact: { files: { "index.html": "<html>Public</html>" } } });
   expect(JSON.stringify(uploaded[1]).match(/"serverArtifact"/g)?.length).toBe(1);
 });

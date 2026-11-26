@@ -26,7 +26,7 @@ export type Call = {
   status: number | null; error: string | null; answer: string | null; createdAt: number; updatedAt: number; nextAttemptAt: number | null;
   then: { action: string; state: string | null; message: string | null } | null;
 };
-export type ScheduledRun = { action: string; at: number; outcome: string; changes: number; error?: string };
+export type ScheduledRun = UsageSummary["usage"]["scheduled"][number];
 export type Signal = { name: string; at: number; properties: Record<string, unknown> };
 export type Sources = { summary: UsageSummary; calls: Call[]; notices: Notice[]; signals: Signal[] };
 
@@ -134,7 +134,12 @@ function thenWords(then: NonNullable<Call["then"]>) {
 }
 
 export function scheduledOutcome(run: ScheduledRun): Outcome {
-  if (run.outcome === "ok") return run.changes > 0
+  if (run.action.startsWith("cron:")) {
+    return run.outcome === "ok"
+      ? { tone: "success", words: "Function completed." }
+      : { tone: "danger", words: run.error ?? "The Function failed." };
+  }
+  if (run.outcome === "ok") return run.changes
     ? { tone: "success", words: `Ran and changed ${run.changes} ${run.changes === 1 ? "row" : "rows"}.` }
     : { tone: "neutral", words: "Ran and changed nothing." };
   return {
@@ -177,7 +182,8 @@ export function whatHappened({ summary, calls, notices, signals }: Sources, now 
   }
   const scheduled = (summary.usage as { scheduled?: ScheduledRun[] }).scheduled ?? [];
   for (const [index, run] of scheduled.entries()) {
-    entries.push({ id: `scheduled:${run.at}:${run.action}:${index}`, kind: "scheduled", at: run.at, title: `Scheduled run of ${run.action}`, outcome: scheduledOutcome(run) });
+    const title = run.action.startsWith("cron:") ? `Cron run of ${run.action.slice(5)}` : `Scheduled run of ${run.action}`;
+    entries.push({ id: `scheduled:${run.at}:${run.action}:${index}`, kind: "scheduled", at: run.at, title, outcome: scheduledOutcome(run) });
   }
   const routes = new Map(summary.actions.filter((action) => action.http).map((action) => [action.name, action.http!]));
   for (const metric of summary.metrics) {

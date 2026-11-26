@@ -344,6 +344,12 @@ pub fn read(state: &crate::AppState, deployment: &crate::Deployment) -> Value {
             collect_pages(&root, &root, &mut excluded);
             module["current"] = json!({"canonical":{"url":address.url,"reason":address.reason},"excluded":excluded});
         }
+        if name == "functions" {
+            let manifest = deployment.server.as_ref().map(|server| &server.manifest);
+            let functions = manifest.into_iter().flat_map(|manifest| manifest.functions.keys()).collect::<Vec<_>>();
+            let crons = manifest.into_iter().flat_map(|manifest| manifest.crons.keys()).collect::<Vec<_>>();
+            module["current"] = json!({"functions": functions, "crons": crons});
+        }
         (name.clone(), module)
     }).collect::<Map<String, Value>>();
     json!({"projectId":deployment.id,"modules":modules})

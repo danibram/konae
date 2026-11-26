@@ -26,7 +26,7 @@ export type FunctionActionLatencySummary = {
 };
 export type UsageSummary = {
   deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
-  usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[]; scheduled: { action: string; at: number; outcome: string; changes: number; error?: string }[] };
+  usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[]; scheduled: { action: string; at: number; outcome: string; changes?: number; error?: string }[] };
   metrics: Metric[]; actions: PublishedAction[];
   accounts: UsageAccounts;
   storage: UsageStorage;

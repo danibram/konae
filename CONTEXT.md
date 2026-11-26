@@ -120,7 +120,9 @@ _Avoid_: owner email, admin address
 
 **Schedule**:
 A mutation's `"schedule"`, `{ "every": "15m" }` or `{ "daily": "02:00" }` in UTC, that only the Kernel's timer runs. The mutation takes no input, and a page polls a query to see what it did (ADR-0011).
-_Avoid_: cron, job, worker, background task
+
+**Cron job**:
+A named entry in `crons.json` that the Kernel runs at matching UTC minutes. It calls a Function declared with scheduled access. The Server Artifact carries the active declaration.
 
 **Signal**:
 A named occurrence a Server Action declares, with properties from its input bindings or `actor`, recorded next to Usage when the action succeeds. Only the owner reads Signals (ADR-0010).

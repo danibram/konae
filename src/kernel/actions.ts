@@ -1,4 +1,4 @@
-import type { RuntimeActionDeclaration } from "../deployments/manifest";
+import type { RuntimeActionAccess, RuntimeActionDeclaration } from "../deployments/manifest";
 import { unboundedQueryReason } from "../lib/query-bound";
 import { assertRuntimeSql, validateRuntimeParams } from "../runtime/security";
 import { parseRouteFields, parseRouteSignature, type RouteSignature } from "./route-declaration";
@@ -145,14 +145,19 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (candidate.access === "granted") {
     throw refusal("action.access-unsupported", `Action ${name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated".`);
   }
-  const access = candidate.access === "anonymous" || candidate.access === "authenticated" ? candidate.access : null;
-  if (!access) throw refusal("action.access-invalid", `Action ${name} has an invalid access. Use "anonymous" or "authenticated".`);
+  const access = candidate.access;
+  if (access !== "anonymous" && access !== "authenticated" && access !== "scheduled") throw refusal("action.access-invalid", `Action ${name} has an invalid access. Use "anonymous", "authenticated" or "scheduled".`);
   const kind = candidate.kind === "query" || candidate.kind === "mutation" || candidate.kind === "signal" || candidate.kind === "call" ? candidate.kind : null;
   if (!kind) throw refusal("action.kind-invalid", `Action ${name} has an invalid kind. Use "query", "mutation", "signal" or "call".`);
   if (candidate.page !== undefined && kind !== "query") throw refusal("page.query", `Action ${name} declares a page path, so it must be an anonymous query.`);
   if (!Array.isArray(candidate.bindings)) throw refusal("action.bindings-missing", `Action ${name} requires a bindings array.`);
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
   if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw refusal("action.invalid", `Invalid server action: ${name}`);
+  if (access === "scheduled" && (kind !== "query" && kind !== "mutation"
+    || ["http", "page", "notify", "signal", "schedule", "subscribe"].some((key) => candidate[key] != null)
+    || bindings.some((binding) => binding.source === "actor"))) {
+    throw refusal("action.scheduled-shape", `Action ${name} with access scheduled must be a query or mutation without an actor binding, route or external effect.`);
+  }
   const statementBytes = typeof candidate.statement === "string" ? new TextEncoder().encode(candidate.statement).length : 0;
   if (statementBytes > MAX_STATEMENT_BYTES || bindings.length > MAX_BINDINGS) throw refusal("action.limits-exceeded", `Action ${name} exceeds statement or binding limits.`);
   if (kind === "call") return { name, kind, access, statement: "", bindings, call: parseCall(name, bindings, candidate) };
@@ -471,7 +476,7 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
 const HTTP_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
 const RESERVED_SEGMENTS = new Set(["_konae", "oauth", ".well-known", "mcp"]);
 
-function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", access: "anonymous" | "authenticated", value: unknown, bindings: ActionBinding[]): HttpBinding {
+function parseHttpBinding(name: string, kind: "query" | "mutation" | "signal", access: RuntimeActionAccess, value: unknown, bindings: ActionBinding[]): HttpBinding {
   if (kind === "signal") {
     throw refusal("signal.route", `Action ${name} is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.`);
   }

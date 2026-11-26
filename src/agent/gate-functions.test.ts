@@ -20,6 +20,41 @@ test("Gate reports server preview absence without executing top-level source", a
   expect((await gate.validate(files)).errors[0].code).toBe("module.off");
 });
 
+test("Gate refuses an invalid cron and an action that would expose the same write over HTTP", async () => {
+  const action = { kind: "mutation", access: "scheduled", statement: "DELETE FROM sessions", bindings: [] };
+  const actions = (definition: typeof action & { http?: { method: string; path: string } }) =>
+    JSON.stringify({ version: 1, actions: { "sessions.expire": definition } });
+  const files = {
+    "functions.json": JSON.stringify({ version: 1, functions: { cleanup: { entry: "functions/cleanup.ts", access: "scheduled", actions: ["sessions.expire"] } } }),
+    "functions/cleanup.ts": 'export const handle = () => new Response(null, { status: 204 });',
+    "actions.json": actions(action),
+  };
+  const facts = { modules: { functions: { on: true }, actions: { on: true } } };
+  const route = await gate.validate({ ...files, "actions.json": actions({ ...action, http: { method: "POST", path: "/expire" } }) }, { state: "absent" }, facts);
+  expect(route.errors[0]).toMatchObject({ code: "action.scheduled-shape" });
+  const crons = { version: 1, crons: { cleanup: { cron: "0 24 * * *", function: "cleanup" } } };
+  const timing = await gate.validate({ ...files, "crons.json": JSON.stringify(crons) }, { state: "absent" }, facts);
+  expect(timing.errors[0]).toMatchObject({ code: "cron.expression-invalid" });
+});
+
+test("a first release with a cron can infer Actions for an HTTP Function when the setting is omitted", async () => {
+  const files = {
+    "index.html": "<main>Cron</main>",
+    "functions.json": JSON.stringify({ version: 1, functions: {
+      cleanup: { entry: "functions/cleanup.js", access: "scheduled" },
+      items: { entry: "functions/items.js", access: "anonymous", methods: ["GET"], mount: "/api/items", actions: ["items.list"] },
+    } }),
+    "functions/cleanup.js": "export function handle() {}",
+    "functions/items.js": "export function handle() {}",
+    "crons.json": JSON.stringify({ version: 1, crons: { cleanup: { cron: "0 8 * * *", function: "cleanup" } } }),
+    "schema.sql": "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);",
+    "actions.json": JSON.stringify({ version: 1, actions: { "items.list": { kind: "query", access: "anonymous", statement: "SELECT id FROM items LIMIT 10", bindings: [] } } }),
+  };
+  expect((await gate.validate(files, { state: "absent" }, { modules: {} })).ok).toBe(true);
+  const disabled = await gate.validate(files, { state: "absent" }, { modules: { actions: { on: false } } });
+  expect(disabled.errors[0]).toMatchObject({ code: "module.requires" });
+});
+
 test("Gate reserves function receipts from schema and actions", async () => {
   const result = await gate.validate({ "schema.sql": "CREATE TABLE IF NOT EXISTS __konae_function_receipts(id INTEGER);" });
   expect(result.errors[0]).toMatchObject({ code: "schema.statement-refused", message: "schema.sql cannot create the reserved name __konae_function_receipts." });

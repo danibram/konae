@@ -325,6 +325,40 @@ describe("validate_capsule", () => {
     expect((second.details as { ok: boolean }).ok).toBe(true);
     expect(workspace.changedFiles()).toEqual(["actions.json"]);
   });
+
+  test("creates, edits, reads back and validates a cron through the editor tools", async () => {
+    const workspace = createCapsuleWorkspace({ "index.html": "<main>Cron</main>" });
+    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), {
+      releaseFacts: async () => ({ modules: { functions: { on: false }, actions: { on: false } } }),
+    });
+    const reference = await call(tools, "read", { path: "/reference/sdk/functions.md" });
+    expect(textOf(reference)).toContain("Declared with \"crons\" in crons.json");
+    await call(tools, "write", { path: "/workspace/functions/cleanup.js", content: "export function handle() { return new Response(null, { status: 204 }); }" });
+    await call(tools, "write", { path: "/workspace/functions.json", content: JSON.stringify({
+      version: 1, functions: { cleanup: { entry: "functions/cleanup.js", access: "scheduled", actions: ["sessions.expire"] } },
+    }) });
+    await call(tools, "write", { path: "/workspace/schema.sql", content: "CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY);" });
+    await call(tools, "write", { path: "/workspace/actions.json", content: JSON.stringify({
+      version: 1, actions: { "sessions.expire": { kind: "mutation", access: "scheduled", statement: "DELETE FROM sessions", bindings: [] } },
+    }) });
+
+    const path = "/workspace/crons.json";
+    const draft = { version: 1, crons: { cleanup: { cron: "0 24 * * *", function: "cleanup" } } };
+    const written = await call(tools, "write", { path, content: JSON.stringify(draft) });
+    expect(textOf(written)).toContain("Call validate_capsule now.");
+    const refused = await call(tools, "validate_capsule", {});
+    expect(refused.details).toMatchObject({ ok: false, errors: [{ code: "cron.expression-invalid" }] });
+
+    const cron = "0 8 * * 1-5";
+    const edited = await call(tools, "edit_json", { path, changes: [
+      { op: "replace", pointer: "/crons/cleanup/cron", expected: draft.crons.cleanup.cron, value: cron },
+    ] });
+    expect(textOf(edited)).toContain("Call validate_capsule now.");
+    const read = await call(tools, "read", { path });
+    expect(JSON.parse(textOf(read))).toEqual({ version: 1, crons: { cleanup: { cron, function: "cleanup" } } });
+    const accepted = await call(tools, "validate_capsule", {});
+    expect(accepted.details).toMatchObject({ ok: true });
+  });
 });
 
 describe("formatValidation", () => {

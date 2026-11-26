@@ -107,7 +107,7 @@ export type ContractLimits = {
 export type ContractAction = {
   name: string;
   kind: "query" | "mutation" | "signal" | "call";
-  access: "anonymous" | "authenticated";
+  access: "anonymous" | "authenticated" | "scheduled";
   actorBound: boolean;
   inputs: ContractInput[];
   output: ContractOutput;
@@ -281,6 +281,13 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
   const http = action.http ? contractHttp(action.http, action.kind) : undefined;
   const page = action.page;
   const timerOnly = Boolean(action.schedule && !action.http);
+  const onlyDoor = callOf
+    ? fromSdk("Action <name> runs only after the call <key> answers.", "runtime", { name: action.name, key: callOf })
+    : timerOnly
+      ? fromSdk("Action <name> runs only on its schedule.", "runtime", { name: action.name })
+      : access === "scheduled"
+        ? fromSdk("Action <name> runs only inside a scheduled Function.", "runtime", { name: action.name })
+        : undefined;
   return {
     name: action.name,
     kind: action.kind,
@@ -295,20 +302,17 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
     ...(action.call ? { call: contractCall(action.call) } : {}),
     ...(page ? { page: { ...page } } : {}),
     ...(callOf ? { thenOf: callOf } : {}),
-    runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" || callOf || timerOnly ? [] : runtimeCallers(access, Boolean(http)) },
+    runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" || onlyDoor ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
-    errors: callOf
-      ? [fromSdk("Action <name> runs only after the call <key> answers.", "runtime", { name: action.name, key: callOf })]
-      : timerOnly
-        ? [fromSdk("Action <name> runs only on its schedule.", "runtime", { name: action.name })]
-        : actionErrors(action, inputs, actorBound),
+    errors: onlyDoor ? [onlyDoor] : actionErrors(action, inputs, actorBound),
     limits: actionLimits(action),
     statement: action.statement,
     bindings,
   };
 }
 
-function runtimeCallers(access: "anonymous" | "authenticated", routed: boolean): ContractCaller[] {
+function runtimeCallers(access: ContractAction["access"], routed: boolean): ContractCaller[] {
+  if (access === "scheduled") return [];
   const session = "the app session, as a cookie from the app's own origin or Authorization: Bearer <session token>";
   const person: ContractCaller = { kind: "person", proof: routed ? `${session}; a public Deployment only, since on a private one the action answers only on its route` : session, actor: "user id" };
   return access === "anonymous"

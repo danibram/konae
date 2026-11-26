@@ -30,7 +30,8 @@ After any write through MCP or the editor, observe the effect through the same d
 | Visitor or app user reads or writes a row | Named Server Action with access and actor bindings | Owner `database_execute` in the app UI |
 | Mutation matched no row | `guard` on that mutation | A second check statement |
 | Email when a row changes | `notify` on that mutation | Browser mail or a call action for mail |
-| Work when nobody is looking | `schedule` on a no-input mutation | External cron unless asked |
+| Run one SQL mutation on an interval or at a UTC time | `schedule` on a no-input mutation | External cron |
+| Run scheduled JavaScript or use a cron expression | `crons.json` and a Function with scheduled access | External cron |
 | Owner-facing occurrence | `signal` on a mutation, or `kind: signal` | A side table only the agent reads |
 | Another service calls this app | Turn on `http` with `module_set`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
 | Code between an HTTP request and the rows | A server function in `functions.json`, with its actions allowlist | A Server Action with string-built SQL, or a call action |
@@ -51,6 +52,8 @@ Prefer a declaration inside the Capsule over a new platform resource. Topic `pie
 
 ## First run
 
+For cron declarations, permissions and local runs, read [Run a function on a cron schedule](docs/functions.md#run-a-function-on-a-cron-schedule).
+
 Keep this path short. If it grows, fix the path before adding docs.
 
 1. App that runs: editor apply through the Gate, or `konae init` + `dev`, which need no credential.
@@ -68,7 +71,7 @@ Keep this path short. If it grows, fix the path before adding docs.
 These are not bugs to paper over. Say them when they matter.
 
 - The editor preview applies no Content Security Policy. Inline handlers, other-origin fetches and WebAssembly can still run there; a published app and `konae dev` refuse them. Their `script-src` is `'self'` plus each inline script's hash, with no `'wasm-unsafe-eval'` or `'unsafe-eval'`, so a library that compiles WebAssembly or calls `eval` fails there.
-- The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or a published Deployment.
+- The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Use a published Deployment or the local test controls. In `konae dev`, run a scheduled mutation or cron job with `konae test schedule`.
 - The preview opens one `srcDoc` document in an iframe. It has no app URL or page history, so it cannot resolve declared page paths or populate `miniapp.page.params`. Try page paths on `konae dev` or a Deployment. It writes no `<head>` tags for row values. It uses the project's saved `files.fileAccess` option and does not read a published Deployment's module state, so an owner change may not reach the preview until its project state is refreshed.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number. `konae dev` applies the same 2 MiB per file, and `KONAE_FILE_MAX_BYTES` raises it there. Its quota for all files is 1 TiB unless `KONAE_FILES_QUOTA_BYTES` names another.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.

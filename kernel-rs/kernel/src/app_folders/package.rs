@@ -1219,6 +1219,17 @@ mod tests {
             json!(["notes.list", "notes.touch"]);
         payload["project"]["files"]["functions.json"] =
             json!(payload["serverArtifact"]["manifest"].to_string());
+        let cleanup = "export function handle() { return new Response(null, {status: 204}); }";
+        let cron_source = json!({"version":1,"crons":{"cleanup":{"cron":"0 8 * * 1-5","function":"cleanup"}}});
+        payload["project"]["files"]["crons.json"] = json!(cron_source.to_string());
+        payload["project"]["files"]["functions/cleanup.ts"] = json!(cleanup);
+        payload["serverArtifact"]["bundles"]["cleanup"] = json!(cleanup);
+        let scheduled = json!({"entry":"functions/cleanup.ts","access":"scheduled","mount":"/","methods":["POST"],"actions":[]});
+        payload["serverArtifact"]["manifest"]["functions"]["cleanup"] = scheduled.clone();
+        payload["serverArtifact"]["manifest"]["crons"] = cron_source["crons"].clone();
+        let mut function_source: Value = serde_json::from_str(payload["project"]["files"]["functions.json"].as_str().unwrap()).unwrap();
+        function_source["functions"]["cleanup"] = scheduled;
+        payload["project"]["files"]["functions.json"] = json!(function_source.to_string());
         let deployed = crate::functions::tests::publish(&a, &payload).await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1288,6 +1299,13 @@ mod tests {
             assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND, "{path}");
             assert!(!response.text().await.unwrap().contains("no evaluation"));
         }
+        let public_crons = client
+            .get(format!("http://{address}/crons.json"))
+            .header("host", &deployed.hostname)
+            .send()
+            .await
+            .unwrap();
+        assert!(!public_crons.text().await.unwrap().contains("0 8 * * 1-5"));
         let exported = export(&a, deployed.clone(), "owner:test", |_| {
             Ok(Revisions {
                 published: 1,
@@ -1319,6 +1337,7 @@ mod tests {
             names.push(name);
         }
         assert!(names.contains(&"server/orders.mjs".to_owned()));
+        assert!(names.contains(&"app/crons.json".to_owned()));
         assert!(
             !names
                 .iter()
@@ -1375,6 +1394,7 @@ mod tests {
         payload["serverArtifact"] = serde_json::to_value(incoming_artifact).unwrap();
         let imported = crate::functions::tests::publish(&b, &payload).await;
         assert_eq!(imported.server, deployed.server);
+        assert_eq!(crate::functions::cron::declarations(&imported).unwrap()["cleanup"].cron.text(), "0 8 * * 1-5");
         assert_eq!(imported.actions, deployed.actions);
         assert_eq!(imported.signup_policy, deployed.signup_policy);
         assert_eq!(imported.modules, deployed.modules);

@@ -259,7 +259,7 @@ pub fn has_accounts(deployment: &Deployment) -> bool {
 
 fn actions_need_accounts(actions: &str) -> bool {
     match serde_json::from_str::<ActionProgram>(actions) {
-        Ok(program) => program.actions.values().any(|action| action.access != "anonymous"),
+        Ok(program) => program.actions.values().any(|action| action.access == "authenticated"),
         Err(_) => true,
     }
 }
