@@ -1536,9 +1536,9 @@ pub fn spawn_worker(state: AppState) {
         }
         let mut timers = crate::execution::AppTimers::default();
         loop {
-            let app = match timers.next_deadline() {
+            let turn = match timers.next_deadline() {
                 Some(deadline) => tokio::select! {
-                    app = state.dispatcher.next(crate::execution::WorkResource::Calls) => app,
+                    turn = state.dispatcher.next_turn(crate::execution::WorkResource::Calls, crate::execution::WorkLimits::SERIAL) => turn,
                     _ = tokio::time::sleep_until(deadline.into()) => {
                         for due in timers.take_due(std::time::Instant::now()) {
                             state.dispatcher.wake(crate::execution::WorkResource::Calls, due).await;
@@ -1546,8 +1546,9 @@ pub fn spawn_worker(state: AppState) {
                         continue;
                     }
                 },
-                None => state.dispatcher.next(crate::execution::WorkResource::Calls).await,
+                None => state.dispatcher.next_turn(crate::execution::WorkResource::Calls, crate::execution::WorkLimits::SERIAL).await,
             };
+            let app = turn.app().to_owned();
             timers.cancel(&app);
             if !state.deployments.read().await.values().any(|deployment| deployment.id == app) {
                 timers.remove(&app);

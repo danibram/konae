@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Durable module work is signalled by app ID and claimed from that app's database.
@@ -12,26 +14,68 @@ pub enum WorkResource {
 
 #[derive(Default)]
 struct ReadyQueue {
-    apps: std::collections::VecDeque<String>,
-    queued: std::collections::HashSet<String>,
+    apps: VecDeque<String>,
+    queued: HashSet<String>,
+    active: HashMap<String, usize>,
+    active_total: usize,
 }
 
-/// Fair, coalescing wake-up queues shared by module handlers. Calls and notices
-/// have separate queues so either worker can keep its own turn order.
+/// Fair, coalescing wake-up queues and capacity for each registered work resource.
 pub struct Dispatcher {
-    queues: std::collections::HashMap<WorkResource, WorkQueue>,
+    queues: HashMap<WorkResource, Arc<WorkQueue>>,
 }
 
 #[derive(Default)]
 struct WorkQueue {
-    ready: tokio::sync::Mutex<ReadyQueue>,
+    ready: Mutex<ReadyQueue>,
     changed: tokio::sync::Notify,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct WorkLimits {
+    total: NonZeroUsize,
+    per_app: NonZeroUsize,
+}
+
+impl WorkLimits {
+    pub(crate) const SERIAL: Self = Self::new(NonZeroUsize::MIN, NonZeroUsize::MIN);
+
+    pub(crate) const fn new(total: NonZeroUsize, per_app: NonZeroUsize) -> Self {
+        Self { total, per_app }
+    }
+}
+
+/// A module holds its turn until it finishes processing or gives up the job.
+#[must_use]
+pub(crate) struct WorkTurn {
+    work: Arc<WorkQueue>,
+    app: String,
+}
+
+impl WorkTurn {
+    pub(crate) fn app(&self) -> &str {
+        &self.app
+    }
+}
+
+impl Drop for WorkTurn {
+    fn drop(&mut self) {
+        let mut queue = self.work.ready.lock().unwrap_or_else(|error| error.into_inner());
+        let active = queue.active.get_mut(&self.app).expect("the turn owns an active slot");
+        *active -= 1;
+        if *active == 0 {
+            queue.active.remove(&self.app);
+        }
+        queue.active_total -= 1;
+        drop(queue);
+        self.work.changed.notify_waiters();
+    }
 }
 
 impl Default for Dispatcher {
     fn default() -> Self {
         let queues = crate::modules::work_resources()
-            .map(|resource| (resource, WorkQueue::default()))
+            .map(|resource| (resource, Arc::default()))
             .collect();
         Self { queues }
     }
@@ -43,31 +87,44 @@ impl Dispatcher {
     /// Callers use IDs from a Deployment loaded or validated by the Kernel.
     pub(crate) async fn wake(&self, resource: WorkResource, app: impl Into<String>) {
         let work = &self.queues[&resource];
-        let mut queue = work.ready.lock().await;
         let app = app.into();
-        if queue.queued.contains(&app) {
+        let mut queue = work.ready.lock().unwrap_or_else(|error| error.into_inner());
+        if !queue.queued.insert(app.clone()) {
             return;
         }
-        queue.queued.insert(app.clone());
         queue.apps.push_back(app);
         drop(queue);
-        work.changed.notify_one();
+        work.changed.notify_waiters();
     }
 
-    /// Takes the next app and waits when that resource has no ready work.
-    pub(crate) async fn next(&self, resource: WorkResource) -> String {
+    /// Takes the first ready app with capacity. Every consumer of a resource uses the same limits.
+    pub(crate) async fn next_turn(&self, resource: WorkResource, limits: WorkLimits) -> WorkTurn {
         let work = &self.queues[&resource];
         loop {
             let notified = work.changed.notified();
             {
-                let mut queue = work.ready.lock().await;
-                if let Some(app) = queue.apps.pop_front() {
+                let mut queue = work.ready.lock().unwrap_or_else(|error| error.into_inner());
+                let eligible = (queue.active_total < limits.total.get())
+                    .then(|| {
+                        queue.apps.iter().position(|app| {
+                            queue.active.get(app).copied().unwrap_or_default() < limits.per_app.get()
+                        })
+                    })
+                    .flatten();
+                if let Some(app) = eligible.and_then(|index| queue.apps.remove(index)) {
                     queue.queued.remove(&app);
-                    return app;
+                    *queue.active.entry(app.clone()).or_default() += 1;
+                    queue.active_total += 1;
+                    return WorkTurn { work: work.clone(), app };
                 }
             }
             notified.await;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn next(&self, resource: WorkResource) -> String {
+        self.next_turn(resource, WorkLimits::SERIAL).await.app.clone()
     }
 }
 
@@ -376,15 +433,33 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_gives_a_ready_app_a_turn_while_another_app_is_saturated() {
         let dispatcher = Dispatcher::default();
+        let resource = WorkResource::Calls;
+        let limits = WorkLimits::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN);
+        dispatcher.wake(resource, "app-a").await;
+        let a = dispatcher.next_turn(resource, limits).await;
+        assert_eq!(a.app(), "app-a");
         for _ in 0..100 {
-            dispatcher.wake(WorkResource::Calls, "app-a").await;
+            dispatcher.wake(resource, "app-a").await;
         }
-        dispatcher.wake(WorkResource::Calls, "app-b").await;
+        dispatcher.wake(resource, "app-b").await;
         dispatcher.wake(WorkResource::Notices, "mail-app").await;
 
-        assert_eq!(dispatcher.next(WorkResource::Calls).await, "app-a");
-        assert_eq!(dispatcher.next(WorkResource::Calls).await, "app-b");
+        let b = dispatcher.next_turn(resource, limits).await;
+        assert_eq!(b.app(), "app-b");
         assert_eq!(dispatcher.next(WorkResource::Notices).await, "mail-app");
+
+        dispatcher.wake(resource, "app-c").await;
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut pending = std::pin::pin!(dispatcher.next_turn(resource, limits));
+        assert!(std::future::Future::poll(pending.as_mut(), &mut context).is_pending());
+        drop(b);
+        let c = pending.await;
+        assert_eq!(c.app(), "app-c");
+
+        let mut retried = std::pin::pin!(dispatcher.next_turn(resource, limits));
+        assert!(std::future::Future::poll(retried.as_mut(), &mut context).is_pending());
+        drop(a);
+        assert_eq!(retried.await.app(), "app-a");
     }
 
     #[tokio::test]

@@ -40,7 +40,7 @@ flowchart TB
     subgraph COMMON["Shared Kernel services"]
       TX["App transactions + idempotency<br/>commit rows, receipts and effect intentions together"]
       BLOBS["Blob storage + quotas<br/>module-owned references"]
-      JOBS["Bounded fair dispatcher<br/>per-app admission, wake-up and recovery"]
+      JOBS["Tokio dispatcher<br/>turns by app, wake-up and recovery"]
       HANDLERS["Module handlers<br/>Calls + Notify; transport stays behind handlers"]
       INVENTORY["Registered data inventory<br/>reserved tables + versions + migrations + export components"]
       TIMER["Schedule + cron<br/>produce declared work"]
@@ -167,8 +167,6 @@ export KONAE_QUEUE_CONSUMERS_PAUSED=1
 Stop every process that serves this data directory before the first command. Repeat the maintenance command for every app ID returned by preflight. The exclusive Kernel lock makes migration and rollback refuse while a serving Kernel runs. `migrate` writes a checksummed backup of the queue and app databases before changing anything. It copies each Calls row transactionally and deletes its source only after the target commit, so interruption can resume without changing IDs or duplicating rows. It leaves `mail.sqlite` and all app files in place. Rollback checks every backup checksum before restoring databases and sidecars. Use rollback before resuming writes because it restores the database contents at backup time.
 
 `mail.sqlite` is an ordinary SQLite database, not an encrypted database. Account links in `jobs.link_sealed` use AES-256-GCM with the job ID as associated data. The migration reads `KONAE_MAIL_SECRET`, then `KONAE_SETUP_KEY`, then the private `mail-key` fallback, and checks the ciphertext before proceeding. Keep the same installation key through migration. Never copy it into an app folder or export. If no key opens the old bytes, use the previous release and its original key to drain those messages; a replacement key cannot decrypt them.
-
-Keep synchronous reads and short mutations on direct calls. The dispatcher handles work accepted for later execution. Load workers on demand, bound concurrency globally and per app, and give active apps turns. Keep one writer per app folder. A remote worker can execute a bounded job while its owning Kernel validates and commits the result.
 
 ### How another module is added
 
@@ -299,7 +297,17 @@ Each module admits at most 1,000 pending jobs of its handled kind per app. Produ
 
 Notice handoff uses the installation mail queue and its separate worker. Mail reconciles changed recipient outcomes in batches and records which results reached the app database. A confirmed result causes no further app writes until its delivery state changes.
 
-Start with one writer for each app folder. A worker can retry under a stable operation ID. The owning Kernel checks the result and publishes it. If attempts can overlap, check the attempt number when committing the result. When moving an app, recover its pending internal work and coordinate the handover before resuming external deliveries. An SMTP server may already have accepted a message when the sender loses its connection.
+When moving an app, recover its pending internal work and coordinate the handover before resuming external deliveries. An SMTP server may already have accepted a message when the sender loses its connection.
+
+### Local workers and scaling
+
+A self-hosted installation starts one serving process. Its Rust code uses Tokio to coordinate I/O, timers, work admission and child processes. Keep reads and short mutations on the request path. Use Tokio's blocking pool for short blocking calls and bound how many run at once. For work that needs its own memory limit or must stop at a deadline, the Kernel starts and supervises a local child process. The operator starts the same service in either case.
+
+Use the existing dispatcher for durable work. Each module keeps its own job records and decides when work is complete. Give ready apps turns and bound concurrent jobs by app and installation. Functions already has both limits and scheduled Functions use the same runner. Keep the current cron order within an app.
+
+Documents is the first new consumer. Its handler sends a local Typst process the frozen input, template and assets for one render attempt. The Kernel remains the sole writer of the app folder. It checks the result and commits it only while that attempt is current. A retry keeps the same emission ID. File intake can use the same dispatcher for pending consumers. MCP reads continue through the app's Actions.
+
+Check this design by filling one app's render slots while another serves reads. Measure read latency and render wait time. Stop a render process mid-job, then check that a retry produces one PDF and that a late result cannot replace it. If render capacity later limits an installation, a remote worker can take the same render inputs and return the result to the owning Kernel. If contention comes from the app's database or its total load, [move the app to its own Kernel](#when-one-app-needs-its-own-kernel).
 
 ### Functions execution
 
