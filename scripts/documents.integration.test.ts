@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,9 +29,14 @@ integration("Documents serves a second app while one app holds its render slot",
   try {
     const shellWord = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
     await writeFile(renderer, `#!/bin/sh
-if [ "$1" = compile ] && grep -q hold-first "$6"; then
-  touch ${shellWord(path.join(root, "first-render-started"))}
-  while [ ! -e ${shellWord(release)} ]; do sleep 0.05; done
+if [ "$1" = compile ]; then
+  if grep -q hold-first "$6"; then
+    touch ${shellWord(path.join(root, "first-render-started"))}
+    while [ ! -e ${shellWord(release)} ]; do sleep 0.05; done
+  fi
+  if grep -q second-render "$6"; then
+    touch ${shellWord(path.join(root, "second-render-started"))}
+  fi
 fi
 exec ${shellWord(typst!)} "$@"
 `, { mode: 0o700 });
@@ -55,8 +59,8 @@ exec ${shellWord(typst!)} "$@"
         actions: {
           "invoices.issue": {
             kind: "mutation", access: "authenticated",
-            statement: "UPDATE invoices SET issued = 1 WHERE id = ?1",
-            bindings: [{ source: "input", key: "id", type: "string" }],
+            statement: "INSERT INTO invoices (id, owner_id, issued) VALUES (?1, ?2, 1)",
+            bindings: [{ source: "input", key: "id", type: "string" }, { source: "actor", field: "id" }],
             issue: { key: "id", download: "invoices.read", snapshot: ["id"], template: "#text(issue.id)" },
           },
           "invoices.read": {
@@ -73,8 +77,9 @@ exec ${shellWord(typst!)} "$@"
         method: "POST", body: JSON.stringify(input),
         headers: { "content-type": "application/json", origin, ...(cookie ? { cookie } : {}) },
       });
-      const data = () => new Database(path.join(folder, "data/database.sqlite"));
-      return { origin, post, data };
+      const download = (key: string, cookie: string) =>
+        fetch(origin + "/_konae/documents/" + key, { headers: { cookie } });
+      return { post, download };
     }
 
     const appA = await prepare("Invoices A");
@@ -100,44 +105,35 @@ exec ${shellWord(typst!)} "$@"
       const response = await app.post("/_konae/auth/signup", credentials);
       expect(response.status, await response.clone().text()).toBe(200);
       const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
-      const { result } = await response.json() as { result: { user: { userId: string } } };
       expect(cookie).toBeTruthy();
-      return { cookie: cookie!, id: result.user.userId };
+      return cookie!;
     };
     const memberA = await signup(appA);
     const memberB = await signup(appB);
-    const issue = async (app: typeof appA, member: typeof memberA, id: string) => {
-      using db = app.data();
-      db.run("INSERT INTO invoices (id, owner_id, issued) VALUES (?1, ?2, 0)", [id, member.id]);
+    const issue = async (app: typeof appA, cookie: string, id: string) => {
       const response = await app.post("/_konae/mcp", {
         jsonrpc: "2.0", id: 1, method: "tools/call",
         params: { name: "actions_invoke", arguments: { name: "invoices.issue", input: { id } } },
-      }, member.cookie);
+      }, cookie);
       expect(response.status, await response.clone().text()).toBe(200);
       const body = await response.json() as { result?: { isError: boolean } };
       expect(body.result?.isError, JSON.stringify(body)).toBe(false);
     };
-    const status = (app: typeof appA, id: string) => {
-      using db = app.data();
-      return db.query<{ state: string }, [string]>(
-        "SELECT state FROM __konae_documents WHERE issue_key = ?1",
-      ).get(id)?.state;
+    const ready = async (app: typeof appA, cookie: string, key: string) => {
+      const download = await app.download(key, cookie);
+      return (await download.text()).startsWith("%PDF-") && download.ok;
     };
-
     await issue(appA, memberA, "hold-first");
     await until(() => Bun.file(path.join(root, "first-render-started")).exists(), "The first Typst process should start.");
-    await issue(appA, memberA, "second");
+    await issue(appA, memberA, "second-render");
     await issue(appB, memberB, "other");
-    await until(() => status(appB, "other") === "ready", "App B should finish while App A holds its render slot.");
-    expect(status(appA, "hold-first")).toBe("rendering");
-    expect(status(appA, "second")).toBe("pending");
-    const download = await fetch(`${appB.origin}/_konae/documents/other`, { headers: { cookie: memberB.cookie } });
-    expect(download.status).toBe(200);
-    expect((await download.text()).slice(0, 5)).toBe("%PDF-");
+    await until(() => ready(appB, memberB, "other"), "App B should serve its PDF while App A holds its render slot.");
+    expect(await Bun.file(path.join(root, "second-render-started")).exists()).toBe(false);
+    expect((await appA.download("hold-first", memberA)).status).toBe(404);
     await writeFile(release, "");
     await until(
-      () => status(appA, "hold-first") === "ready" && status(appA, "second") === "ready",
-      "App A should drain its queue after the held renderer exits.",
+      async () => await ready(appA, memberA, "hold-first") && await ready(appA, memberA, "second-render"),
+      "App A should serve both PDFs after the held renderer exits.",
     );
   } finally {
     await writeFile(release, "");
