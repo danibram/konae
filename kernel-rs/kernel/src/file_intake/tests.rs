@@ -95,6 +95,53 @@ async fn accept_replays_replacements_and_commits_one_action_effect_per_version()
         .is_err()
     );
 
+    crate::maintenance::pause_for_test(&root, &deployment.id, true);
+    let paused = super::accept_staged(
+        &state,
+        &deployment,
+        "camera",
+        &scratch,
+        "incoming/photo.jpg",
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(paused.to_string().contains("maintenance"));
+    crate::maintenance::pause_for_test(&root, &deployment.id, false);
+
+    let connection = Connection::open(&database).unwrap();
+    super::accept::ensure_schema(&connection).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER refuse_intake BEFORE INSERT ON __konae_intake_jobs
+         BEGIN SELECT RAISE(ABORT, 'forced refusal'); END;",
+        )
+        .unwrap();
+    let refused = super::accept_staged(
+        &state,
+        &deployment,
+        "camera",
+        &scratch,
+        "incoming/photo.jpg",
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.to_string().contains("could not be committed"));
+    assert!(
+        state
+            .files
+            .store
+            .list(&deployment.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    connection
+        .execute_batch("DROP TRIGGER refuse_intake;")
+        .unwrap();
+    drop(connection);
+
     let first = super::accept::accept_staged(
         &state,
         &deployment,

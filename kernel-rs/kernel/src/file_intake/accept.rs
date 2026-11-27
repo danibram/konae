@@ -4,6 +4,7 @@ use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{AppState, Deployment, app_data::database_lock};
 
@@ -227,11 +228,31 @@ pub async fn accept_staged(
     let staging = state.data_root.join("transfers");
     tokio::fs::create_dir_all(&staging).await?;
     let frozen_path = staging.join(format!(".intake-{}", uuid::Uuid::new_v4()));
-    tokio::fs::copy(staged_bytes, &frozen_path)
-        .await
-        .context("The intake bytes could not be staged locally.")?;
+    let mut target = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&frozen_path)
+        .await?;
     let _frozen = StagedInput(frozen_path.clone());
+    let mut source_file = tokio::fs::File::open(staged_bytes)
+        .await?
+        .take(metadata.len().saturating_add(1));
+    let copied = tokio::io::copy(&mut source_file, &mut target).await?;
+    target.flush().await?;
+    drop(target);
+    ensure!(
+        copied == metadata.len(),
+        "The staged intake file changed while it was being read."
+    );
+    let checksum_path = frozen_path.clone();
+    let (size, digest) =
+        tokio::task::spawn_blocking(move || crate::copies::checksum_file(&checksum_path)).await??;
+    let _operation = state.copies.operations.read().await;
     let _write = database_lock(state, &deployment.id).await;
+    ensure!(
+        crate::maintenance::pause(&state.data_root, &deployment.id).is_none(),
+        "File intake is paused while the app is in maintenance."
+    );
     let active = state
         .deployments
         .read()
@@ -265,13 +286,6 @@ pub async fn accept_staged(
             "File intake delivery key must contain 1 to 512 non-control bytes."
         );
     }
-    let checksum_path = frozen_path.clone();
-    let (size, digest) =
-        tokio::task::spawn_blocking(move || crate::copies::checksum_file(&checksum_path)).await??;
-    ensure!(
-        size == metadata.len(),
-        "The staged intake file changed while it was being read."
-    );
     let database = crate::layout::database(&state.data_root, &deployment.id);
     let connection = Connection::open(&database)
         .with_context(|| format!("Cannot open app database for {}.", deployment.id))?;
@@ -316,13 +330,6 @@ pub async fn accept_staged(
         "File intake exceeds the app's {} byte file quota.",
         state.files.limits.quota_bytes
     );
-    let version_id = uuid::Uuid::new_v4().to_string();
-    state
-        .files
-        .store
-        .put(&deployment.id, &version_id, &frozen_path)
-        .await
-        .context("The intake blob could not be staged.")?;
     let consumers = declaration
         .consumers
         .iter()
@@ -337,25 +344,10 @@ pub async fn accept_staged(
         pending.saturating_add(consumers.len()) <= MAX_PENDING_JOBS_PER_APP,
         "File intake already has 1000 pending consumer jobs for this app."
     );
-    let transaction = connection.unchecked_transaction()?;
-    let now = crate::now_ms() as i64;
-    transaction.execute(
-        "INSERT INTO __konae_intake_versions(id,source_id,source_version,path,sha256,size,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        params![version_id, source_id, source.version as i64, path, digest, size as i64, now],
-    )?;
-    if let Some(key) = delivery_key {
-        transaction.execute(
-            "INSERT INTO __konae_intake_deliveries(source_id,delivery_key,version_id,sha256,path) VALUES(?1,?2,?3,?4,?5)",
-            params![source_id, key, version_id, digest, path],
-        )?;
-    }
-    transaction.execute(
-        "INSERT INTO __konae_intake_current(source_id,path,version_id,sha256) VALUES(?1,?2,?3,?4) ON CONFLICT(source_id,path) DO UPDATE SET version_id=excluded.version_id,sha256=excluded.sha256",
-        params![source_id, path, version_id, digest],
-    )?;
+    let program = serde_json::from_str::<Value>(&active.actions)?;
+    let mut jobs = Vec::with_capacity(consumers.len());
     for consumer in consumers {
         let input = serde_json::to_string(&consumer.input)?;
-        let program = serde_json::from_str::<Value>(&deployment.actions)?;
         let action = program
             .get("actions")
             .and_then(Value::as_object)
@@ -371,12 +363,47 @@ pub async fn accept_staged(
             "File intake consumer {} must name a mutation action.",
             consumer.id
         );
-        transaction.execute(
-            "INSERT INTO __konae_intake_jobs(id,version_id,consumer_id,action,input,action_json,state,next_attempt_at,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,?7)",
-            params![uuid::Uuid::new_v4().to_string(), version_id, consumer.id, consumer.action, input, action.to_string(), now],
-        )?;
+        jobs.push((consumer, input, serde_json::to_string(action)?));
     }
-    transaction.commit()?;
+    let version_id = uuid::Uuid::new_v4().to_string();
+    let store = &state.files.store;
+    store
+        .put(&deployment.id, &version_id, &frozen_path)
+        .await
+        .context("The intake blob could not be staged.")?;
+    let committed = (|| -> rusqlite::Result<()> {
+        let transaction = connection.unchecked_transaction()?;
+        let now = crate::now_ms() as i64;
+        transaction.execute(
+            "INSERT INTO __konae_intake_versions(id,source_id,source_version,path,sha256,size,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![version_id, source_id, source.version as i64, path, digest, size as i64, now],
+        )?;
+        if let Some(key) = delivery_key {
+            transaction.execute(
+                "INSERT INTO __konae_intake_deliveries(source_id,delivery_key,version_id,sha256,path) VALUES(?1,?2,?3,?4,?5)",
+                params![source_id, key, version_id, digest, path],
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO __konae_intake_current(source_id,path,version_id,sha256) VALUES(?1,?2,?3,?4) ON CONFLICT(source_id,path) DO UPDATE SET version_id=excluded.version_id,sha256=excluded.sha256",
+            params![source_id, path, version_id, digest],
+        )?;
+        for (consumer, input, action) in jobs {
+            transaction.execute(
+                "INSERT INTO __konae_intake_jobs(id,version_id,consumer_id,action,input,action_json,state,next_attempt_at,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,?7)",
+                params![uuid::Uuid::new_v4().to_string(), version_id, consumer.id, consumer.action, input, action, now],
+            )?;
+        }
+        transaction.commit()
+    })();
+    if let Err(error) = committed {
+        if let Err(failure) = store.delete(&deployment.id, &version_id).await {
+            eprintln!(
+                "Uncommitted file intake blob {version_id} could not be deleted: {failure:#}"
+            );
+        }
+        return Err(error).context("The intake version could not be committed.");
+    }
     state
         .dispatcher
         .wake(
