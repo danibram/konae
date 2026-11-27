@@ -25,7 +25,6 @@ const MAX_ROWS: u64 = 100_000;
 const MAX_SQLITE_BYTES: i32 = 2 * 1024 * 1024;
 const STATE_TABLE: &str = "__konae_schema_state";
 const HISTORY_TABLE: &str = "__konae_schema_history";
-pub const INTERNAL_TABLE_NAMES: [&str; 2] = [STATE_TABLE, HISTORY_TABLE];
 
 const DOCUMENT_INVALID: &str = "schema-transform.document-invalid";
 const STATEMENT_REFUSED: &str = "schema-transform.statement-refused";
@@ -443,7 +442,7 @@ pub fn fingerprint(connection: &Connection) -> Result<String, Refusal> {
         .map_err(|error| invalid(format!("Cannot read SQLite schema: {error}")))?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| invalid(format!("Cannot read SQLite schema: {error}")))?;
-    objects.retain(|(_, name, _, _)| !is_internal_name(name));
+    objects.retain(|(_, name, table, _)| !is_internal_name(name) && !is_internal_name(table));
     objects.sort_by(|a, b| {
         (
             a.0.to_ascii_lowercase(),
@@ -601,10 +600,7 @@ pub fn load_history(connection: &Connection) -> Result<HistoryState, Refusal> {
     if state.0 != FORMAT_VERSION as i64 {
         return Err(refuse(
             HISTORY_VERSION,
-            format!(
-                "The app uses schema transformation history version {}; this Kernel supports {FORMAT_VERSION}.",
-                state.0
-            ),
+            format!("The app uses schema transformation history version {}; this Kernel supports {FORMAT_VERSION}.", state.0),
         ));
     }
     if entries.last().map(|entry| entry.id.as_str()) != state.1.as_deref() {
@@ -828,8 +824,8 @@ pub fn initialize_fresh_baseline(
 
 fn user_schema_is_empty(connection: &Connection) -> Result<bool, Refusal> {
     let count: i64 = connection.query_row(
-        "SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN (lower(?1), lower(?2))",
-        [STATE_TABLE, HISTORY_TABLE], |row| row.get(0),
+        &format!("SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ({0}) AND lower(tbl_name) NOT IN ({0})", crate::modules::reserved_sql_names()),
+        [], |row| row.get(0),
     ).map_err(|error| history_error(format!("Cannot inspect the app schema: {error}")))?;
     Ok(count == 0)
 }

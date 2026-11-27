@@ -613,12 +613,28 @@ impl Files {
 /// The IDs and sizes a Deployment's index names, or none without an index.
 pub async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<Vec<(String, u64)>>> {
     let path = crate::layout::files(&data_root, &deployment).join("index.json");
-    let bytes = match tokio::fs::read(&path).await {
+    let references = crate::modules::blob_references(data_root, deployment)?;
+    match tokio::fs::metadata(&path).await {
+        Ok(_) => Ok(Some(references.into_iter().map(|reference| (reference.id, reference.size)).collect())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && references.is_empty() => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Some(references.into_iter().map(|reference| (reference.id, reference.size)).collect())),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(crate) fn file_index_references_in(directory: &Path) -> Result<Vec<(String, u64)>> {
+    let path = directory.join("index.json");
+    let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),
     };
-    let index: Vec<serde_json::Value> = serde_json::from_slice(&bytes).with_context(|| format!("{} is not valid JSON.", path.display()))?;
+    parse_indexed_files(&bytes, &path)
+}
+
+pub(crate) fn parse_indexed_files(bytes: &[u8], path: &Path) -> Result<Vec<(String, u64)>> {
+    anyhow::ensure!(crate::modules::object_inventory("files") == Some("file-index"), "The Files module has no registered blob reference inventory.");
+    let index: Vec<serde_json::Value> = serde_json::from_slice(bytes).with_context(|| format!("{} is not valid JSON.", path.display()))?;
     index
         .iter()
         .map(|file| {
@@ -626,7 +642,6 @@ pub async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<
             Ok((id.to_owned(), file["size"].as_u64().unwrap_or(0)))
         })
         .collect::<Result<Vec<_>>>()
-        .map(Some)
 }
 
 /// Removes every file the store holds for a Deployment whose folder is gone.
@@ -696,7 +711,10 @@ pub async fn migrate(data_root: &Path, source: &dyn FileStore, target: &dyn File
     let mut summary = Migrated::default();
     let mut moved: Vec<(String, String)> = Vec::new();
     for deployment in LocalFolder::new(data_root).deployments().await? {
-        let Some(files) = indexed_files(data_root, &deployment).await? else { continue };
+        let Some(files) = indexed_files(data_root, &deployment).await? else {
+            ensure!(source.list(&deployment).await?.is_empty(), "Deployment {deployment} has stored files but no readable Files index. Nothing was switched.");
+            continue;
+        };
         summary.deployments += 1;
         for (id, size) in files {
             let blob = source
@@ -739,16 +757,16 @@ pub struct Reconciled {
     pub kept_recent: usize,
 }
 
-/// Removes the files a store holds that no index names, once they are older
-/// than an hour; a younger one may be an upload whose index change has not
-/// committed yet. A Deployment without a folder has no index, so all its
-/// files go.
+/// Removes files no readable index names after an hour. A Deployment whose
+/// app folder is gone has no live references, so cleanup can remove its files.
 pub async fn reconcile(data_root: &Path, store: &dyn FileStore, now_ms: u64, dry_run: bool) -> Result<Reconciled> {
     let mut summary = Reconciled::default();
     for deployment in store.deployments().await? {
-        let indexed: std::collections::HashSet<String> = indexed_files(data_root, &deployment)
-            .await?
-            .unwrap_or_default()
+        let indexed_files = indexed_files(data_root, &deployment).await?;
+        if !crate::layout::files(data_root, &deployment).join("index.json").try_exists()? && crate::layout::folder(data_root, &deployment).exists() {
+            anyhow::bail!("Deployment {deployment} has no readable Files index. Nothing was deleted.");
+        }
+        let indexed: std::collections::HashSet<String> = indexed_files.unwrap_or_default()
             .into_iter()
             .map(|(id, _)| id)
             .collect();
@@ -1248,6 +1266,24 @@ pub mod tests {
         assert!(missing.contains("is in the index but not in local. Nothing was switched."), "{missing}");
         assert_eq!(read_marker(&root).await.unwrap().unwrap(), describe(None));
         assert_eq!(local.list(&deployment).await.unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn files_migrate_and_reconcile_stop_when_a_live_app_has_no_index() {
+        let root = std::env::temp_dir().join(format!("konae-files-index-missing-{}", uuid::Uuid::new_v4()));
+        let local = LocalFolder::new(&root);
+        let s3 = test_s3_store().await;
+        let deployment = uuid::Uuid::new_v4().to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        put_bytes(&local, &root, &deployment, &id, b"keep").await;
+        let error = migrate(&root, &local, &s3, &describe(Some(&s3.settings))).await.unwrap_err().to_string();
+        assert!(error.contains("has stored files but no readable Files index. Nothing was switched."), "{error}");
+        assert_eq!(local.list(&deployment).await.unwrap(), vec![id.clone()]);
+        assert!(read_marker(&root).await.unwrap().is_none());
+        let error = reconcile(&root, &local, u64::MAX, false).await.unwrap_err().to_string();
+        assert!(error.contains("has no readable Files index. Nothing was deleted."), "{error}");
+        assert_eq!(local.list(&deployment).await.unwrap(), vec![id]);
         let _ = std::fs::remove_dir_all(root);
     }
 

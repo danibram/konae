@@ -43,7 +43,7 @@ The owner sets a secret with `secret_set`, or the `kernel` binary's `secret`, an
 ### A call action sends one request from the Kernel
 
 - An action of `"kind": "call"` declares one request: `"method"` `GET` or `POST`, `"url"`, `"body"` as a map from body keys to its inputs, an optional `"auth"` and an optional `"then"`. Its bindings may only be inputs, so the Kernel adds no identity or clock to a request that leaves the app.
-- The runtime endpoint checks the caller and the inputs, queues the call in `calls.sqlite` and answers `{ callId, queued: true }`. One worker sends it, so a slow host never holds a request and a call survives a restart.
+- The runtime endpoint checks the caller and the inputs, queues the call in the app database and answers `{ callId, queued: true }`. The dispatcher sends it in the background. The call survives restart and travels with the app. [Legacy queues](../architecture.md#migrating-the-legacy-queues)
 - `"auth": { "secret": "<name>" }` signs with Konae's scheme, in `X-Konae-Signature` or the header the call names. `"auth": { "key": "<name>" }` sends the secret's value as a bearer token.
 - A URL is https, or http only to an app of the same installation. Both doors refuse credentials, fragments, IP addresses, `localhost`, `metadata`, `instance-data` and `.internal` names. Before each attempt to an outside host the Kernel resolves the name, refuses the call when any address is not public, and connects to the address it checked. It follows no redirect and uses no proxy from the environment.
 - A call to an app of the same installation goes through the same route code an outside request meets, with its callers, signature, replay memory, guard and Usage.

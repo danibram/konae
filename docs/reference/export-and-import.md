@@ -29,12 +29,14 @@ Export the app folder to take one app's accounts, data and rules to another mach
 
 | Component | What it is | Limit |
 | --- | --- | --- |
-| `database` | The app database, copied with `VACUUM INTO` | 256 MiB |
+| `database` | The app database, including pending Calls and portable notice intents, copied with `VACUUM INTO` | 256 MiB |
 | `identity` | `identity.sqlite` without sessions or email links, with every API key revoked at import | 64 MiB |
-| `files` | A ustar archive of `index.json` and one `<id>.blob` per file | The destination's per-file limit and file quota |
+| `files` | A ustar archive with the Files index and the bytes referenced by registered modules | The destination's per-file limit and app-wide file quota |
 | `usage` | `usage.sqlite`, present when the app recorded Usage or a Signal | 128 MiB |
 
 `publishedRevision` counts releases. `sourcesRevision` advances when Konae accepts sources through project creation, source saves, release, source import or source-backup restore. `konae.json` and `app/` in an export can carry a draft ahead of the release. The `released` snapshot in `konae.json` (`konae.json.released`) and the Kernel's Installed record retain the effective released settings, actions, schema and artifact identity. On restart, an unchanged `dist/` keeps that applied snapshot; a changed artifact applies the current sources and matching settings through the normal schema confirmation path. Legacy folders recover applied state from their Installed record and live database rather than treating a saved draft as released. Read each download with `transfer_read` until `nextOffset` equals `size`, check its SHA-256, and cancel it. The downloads expire after an hour and need `export_data`. The audit log gets one `project_export` row and one `package_download` row per download.
+
+When moving a live app, put the source in maintenance before the final export. Resume delivery on one installation. Export refuses while a Call attempt is in flight or a notice awaits a terminal result in the installation mail queue. Pending notice intents that the queue has yet to accept can resume after import.
 
 To import into a new app on another installation, create the project there with `project_create` and the same `projectId`, and set every signing secret with `secret_set`. Upload each component with `transfer_begin { size, sha256, projectId, component }`, so the upload may reach that component's limit; `McpClient.upload(bytes, projectId, component)` in `src/mcp/client.ts` does the three calls. Then send the release payload, the one `release_plan` always takes, with `initialPackage`:
 

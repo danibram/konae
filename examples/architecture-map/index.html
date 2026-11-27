@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<title>Konae, how an app leaves</title>
+<title>Konae architecture</title>
 <meta name="description" content="A map of Konae: the editor, the Validation Gate, the Kernel, and how an app leaves with its accounts, its rows and its rules.">
 <link rel="stylesheet" href="styles.css">
 <script type="module" src="app.js"></script>
@@ -13,13 +13,13 @@
 <header class="masthead shell">
     <nav class="nav">
       <a class="brand" href="#top"><span class="brand-mark">⌁</span> konae</a>
-      <div class="nav-meta"><span>How an app leaves</span><a class="nav-back" href="http://localhost:4173/">Back to projects</a></div>
+      <div class="nav-meta"><a href="#kernel-modules">Kernel modules</a><a class="nav-back" href="http://localhost:4173/">Back to projects</a></div>
     </nav>
     <div class="hero">
       <div class="hero-copy reveal">
         <p class="eyebrow"><span class="index">00 /</span> system map</p>
-        <h1 data-purpose="How an app leaves with its accounts, its rows and its rules.">Small apps.<br><em>Serious limits.</em></h1>
-        <p class="hero-lead">An editor and one folder per app. The app names who can open it and who can read a row. The Kernel checks those rules wherever the app runs.</p>
+        <h1 data-purpose="The complete Konae architecture.">Konae.<br><em>The complete architecture.</em></h1>
+        <p class="hero-lead">Owner tools, all app modules, shared Kernel services and external adapters. Blue boxes show implemented shared services. Orange boxes show proposed additions.</p>
       </div>
         <aside class="hero-aside paths" data-map="leaves">
         <div class="path"><p class="eyebrow">PATH 1</p><strong>The editor</strong><br><span>Describe a change, or edit the files. Both meet the same check.</span></div>
@@ -35,6 +35,24 @@
   </header>
 
   <main>
+    <section class="chapter shell" id="kernel-modules" aria-labelledby="modules-heading">
+      <div class="chapter-heading reveal">
+        <p class="eyebrow">System architecture</p>
+        <h2 id="modules-heading">All modules in one Kernel</h2>
+        <p>The map shows the running Kernel and proposed additions. Registered modules own their operations, data tables and access rules. Shared services handle app transactions, publication and background work.</p>
+      </div>
+      <p><a href="kernel-architecture.svg" target="_blank" rel="noopener">Open the full diagram to zoom</a></p>
+      <div class="complete-map" tabindex="0" role="region" aria-label="Complete architecture diagram, scroll horizontally to inspect">
+        <img src="kernel-architecture.svg" alt="Konae owner tools publish through the Gate and a module registry with data inventories. HTTP, MCP, Functions, cron and schedules enter a shared app and release context. The Kernel holds Auth, Actions, Page, HTTP, Calls, Files, Functions and SEO. Registered tables and export components pass through migration and app export. A bounded dispatcher recovers work and calls the Calls and Notify handlers. Documents, file intake, FTPS and Typst remain proposed. Each app keeps its own accounts, rows and access rules." />
+      </div>
+      <div class="kernel-detail architecture-decisions">
+        <article><h3>Module contract</h3><p>The registry names reserved tables, state versions, migrations and export components. Schema migration, SQL authorization and packages use that inventory.</p></article>
+        <article><h3>Transactions</h3><p>Actions, Functions, schedules and Calls continuations share app, release and actor authority. Typed effects commit receipts and notice intents with app rows.</p></article>
+        <article><h3>Background work</h3><p>A bounded in-process dispatcher recovers committed work and rotates app turns. Calls and Notify use separate queues and module handlers.</p></article>
+        <article><h3>Publication</h3><p>The Kernel checks pending Calls against the candidate schema before activation. Static GET captures rules, bytes and ETag from one release.</p></article>
+      </div>
+    </section>
+
     <section class="chapter shell" id="system">
       <div class="chapter-heading reveal">
         <p class="eyebrow index">01</p>

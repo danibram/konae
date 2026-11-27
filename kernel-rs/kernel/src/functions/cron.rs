@@ -168,7 +168,7 @@ pub fn read(
         };
         let cron = Expression::try_from(cron.to_owned()).map_err(|_| refuse("cron.expression-invalid", format!("Cron {id} must use a five-field UTC cron expression, such as \"0 8 * * 1-5\".")))?;
         let target = functions.and_then(|functions| functions.get(function));
-        if !target.is_some_and(|target| target.access == "scheduled") {
+        if target.is_none_or(|target| target.access != "scheduled") {
             return Err(refuse("cron.target-invalid", format!("Cron {id} must name a Function with access scheduled in functions.json. Check {function}.")));
         }
         Ok((id.clone(), Cron { cron, function: function.to_owned() }))

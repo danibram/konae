@@ -2,6 +2,7 @@
 use crate::refusal::{refuse, Refusal};
 use crate::*;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+#[cfg(any(test, feature = "testing"))]
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -19,14 +20,74 @@ const FIRST_BACKOFF_MS: i64 = 30_000;
 const PAUSE_WAIT_MS: i64 = 60_000;
 const LEASE_MS: i64 = 60_000;
 const BATCH: i64 = 20;
-const WORKER_INTERVAL: Duration = Duration::from_secs(5);
 const KEEP_PER_DEPLOYMENT: i64 = 1000;
+const MAX_PENDING_PER_APP: i64 = 1000;
 const OUTBOX_PAGE: i64 = 50;
 const EXCERPT_CHARS: usize = 1024;
 const RESERVED_SEGMENTS: [&str; 4] = ["_konae", "oauth", ".well-known", "mcp"];
 const ANSWER_ROOTS: [&str; 5] = ["ok", "status", "error", "body", "input"];
 const DEFAULT_SIGNATURE_HEADER: &str = "X-Konae-Signature";
 pub const RATE_LIMITED: &str = "This app reached its limit of calls in the last minute. Try again in a minute.";
+
+#[derive(Clone, Copy)]
+struct ThenAttempt<'a> {
+    call_id: &'a str,
+    release: &'a str,
+    number: i64,
+}
+
+#[derive(Debug)]
+struct GuardRefused(String);
+
+impl std::fmt::Display for GuardRefused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for GuardRefused {}
+
+fn continuation_error(error: &anyhow::Error) -> (&'static str, String) {
+    if let Some(refused) = error.downcast_ref::<GuardRefused>() {
+        ("refused", refused.to_string())
+    } else {
+        ("failed", error.to_string())
+    }
+}
+
+/// Checks every accepted continuation that can still run against a candidate
+/// database. The saved declaration remains authoritative across releases.
+#[cfg(test)]
+fn check_pending_continuations(database: &std::path::Path) -> Result<()> {
+    let connection = rusqlite::Connection::open(database)?;
+    check_pending_continuations_on_connection(&connection)
+}
+
+pub(crate) fn check_pending_continuations_on_connection(connection: &rusqlite::Connection) -> Result<()> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_calls')",
+        [], |row| row.get(0),
+    )?;
+    if !exists { return Ok(()); }
+    let mut query = connection.prepare(
+        "SELECT id, continuation FROM __konae_calls WHERE continuation IS NOT NULL AND (state='pending' OR then_state IN ('pending','processing')) ORDER BY created_at, id",
+    )?;
+    let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (id, raw) = row?;
+        let continuation: Value = serde_json::from_str(&raw)?;
+        let definition: ActionDefinition = serde_json::from_value(continuation["definition"].clone())?;
+        let compatible = connection.prepare(&definition.statement).map(|_| ()).map_err(anyhow::Error::from)
+            .and_then(|()| crate::notify::check_columns(connection, continuation["action"].as_str().unwrap_or(""), &definition).map_err(anyhow::Error::from));
+        if let Err(error) = compatible {
+            return Err(anyhow::Error::new(refuse(
+                "schema.pending-work",
+                format!("The schema change would break pending Calls continuation {id}. Keep its required tables and columns, or finish that job before publishing."),
+            )).context(error));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone, Default, Deserialize)]
 pub struct CallKeys {
@@ -656,12 +717,42 @@ async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static st
 // ---------------------------------------------------------------------------
 // The queue.
 
-fn connection(data_root: &Path) -> Result<Connection> {
-    let connection = Connection::open(data_root.join(CALLS_DATABASE))?;
-    connection.busy_timeout(Duration::from_secs(5))?;
-    connection.execute_batch(include_str!("calls.sql"))?;
-    // `calls.sqlite` predates execution modes. Additive columns keep existing
-    // live outbox rows deliverable after an upgrade.
+pub(crate) fn prepare_transfer(state: &AppState, app: &str) -> Result<()> {
+    let database = crate::layout::database(&state.data_root, app);
+    if !database.is_file() {
+        return Ok(());
+    }
+    let connection = Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    if !crate::table_exists(&connection, "__konae_calls")? {
+        return Ok(());
+    }
+    let in_flight: Option<String> = connection.query_row(
+        "SELECT id FROM __konae_calls WHERE leased_until >= ?1
+         AND (state = 'pending' OR then_state = 'processing') ORDER BY leased_until LIMIT 1",
+        [now()],
+        |row| row.get(0),
+    ).optional()?;
+    anyhow::ensure!(
+        in_flight.is_none(),
+        "App transfer is blocked while Call {} has an in-flight attempt. Keep the app in maintenance and retry after the attempt finishes.",
+        in_flight.as_deref().unwrap_or_default()
+    );
+    Ok(())
+}
+
+fn app_connection(data_root: &Path, app_id: &str) -> Result<Connection> {
+    let path = crate::layout::database(data_root, app_id);
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    let db = Connection::open(path)?;
+    db.busy_timeout(Duration::from_secs(5))?;
+    db.execute_batch(include_str!("calls-app.sql"))?;
+    Ok(db)
+}
+
+fn legacy_connection(data_root: &Path) -> Result<Connection> {
+    let db = Connection::open(data_root.join(CALLS_DATABASE))?;
+    db.busy_timeout(Duration::from_secs(5))?;
+    db.execute_batch(include_str!("calls.sql"))?;
     for (column, declaration) in [
         ("execution_mode", "TEXT NOT NULL DEFAULT 'live'"),
         ("request_body", "TEXT"),
@@ -669,17 +760,92 @@ fn connection(data_root: &Path) -> Result<Connection> {
         ("response_body", "BLOB"),
         ("traceparent", "TEXT"),
     ] {
-        let exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('calls') WHERE name = ?1)",
-                [column],
-                |row| row.get(0),
+        let exists: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('calls') WHERE name = ?1)",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !exists { db.execute_batch(&format!("ALTER TABLE calls ADD COLUMN {column} {declaration};"))?; }
+    }
+    Ok(db)
+}
+
+fn migrate_legacy_calls(data_root: &Path, deployments: &[Deployment]) -> Result<usize> {
+    let legacy_path = data_root.join(CALLS_DATABASE);
+    if !legacy_path.exists() { return Ok(0); }
+    let legacy = legacy_connection(data_root)?;
+    let mut moved = 0;
+    for deployment in deployments {
+        let mut query = legacy.prepare(
+            "SELECT id, action, input, state, attempts, next_attempt_at, leased_until, method, url, status, error, answer,
+                    then_action, then_state, then_message, execution_mode, request_body, request_headers, response_body, created_at, updated_at, traceparent
+             FROM calls WHERE deployment = ?1 ORDER BY created_at, rowid",
+        )?;
+        let rows = query.query_map([&deployment.id], |row| Ok((
+            row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, Option<i64>>(6)?, row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<String>>(8)?, row.get::<_, Option<i64>>(9)?, row.get::<_, Option<String>>(10)?, row.get::<_, Option<String>>(11)?,
+            row.get::<_, Option<String>>(12)?, row.get::<_, Option<String>>(13)?, row.get::<_, Option<String>>(14)?, row.get::<_, String>(15)?,
+            row.get::<_, Option<String>>(16)?, row.get::<_, Option<String>>(17)?, row.get::<_, Option<Vec<u8>>>(18)?, row.get::<_, i64>(19)?, row.get::<_, i64>(20)?, row.get::<_, Option<String>>(21)?,
+        )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(query);
+        let source: Value = serde_json::from_str(&deployment.actions)?;
+        for row in rows {
+            let (id, action, input, old_state, attempts, next_at, leased, method, url, status, error, answer, old_then_action, then_state,
+                then_message, mode, request_body, request_headers, response_body, created_at, updated_at, traceparent) = row;
+            let raw_declaration = source["actions"].get(&action).cloned().unwrap_or_else(|| json!({}));
+            let definition = serde_json::from_value::<ActionDefinition>(raw_declaration.clone()).ok();
+            let call = definition.as_ref().and_then(|definition| check_kind(&action, definition).ok().flatten());
+            let continuation = call.as_ref().and_then(|call| call.then.as_ref()).and_then(|then| {
+                source["actions"].get(&then.action).map(|definition| json!({"action":then.action,"inputs":then.inputs,"definition":definition}))
+            });
+            let valid_call = call.is_some();
+            anyhow::ensure!(old_state != "pending" || valid_call, "Cannot migrate pending legacy Call {id}: its accepted action declaration is unavailable. Keep the source row and drain it with the previous release.");
+            let db = app_connection(data_root, &deployment.id)?;
+            let tx = db.unchecked_transaction()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO __konae_calls (id,deployment,action,release,declaration,continuation,input,state,attempts,next_attempt_at,leased_until,
+                    method,url,status,error,answer,then_action,then_state,then_message,execution_mode,request_body,request_headers,response_body,created_at,updated_at,traceparent)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)",
+                rusqlite::params![id,deployment.id,action,deployment.artifact_version,raw_declaration.to_string(),continuation.map(|value| value.to_string()),input,
+                    old_state,attempts,next_at,leased,method,url,status,error,answer,old_then_action,then_state,then_message,mode,
+                    request_body,request_headers,response_body,created_at,updated_at,traceparent],
             )?;
-        if !exists {
-            connection.execute_batch(&format!("ALTER TABLE calls ADD COLUMN {column} {declaration};"))?;
+            tx.commit()?;
+            legacy.execute("DELETE FROM calls WHERE id = ?1 AND deployment = ?2", rusqlite::params![id,deployment.id])?;
+            moved += 1;
         }
     }
-    Ok(connection)
+    Ok(moved)
+}
+
+pub(crate) fn preflight_legacy_calls(data_root: &Path, deployment: &Deployment) -> Result<()> {
+    let path = data_root.join(CALLS_DATABASE);
+    if !path.is_file() { return Ok(()); }
+    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='calls')", [], |row| row.get(0))?;
+    if !exists { return Ok(()); }
+    let mut stmt = db.prepare("SELECT id, action FROM calls WHERE deployment=?1 AND state='pending' ORDER BY created_at, rowid")?;
+    let rows = stmt.query_map([&deployment.id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let actions: Value = serde_json::from_str(&deployment.actions)?;
+    for (id, name) in rows {
+        let raw = actions["actions"].get(&name).cloned();
+        let valid = raw.and_then(|raw| serde_json::from_value::<ActionDefinition>(raw).ok())
+            .and_then(|definition| check_kind(&name, &definition).ok().flatten()).is_some();
+        anyhow::ensure!(valid, "Cannot convert pending legacy Call {id}: its accepted declaration is missing from the current release. Keep the source row and use the previous release to drain this job, then repeat queue migration.");
+    }
+    Ok(())
+}
+
+pub(crate) fn migrate_legacy_calls_explicit(data_root: &Path, deployment: &Deployment) -> Result<usize> {
+    preflight_legacy_calls(data_root, deployment)?;
+    migrate_legacy_calls(data_root, std::slice::from_ref(deployment))
+}
+
+#[cfg(test)]
+fn connection(data_root: &Path) -> Result<Connection> {
+    app_connection(data_root, "caller")
 }
 
 fn per_minute() -> i64 {
@@ -688,11 +854,6 @@ fn per_minute() -> i64 {
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| (1..=10_000).contains(value))
         .unwrap_or(DEFAULT_PER_MINUTE)
-}
-
-fn wake() -> &'static tokio::sync::Notify {
-    static WAKE: OnceLock<tokio::sync::Notify> = OnceLock::new();
-    WAKE.get_or_init(tokio::sync::Notify::new)
 }
 
 fn now() -> i64 {
@@ -743,16 +904,32 @@ pub enum SyntheticSubmission {
     Unchanged,
 }
 
+enum SyntheticProgress {
+    RetryScheduled,
+    Completed { attempt: i64 },
+}
+
+struct RecordedSyntheticResponse {
+    deployment: String,
+    input: Value,
+    continuation: Option<Value>,
+    revision: String,
+    progress: SyntheticProgress,
+}
+
 /// Returns test-mode calls that are waiting for an operator response.
 pub async fn list_captured_requests(state: &AppState) -> Result<Vec<Value>> {
     anyhow::ensure!(state.execution_mode.is_test(), "Captured calls require test execution mode.");
-    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(Vec::new()); }
     let data_root = state.data_root.clone();
+    let app_ids = state.deployments.read().await.values().map(|deployment| deployment.id.clone()).collect::<Vec<_>>();
     tokio::task::spawn_blocking(move || {
-        let db = connection(&data_root)?;
+        let mut results = Vec::new();
+        for app_id in app_ids {
+        if !crate::layout::database(&data_root, &app_id).try_exists()? { continue; }
+        let db = app_connection(&data_root, &app_id)?;
         let mut query = db.prepare(
             "SELECT id, deployment, action, input, method, url, request_body, request_headers, attempts, created_at, updated_at
-             FROM calls WHERE execution_mode = 'test' AND state = 'pending' AND error = 'awaiting-response'
+             FROM __konae_calls WHERE execution_mode = 'test' AND state = 'pending' AND error = 'awaiting-response'
              ORDER BY created_at, rowid",
         )?;
         let rows = query.query_map([], |row| {
@@ -765,7 +942,9 @@ pub async fn list_captured_requests(state: &AppState) -> Result<Vec<Value>> {
                 "attempts": row.get::<_, i64>(8)?, "responseNumber": row.get::<_, i64>(8)? + 1, "createdAt": row.get::<_, i64>(9)?, "awaitingAt": row.get::<_, i64>(10)?,
             }))
         })?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        results.extend(rows);
+        }
+        Ok(results)
     }).await?
 }
 
@@ -777,15 +956,15 @@ pub async fn list_captured_requests_for_app(state: &AppState, app_id: &str) -> R
 /// Reads pending test calls and continuations whose outcome is uncertain.
 pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<Vec<Value>> {
     anyhow::ensure!(state.execution_mode.is_test(), "Test call readback requires test execution mode.");
-    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(Vec::new()); }
     let root = state.data_root.clone();
     let app_id = app_id.to_owned();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
-        let db = connection(&root)?;
+        if !crate::layout::database(&root, &app_id).try_exists()? { return Ok(Vec::new()); }
+        let db = app_connection(&root, &app_id)?;
         let mut query = db.prepare(
             "SELECT id, action, state, attempts, next_attempt_at, error, method, url, request_body, request_headers,
                     created_at, updated_at, then_action, then_state, then_message, input
-             FROM calls WHERE deployment = ?1 AND execution_mode = 'test'
+             FROM __konae_calls WHERE deployment = ?1 AND execution_mode = 'test'
                AND (state = 'pending' OR then_state IN ('processing', 'interrupted'))
              ORDER BY created_at, rowid",
         )?;
@@ -821,14 +1000,14 @@ pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<V
 /// Completed rows remain as history, and this function never runs a `then`.
 pub async fn retire_after_local_reset(state: &AppState, app_id: &str) -> Result<usize> {
     anyhow::ensure!(state.execution_mode.is_test(), "Call retirement requires test execution mode.");
-    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(0); }
     let data_root = state.data_root.clone();
     let app_id = app_id.to_owned();
     tokio::task::spawn_blocking(move || -> Result<usize> {
-        let mut db = connection(&data_root)?;
+        if !crate::layout::database(&data_root, &app_id).try_exists()? { return Ok(0); }
+        let mut db = app_connection(&data_root, &app_id)?;
         let tx = db.transaction()?;
         let changed = tx.execute(
-            "UPDATE calls SET state = 'failed', error = 'local-reset', leased_until = NULL, response_body = NULL,
+            "UPDATE __konae_calls SET state = 'failed', error = 'local-reset', leased_until = NULL, response_body = NULL,
                then_state = CASE WHEN then_action IS NOT NULL AND then_state = 'processing' THEN 'skipped' ELSE then_state END,
                then_message = CASE WHEN then_action IS NOT NULL AND then_state = 'processing' THEN 'Local data was reset.' ELSE then_message END,
                updated_at = ?1
@@ -867,32 +1046,38 @@ pub async fn submit_synthetic_response(state: &AppState, app_id: &str, id: &str,
     let id_for_query = id.clone();
     let error_for_then = error.clone();
     let body_for_then = body.clone();
-    let response = tokio::task::spawn_blocking(move || -> Result<Option<(String, String, Value, i64)>> {
-        let db = connection(&data_root)?;
+    let response = tokio::task::spawn_blocking(move || -> Result<Option<RecordedSyntheticResponse>> {
+        let db = app_connection(&data_root, &app_id)?;
         let tx = db.unchecked_transaction()?;
         let row = tx.query_row(
-            "SELECT deployment, action, input, attempts, method, url FROM calls
+            "SELECT deployment, action, input, attempts, method, url, continuation, release FROM __konae_calls
              WHERE id = ?1 AND deployment = ?2 AND execution_mode = 'test' AND state = 'pending' AND error = 'awaiting-response'",
-            rusqlite::params![id_for_query, app_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?)),
+            rusqlite::params![id_for_query, app_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?, row.get::<_, Option<String>>(6)?, row.get::<_, String>(7)?)),
         ).optional()?;
-        let Some((deployment, action, input, attempts, method, url)) = row else { return Ok(None) };
+        let Some((deployment, _action, input, attempts, method, url, continuation, revision)) = row else { return Ok(None) };
         if attempts + 1 != response_number { return Ok(None); }
         let attempt = Attempt { method, url, status, error: error.as_deref().map(|s| match s { "network" => "network", "timeout" => "timeout", "dns-failed" => "dns-failed", "address-refused" => "address-refused", "editor-host" => "editor-host", "app-not-found" => "app-not-found", "secret-unset" => "secret-unset", "secret-unavailable" => "secret-unavailable", _ => "answer-too-large" }), answer: body.clone() };
         let next_attempt = attempts + 1;
         if !attempt.ok() && attempt.retryable(retryable) && next_attempt < MAX_ATTEMPTS {
             let backoff = FIRST_BACKOFF_MS << (next_attempt - 1).clamp(0, 10);
             let changed = tx.execute(
-                "UPDATE calls SET attempts = ?1, next_attempt_at = ?2, error = ?3, status = ?4, answer = ?5, response_body = ?6, updated_at = ?7
+                "UPDATE __konae_calls SET attempts = ?1, next_attempt_at = ?2, error = ?3, status = ?4, answer = ?5, response_body = ?6, updated_at = ?7
                  WHERE id = ?8 AND deployment = ?9 AND state = 'pending' AND execution_mode = 'test' AND error = 'awaiting-response'",
             rusqlite::params![next_attempt, now() + backoff, attempt.error, attempt.status, attempt.excerpt(), body.clone(), now(), id_for_query, app_id],
             )?;
             if changed != 1 { return Ok(None); }
             tx.commit()?;
-            return Ok(Some((deployment, action, serde_json::from_str(&input).unwrap_or(json!({})), next_attempt)));
+            return Ok(Some(RecordedSyntheticResponse {
+                deployment,
+                input: serde_json::from_str(&input).unwrap_or(json!({})),
+                continuation: continuation.and_then(|value| serde_json::from_str(&value).ok()),
+                revision,
+                progress: SyntheticProgress::RetryScheduled,
+            }));
         }
         let final_state = if attempt.ok() { "delivered" } else { "failed" };
         let changed = tx.execute(
-            "UPDATE calls SET state = ?1, attempts = ?2, leased_until = CASE WHEN then_action IS NULL THEN NULL ELSE ?7 END,
+            "UPDATE __konae_calls SET state = ?1, attempts = ?2, leased_until = CASE WHEN then_action IS NULL THEN NULL ELSE ?7 END,
                status = ?3, error = ?4, answer = ?5, response_body = ?6,
                then_state = CASE WHEN then_action IS NULL THEN NULL ELSE 'processing' END, updated_at = ?8
              WHERE id = ?9 AND deployment = ?10 AND state = 'pending' AND execution_mode = 'test' AND error = 'awaiting-response'",
@@ -900,25 +1085,36 @@ pub async fn submit_synthetic_response(state: &AppState, app_id: &str, id: &str,
         )?;
         if changed != 1 { return Ok(None); }
         tx.commit()?;
-        Ok(Some((deployment, action, serde_json::from_str(&input).unwrap_or(json!({})), -1)))
+        Ok(Some(RecordedSyntheticResponse {
+            deployment,
+            input: serde_json::from_str(&input).unwrap_or(json!({})),
+            continuation: continuation.and_then(|value| serde_json::from_str(&value).ok()),
+            revision,
+            progress: SyntheticProgress::Completed { attempt: next_attempt },
+        }))
     }).await??;
-    let Some((deployment_id, action_name, input, marker)) = response else { return Ok(SyntheticSubmission::Unchanged) };
-    if marker >= 0 { return Ok(SyntheticSubmission::Accepted) }
+    let Some(RecordedSyntheticResponse { deployment: deployment_id, input, continuation, revision, progress }) = response else { return Ok(SyntheticSubmission::Unchanged) };
+    let SyntheticProgress::Completed { attempt: attempt_number } = progress else { return Ok(SyntheticSubmission::Accepted) };
     let deployment = state.deployments.read().await.values().find(|row| row.id == deployment_id).cloned();
-    if let Some(deployment) = deployment {
-        let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
-        if let Some(call) = program.actions.get(&action_name).and_then(|definition| check_kind(&action_name, definition).ok().flatten()) {
-            if let Some(then) = &call.then {
+    if let Some(mut deployment) = deployment {
+        deployment.artifact_version = revision.clone();
+        if let Some(continuation) = continuation {
+            let action = continuation["action"].as_str().unwrap_or_default().to_owned();
+            let definition: ActionDefinition = serde_json::from_value(continuation["definition"].clone())?;
+            let program = ActionProgram { version: 1, actions: [(action.clone(), definition)].into_iter().collect() };
+            if let Ok(inputs) = serde_json::from_value::<Vec<(String, String)>>(continuation["inputs"].clone()) {
                 let attempt = Attempt { method: None, url: None, status, error: error_for_then.as_deref().map(|s| match s { "network" => "network", "timeout" => "timeout", "dns-failed" => "dns-failed", "address-refused" => "address-refused", "editor-host" => "editor-host", "app-not-found" => "app-not-found", "secret-unset" => "secret-unset", "secret-unavailable" => "secret-unavailable", _ => "answer-too-large" }), answer: body_for_then };
-                let (then_state, then_message) = run_then(state, &deployment, &program, then, &input, &attempt).await;
-                let root = state.data_root.clone();
-                let call_id = id;
-                let action = then.action.clone();
-                let message = then_message;
-                tokio::task::spawn_blocking(move || -> Result<()> {
-                    connection(&root)?.execute("UPDATE calls SET then_action = ?1, then_state = ?2, then_message = ?3, updated_at = ?4 WHERE id = ?5 AND then_state = 'processing'", rusqlite::params![action, then_state, message, now(), call_id])?;
-                    Ok(())
-                }).await??;
+                let then = Then { action: action.clone(), inputs };
+                run_then(
+                    state,
+                    &deployment,
+                    &program,
+                    &then,
+                    &input,
+                    &attempt,
+                    ThenAttempt { call_id: &id, release: &revision, number: attempt_number },
+                )
+                .await?;
             }
         }
     }
@@ -933,8 +1129,25 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
 
 pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment, name: &str, input: &Value, traceparent: Option<&str>) -> Response {
     if let Err(refused) = crate::modules::require_on(&deployment.modules, "calls") { return crate::refusal_error(&refused); }
+    let source: Value = match serde_json::from_str(&deployment.actions) {
+        Ok(source) => source,
+        Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
+    };
+    let program: ActionProgram = match serde_json::from_value(source.clone()) {
+        Ok(program) => program,
+        Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
+    };
+    let Some(definition) = program.actions.get(name) else { return error(StatusCode::BAD_REQUEST, "Call action is not declared.") };
+    let Some(call) = check_kind(name, definition).ok().flatten() else { return error(StatusCode::BAD_REQUEST, "Call action declaration is invalid.") };
+    let declaration = source["actions"][name].clone();
+    let continuation = call.then.as_ref().and_then(|then| source["actions"].get(&then.action).map(|definition| json!({
+        "action": then.action,
+        "inputs": then.inputs,
+        "definition": definition,
+    })));
     let data_root = state.data_root.clone();
     let deployment_id = deployment.id.clone();
+    let revision = deployment.artifact_version.clone();
     let action = name.to_owned();
     let input = input.clone();
     let limit = per_minute();
@@ -950,34 +1163,41 @@ pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment,
         })
     } else { None };
     let queued = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
-        let db = connection(&data_root)?;
+        let mut db = app_connection(&data_root, &deployment_id)?;
+        let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let at = now();
-        let recent: i64 = db.query_row(
-            "SELECT COUNT(*) FROM calls WHERE deployment = ?1 AND created_at > ?2",
+        let recent: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM __konae_calls WHERE deployment = ?1 AND created_at > ?2",
             rusqlite::params![deployment_id, at - 60_000],
             |row| row.get(0),
         )?;
         if recent >= limit {
             return Ok(None);
         }
-        let id = format!("call_{}", Uuid::new_v4().simple());
-        db.execute(
-            "INSERT INTO calls (id, deployment, action, input, state, attempts, next_attempt_at, execution_mode, traceparent, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?5, ?5)",
-            rusqlite::params![id, deployment_id, action, input.to_string(), at, execution_mode, traceparent],
+        let pending: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM __konae_calls WHERE deployment=?1 AND state='pending'",
+            [&deployment_id], |row| row.get(0),
         )?;
-        db.execute(
-            "DELETE FROM calls WHERE deployment = ?1 AND state <> 'pending' AND id NOT IN
-               (SELECT id FROM calls WHERE deployment = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2)",
+        if pending >= MAX_PENDING_PER_APP { return Ok(None); }
+        let id = format!("call_{}", Uuid::new_v4().simple());
+        transaction.execute(
+            "INSERT INTO __konae_calls (id, deployment, action, release, declaration, continuation, input, state, attempts, next_attempt_at, execution_mode, traceparent, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, ?8, ?9, ?10, ?8, ?8)",
+            rusqlite::params![id, deployment_id, action, revision, declaration.to_string(), continuation.map(|value| value.to_string()), input.to_string(), at, execution_mode, traceparent],
+        )?;
+        transaction.execute(
+            "DELETE FROM __konae_calls WHERE deployment = ?1 AND state <> 'pending' AND COALESCE(then_state, '') NOT IN ('pending', 'processing') AND id NOT IN
+               (SELECT id FROM __konae_calls WHERE deployment = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2)",
             rusqlite::params![deployment_id, KEEP_PER_DEPLOYMENT],
         )?;
+        transaction.commit()?;
         Ok(Some(id))
     })
     .await;
     match queued {
         Ok(Ok(Some(id))) => {
             crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Call(name.to_owned()));
-            wake().notify_one();
+            state.dispatcher.wake(crate::execution::WorkResource::Calls, deployment.id.clone()).await;
             Json(json!({"result": {"callId": id, "queued": true}})).into_response()
         }
         Ok(Ok(None)) => error(StatusCode::TOO_MANY_REQUESTS, RATE_LIMITED),
@@ -990,35 +1210,99 @@ struct Claimed {
     id: String,
     deployment: String,
     action: String,
+    release: String,
+    declaration: Value,
+    continuation: Option<Value>,
     input: Value,
     attempts: i64,
+    stored_response: Option<StoredResponse>,
     traceparent: Option<String>,
 }
 
-fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
-    let db = connection(data_root)?;
+#[derive(Clone)]
+struct StoredResponse {
+    status: Option<u16>,
+    error: Option<&'static str>,
+    answer: Vec<u8>,
+}
+
+fn claim(data_root: &Path, app_id: &str) -> Result<Vec<Claimed>> {
+    let mut db = app_connection(data_root, app_id)?;
+    let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let at = now();
-    let mut statement = db.prepare(
-        "UPDATE calls SET leased_until = ?1, attempts = attempts + 1, updated_at = ?2
-         WHERE id IN (
-           SELECT id FROM calls WHERE state = 'pending' AND execution_mode = 'live' AND next_attempt_at <= ?2
-             AND (leased_until IS NULL OR leased_until < ?2)
-           ORDER BY next_attempt_at LIMIT ?3)
-         RETURNING id, deployment, action, input, attempts, traceparent",
+    let mut statement = transaction.prepare(
+        "UPDATE __konae_calls SET leased_until = ?1, attempts = attempts + 1, updated_at = ?2
+         WHERE id = (SELECT id FROM __konae_calls WHERE state = 'pending' AND execution_mode = 'live'
+           AND next_attempt_at <= ?2 AND (leased_until IS NULL OR leased_until < ?2)
+           ORDER BY next_attempt_at, created_at, rowid LIMIT 1)
+         RETURNING id, deployment, action, release, declaration, continuation, input, attempts, traceparent",
     )?;
     let rows = statement
-        .query_map(rusqlite::params![at + LEASE_MS, at, BATCH], |row| {
+        .query_map(rusqlite::params![at + LEASE_MS, at], |row| {
             Ok(Claimed {
                 id: row.get(0)?,
                 deployment: row.get(1)?,
                 action: row.get(2)?,
-                input: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or(json!({})),
-                attempts: row.get(4)?,
-                traceparent: row.get(5)?,
+                release: row.get(3)?,
+                declaration: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or(Value::Null),
+                continuation: row.get::<_, Option<String>>(5)?.and_then(|value| serde_json::from_str(&value).ok()),
+                input: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or(json!({})),
+                attempts: row.get(7)?,
+                stored_response: None,
+                traceparent: row.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    transaction.commit()?;
     Ok(rows)
+}
+
+fn claim_recovery(data_root: &Path, app_id: &str) -> Result<Option<Claimed>> {
+    let mut db = app_connection(data_root, app_id)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let at = now();
+    let row = tx.query_row(
+        "SELECT id, deployment, action, release, declaration, continuation, input, attempts, status, error, response_body, traceparent
+         FROM __konae_calls WHERE state IN ('delivered','failed') AND then_state='processing'
+           AND (leased_until IS NULL OR leased_until < ?1) ORDER BY updated_at, created_at LIMIT 1",
+        [at], |row| Ok((
+            row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?, row.get::<_, Option<String>>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?,
+            row.get::<_, Option<i64>>(8)?, row.get::<_, Option<String>>(9)?, row.get::<_, Option<Vec<u8>>>(10)?, row.get::<_, Option<String>>(11)?,
+        )),
+    ).optional()?;
+    let Some((id, deployment, action, release, declaration, continuation, input, attempts, status, error, answer, traceparent)) = row else {
+        tx.commit()?;
+        return Ok(None);
+    };
+    let changed = tx.execute(
+        "UPDATE __konae_calls SET leased_until=?1, updated_at=?2 WHERE id=?3 AND then_state='processing'
+           AND (leased_until IS NULL OR leased_until < ?2)",
+        rusqlite::params![at + LEASE_MS, at, id],
+    )?;
+    if changed != 1 { tx.commit()?; return Ok(None); }
+    tx.commit()?;
+    Ok(Some(Claimed {
+        id, deployment, action, release,
+        declaration: serde_json::from_str(&declaration).unwrap_or(Value::Null),
+        continuation: continuation.and_then(|value| serde_json::from_str(&value).ok()),
+        input: serde_json::from_str(&input).unwrap_or(json!({})), attempts,
+        traceparent,
+        stored_response: Some(StoredResponse {
+            status: status.and_then(|value| u16::try_from(value).ok()),
+            error: error.as_deref().and_then(stored_error), answer: answer.unwrap_or_default(),
+        }),
+    }))
+}
+
+fn stored_error(value: &str) -> Option<&'static str> {
+    Some(match value {
+        "network" => "network", "timeout" => "timeout", "dns-failed" => "dns-failed",
+        "address-refused" => "address-refused", "editor-host" => "editor-host", "app-not-found" => "app-not-found",
+        "secret-unset" => "secret-unset", "secret-unavailable" => "secret-unavailable", "answer-too-large" => "answer-too-large",
+        "invalid-header" => "invalid-header", "http-outside" => "http-outside", _ => return None,
+    })
 }
 
 #[derive(Default)]
@@ -1050,12 +1334,12 @@ impl Attempt {
 }
 
 /// Puts a claimed call back for a later attempt. `counted` keeps the attempt.
-fn release(data_root: &Path, id: &str, delay_ms: i64, counted: bool, attempt: &Attempt) -> Result<()> {
+fn release(data_root: &Path, app_id: &str, id: &str, attempt_number: i64, delay_ms: i64, counted: bool, attempt: &Attempt) -> Result<()> {
     let at = now();
-    connection(data_root)?.execute(
-        "UPDATE calls SET leased_until = NULL, next_attempt_at = ?1, updated_at = ?2, attempts = attempts - ?3,
+    app_connection(data_root, app_id)?.execute(
+        "UPDATE __konae_calls SET leased_until = NULL, next_attempt_at = ?1, updated_at = ?2, attempts = attempts - ?3,
            method = COALESCE(?4, method), url = COALESCE(?5, url), status = ?6, error = ?7, answer = ?8
-         WHERE id = ?9 AND state = 'pending'",
+         WHERE id = ?9 AND state = 'pending' AND attempts = ?10 AND leased_until >= ?2",
         rusqlite::params![
             at + delay_ms,
             at,
@@ -1065,22 +1349,23 @@ fn release(data_root: &Path, id: &str, delay_ms: i64, counted: bool, attempt: &A
             attempt.status,
             attempt.error,
             attempt.excerpt(),
-            id
+            id,
+            attempt_number
         ],
     )?;
     Ok(())
 }
 
-fn finish(data_root: &Path, id: &str, attempt: &Attempt, then: Option<(&str, &str, Option<&str>)>) -> Result<()> {
+fn finish(data_root: &Path, app_id: &str, id: &str, attempt_number: i64, attempt: &Attempt, then: Option<(&str, &str, Option<&str>)>) -> Result<()> {
     let state = if attempt.ok() { "delivered" } else { "failed" };
     let (then_action, then_state, then_message) = match then {
         Some((action, state, message)) => (Some(action), Some(state), message),
         None => (None, None, None),
     };
-    connection(data_root)?.execute(
-        "UPDATE calls SET state = ?1, leased_until = NULL, updated_at = ?2, method = COALESCE(?3, method),
+    app_connection(data_root, app_id)?.execute(
+        "UPDATE __konae_calls SET state = ?1, leased_until = NULL, updated_at = ?2, method = COALESCE(?3, method),
            url = COALESCE(?4, url), status = ?5, error = ?6, answer = ?7, then_action = ?8, then_state = ?9, then_message = ?10
-         WHERE id = ?11 AND state = 'pending'",
+         WHERE id = ?11 AND state = 'pending' AND attempts = ?12 AND leased_until >= ?2",
         rusqlite::params![
             state,
             now(),
@@ -1092,23 +1377,71 @@ fn finish(data_root: &Path, id: &str, attempt: &Attempt, then: Option<(&str, &st
             then_action,
             then_state,
             then_message,
-            id
+            id,
+            attempt_number
         ],
     )?;
     Ok(())
 }
 
+fn store_response(data_root: &Path, job: &Claimed, attempt: &Attempt) -> Result<bool> {
+    let state = if attempt.ok() { "delivered" } else { "failed" };
+    let changed = app_connection(data_root, &job.deployment)?.execute(
+        "UPDATE __konae_calls SET state=?1, method=?2, url=?3, status=?4, error=?5, answer=?6, response_body=?7,
+           then_action=COALESCE(then_action, ?8), then_state='processing', leased_until=?9, updated_at=?10
+         WHERE id=?11 AND deployment=?12 AND release=?13 AND state='pending' AND attempts=?14 AND leased_until>=?10",
+        rusqlite::params![state, attempt.method, attempt.url, attempt.status, attempt.error, attempt.excerpt(), attempt.answer,
+            job.continuation.as_ref().and_then(|value| value["action"].as_str()), now() + LEASE_MS, now(), job.id, job.deployment, job.release, job.attempts],
+    )?;
+    Ok(changed == 1)
+}
+
 /// Sends the calls that are due. Returns how many it looked at.
+#[cfg(any(test, feature = "testing"))]
 pub async fn run_once(state: &AppState) -> Result<usize> {
-    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(0); }
+    let mut deployments = state.deployments.read().await.values().cloned().collect::<Vec<_>>();
+    deployments.sort_by(|left, right| left.id.cmp(&right.id));
+    if deployments.is_empty() { return Ok(0); }
     if state.execution_mode.is_test() {
+        for deployment in &deployments {
+            let root = state.data_root.clone();
+            let app_id = deployment.id.clone();
+            if let Some(job) = tokio::task::spawn_blocking(move || claim_recovery(&root, &app_id)).await?? {
+                process(state, job).await?;
+            }
+        }
         mark_interrupted_test_continuations(state).await?;
         let data_root = state.data_root.clone();
-        let deployments = state.deployments.read().await.clone();
-        return tokio::task::spawn_blocking(move || capture_test_requests(&data_root, &deployments)).await?;
+        return tokio::task::spawn_blocking(move || {
+            deployments.iter().try_fold(0usize, |total, deployment| Ok::<_, anyhow::Error>(total + capture_test_requests(&data_root, deployment)?))
+        }).await?;
     }
     let data_root = state.data_root.clone();
-    let claimed = tokio::task::spawn_blocking(move || claim(&data_root)).await??;
+    static LAST_APP: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
+    let cursor = LAST_APP.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap().clone();
+    let start = cursor.as_ref().and_then(|last| deployments.iter().position(|deployment| &deployment.id == last)).map_or(0, |index| (index + 1) % deployments.len());
+    deployments.rotate_left(start);
+    let mut claimed = Vec::new();
+    let mut last_app = cursor;
+    for deployment in deployments {
+        if claimed.len() >= BATCH as usize { break; }
+        let app_id = deployment.id.clone();
+        let root = data_root.clone();
+        let mut jobs = tokio::task::spawn_blocking(move || {
+            let mut claimed = claim(&root, &app_id)?;
+            if claimed.is_empty()
+                && let Some(recovery) = claim_recovery(&root, &app_id)?
+            {
+                claimed.push(recovery);
+            }
+            Ok::<_, anyhow::Error>(claimed)
+        }).await??;
+        if let Some(job) = jobs.pop() {
+            last_app = Some(deployment.id);
+            claimed.push(job);
+        }
+    }
+    *LAST_APP.get().expect("initialized").lock().unwrap() = last_app;
     let count = claimed.len();
     let mut tasks = tokio::task::JoinSet::new();
     for job in claimed {
@@ -1128,25 +1461,32 @@ pub async fn run_once(state: &AppState) -> Result<usize> {
     Ok(count)
 }
 
+#[cfg(any(test, feature = "testing"))]
 async fn mark_interrupted_test_continuations(state: &AppState) -> Result<()> {
     let root = state.data_root.clone();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let db = connection(&root)?;
+        let app_ids = std::fs::read_dir(crate::layout::apps(&root))?.filter_map(|entry| entry.ok().map(|entry| entry.file_name().to_string_lossy().into_owned())).collect::<Vec<_>>();
+        for app_id in app_ids {
+        let path = crate::layout::database(&root, &app_id);
+        if !path.exists() { continue; }
+        let db = app_connection(&root, &app_id)?;
         db.execute(
-            "UPDATE calls SET then_state = 'interrupted', then_message = 'The process stopped while the continuation outcome was unknown. Reset local data before retrying.', leased_until = NULL, updated_at = ?1
-             WHERE execution_mode = 'test' AND state IN ('delivered', 'failed') AND then_state = 'processing'
+            "UPDATE __konae_calls SET then_state = 'interrupted', then_message = 'The process stopped while the continuation outcome was unknown. Reset local data before retrying.', leased_until = NULL, updated_at = ?1
+             WHERE execution_mode = 'test' AND state IN ('delivered', 'failed') AND then_state = 'processing' AND response_body IS NULL
                AND (leased_until IS NULL OR leased_until < ?1)",
             [now()],
         )?;
+        }
         Ok(())
     }).await??;
     Ok(())
 }
 
-fn capture_test_requests(data_root: &Path, deployments: &HashMap<String, Deployment>) -> Result<usize> {
-    let db = connection(data_root)?;
+fn capture_test_requests(data_root: &Path, deployment_row: &Deployment) -> Result<usize> {
+    let app_id = &deployment_row.id;
+    let db = app_connection(data_root, app_id)?;
     let mut statement = db.prepare(
-        "SELECT id, deployment, action, input FROM calls
+        "SELECT id, deployment, action, input, declaration FROM __konae_calls
          WHERE state = 'pending' AND execution_mode = 'test' AND next_attempt_at <= ?1
            AND (error IS NULL OR error <> 'awaiting-response')
          ORDER BY created_at LIMIT ?2",
@@ -1157,14 +1497,15 @@ fn capture_test_requests(data_root: &Path, deployments: &HashMap<String, Deploym
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
         ))
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut captured = 0;
-    for (id, deployment, action, input) in rows {
+    for (id, deployment, action, input, declaration) in rows {
         let input: Value = serde_json::from_str(&input).unwrap_or(json!({}));
-        let Some(deployment_row) = deployments.values().find(|row| row.id == deployment) else { continue };
-        let program: ActionProgram = serde_json::from_str(&deployment_row.actions)?;
-        let Some(call) = program.actions.get(&action).and_then(|definition| check_kind(&action, definition).ok().flatten()) else { continue };
+        if deployment != deployment_row.id { continue; }
+        let definition: ActionDefinition = serde_json::from_str(&declaration)?;
+        let Some(call) = check_kind(&action, &definition).ok().flatten() else { continue };
         let (url, body) = request_parts(&call, &input);
         let mut headers = Vec::new();
         if call.method != "GET" { headers.push(("content-type".to_owned(), "application/json".to_owned())); }
@@ -1175,7 +1516,7 @@ fn capture_test_requests(data_root: &Path, deployments: &HashMap<String, Deploym
         }).collect();
         let body_text = String::from_utf8_lossy(&body).into_owned();
         let changed = db.execute(
-            "UPDATE calls SET method = ?1, url = ?2, request_body = ?3, request_headers = ?4, then_action = ?5,
+            "UPDATE __konae_calls SET method = ?1, url = ?2, request_body = ?3, request_headers = ?4, then_action = ?5,
                error = 'awaiting-response', updated_at = ?6
              WHERE id = ?7 AND state = 'pending' AND execution_mode = 'test'
                AND (error IS NULL OR error <> 'awaiting-response')",
@@ -1186,22 +1527,114 @@ fn capture_test_requests(data_root: &Path, deployments: &HashMap<String, Deploym
     Ok(captured)
 }
 
-/// Runs the worker on its interval and whenever a call is queued. Sending
-/// happens on this task, never in a request handler.
+/// Runs one module handler per ready app. Sending happens here, never in a request handler.
 pub fn spawn_worker(state: AppState) {
     tokio::spawn(async move {
+        let apps = state.deployments.read().await.values().map(|deployment| deployment.id.clone()).collect::<Vec<_>>();
+        for app in apps {
+            state.dispatcher.wake(crate::execution::WorkResource::Calls, app).await;
+        }
+        let mut timers = crate::execution::AppTimers::default();
         loop {
-            let operation = state.copies.operations.read().await;
-            if let Err(error_value) = run_once(&state).await {
-                eprintln!("Call worker pass failed: {error_value}");
+            let app = match timers.next_deadline() {
+                Some(deadline) => tokio::select! {
+                    app = state.dispatcher.next(crate::execution::WorkResource::Calls) => app,
+                    _ = tokio::time::sleep_until(deadline.into()) => {
+                        for due in timers.take_due(std::time::Instant::now()) {
+                            state.dispatcher.wake(crate::execution::WorkResource::Calls, due).await;
+                        }
+                        continue;
+                    }
+                },
+                None => state.dispatcher.next(crate::execution::WorkResource::Calls).await,
+            };
+            timers.cancel(&app);
+            if !state.deployments.read().await.values().any(|deployment| deployment.id == app) {
+                timers.remove(&app);
+                continue;
             }
-            drop(operation);
-            tokio::select! {
-                _ = wake().notified() => {}
-                _ = tokio::time::sleep(WORKER_INTERVAL) => {}
+            if let Err(error_value) = run_app_once(&state, &app).await {
+                eprintln!("Call worker pass failed for {app}: {error_value}");
+                timers.schedule_retry(app, std::time::Instant::now());
+                continue;
+            }
+            match schedule_next_call(&state, &app).await {
+                Ok(Some(deadline)) => {
+                    timers.reset_retries(&app);
+                    timers.schedule(app, deadline);
+                }
+                Ok(None) => timers.reset_retries(&app),
+                Err(error_value) => {
+                    eprintln!("Call retry schedule failed for {app}: {error_value}");
+                    timers.schedule_retry(app, std::time::Instant::now());
+                }
             }
         }
     });
+}
+
+async fn schedule_next_call(state: &AppState, app: &str) -> Result<Option<std::time::Instant>> {
+    if crate::maintenance::pause(&state.data_root, app).is_some() {
+        return Ok(Some(std::time::Instant::now() + Duration::from_millis(PAUSE_WAIT_MS as u64)));
+    }
+    let root = state.data_root.clone();
+    let query_app = app.to_owned();
+    let due = tokio::task::spawn_blocking(move || -> Result<Option<i64>> {
+        if !crate::layout::database(&root, &query_app).is_file() { return Ok(None); }
+        app_connection(&root, &query_app)?.query_row(
+            "SELECT MIN(due_at) FROM (
+               SELECT CASE WHEN leased_until IS NOT NULL AND leased_until >= ?1 THEN leased_until + 1 ELSE next_attempt_at END AS due_at
+                 FROM __konae_calls WHERE state='pending' AND COALESCE(error,'') <> 'awaiting-response'
+               UNION ALL
+               SELECT CASE WHEN leased_until IS NOT NULL AND leased_until >= ?1 THEN leased_until + 1 ELSE ?1 END AS due_at
+                 FROM __konae_calls WHERE state IN ('delivered','failed') AND then_state='processing'
+             )",
+            [now()], |row| row.get::<_, Option<i64>>(0),
+        ).map_err(Into::into)
+    }).await??;
+    let Some(at) = due else { return Ok(None) };
+    let now = now();
+    if at <= now {
+        state.dispatcher.wake(crate::execution::WorkResource::Calls, app.to_owned()).await;
+        return Ok(None);
+    }
+    let delay = (at - now) as u64;
+    Ok(Some(std::time::Instant::now() + Duration::from_millis(delay)))
+}
+
+async fn run_app_once(state: &AppState, app_id: &str) -> Result<usize> {
+    let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == app_id).cloned() else { return Ok(0) };
+    let claim_lock = crate::database_lock(state, app_id).await;
+    if crate::maintenance::pause(&state.data_root, app_id).is_some() { return Ok(0); }
+    if state.execution_mode.is_test() {
+        let root = state.data_root.clone();
+        let id = app_id.to_owned();
+        let job = tokio::task::spawn_blocking(move || claim_recovery(&root, &id)).await??;
+        drop(claim_lock);
+        if let Some(job) = job {
+            process(state, job).await?;
+        }
+        let root = state.data_root.clone();
+        let app = deployment.clone();
+        return tokio::task::spawn_blocking(move || capture_test_requests(&root, &app)).await?;
+    }
+    let root = state.data_root.clone();
+    let id = app_id.to_owned();
+    let job = tokio::task::spawn_blocking(move || {
+        let mut claimed = claim(&root, &id)?;
+        if claimed.is_empty()
+            && let Some(recovery) = claim_recovery(&root, &id)?
+        {
+            claimed.push(recovery);
+        }
+        Ok::<_, anyhow::Error>(claimed.pop())
+    }).await??;
+    drop(claim_lock);
+    let Some(job) = job else { return Ok(0) };
+    let pending = crate::copies::Pending::begin(&state.data_root, &format!("{app_id}/{} job {}", job.action, job.id), "delivering a call and committing its continuation")?;
+    crate::usage::confirmed_signals(process(state, job)).await??;
+    pending.finish()?;
+    Ok(1)
 }
 
 /// Resolves one declared body or header value from the call's inputs.
@@ -1327,48 +1760,63 @@ fn caller_address(deployment_id: &str) -> IpAddr {
 async fn process(state: &AppState, job: Claimed) -> Result<()> {
     let data_root = state.data_root.clone();
     let deployment = state.deployments.read().await.values().find(|deployment| deployment.id == job.deployment).cloned();
-    let Some(deployment) = deployment else {
+    let Some(mut deployment) = deployment else {
         let attempt = Attempt { error: Some("app-gone"), ..Default::default() };
-        return finish(&data_root, &job.id, &attempt, None);
+        return finish(&data_root, &job.deployment, &job.id, job.attempts, &attempt, None);
     };
-    if crate::modules::require_on(&deployment.modules, "calls").is_err() {
-        let attempt = Attempt { error: Some("module.off"), ..Default::default() };
-        finish(&data_root, &job.id, &attempt, None)?;
-        return Ok(());
-    }
+    deployment.artifact_version = job.release.clone();
     if crate::maintenance::pause(&data_root, &deployment.id).is_some() {
-        return release(&data_root, &job.id, PAUSE_WAIT_MS, false, &Attempt::default());
+        return release(&data_root, &job.deployment, &job.id, job.attempts, PAUSE_WAIT_MS, false, &Attempt::default());
     }
-    let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
-    let call = program.actions.get(&job.action).and_then(|action| check_kind(&job.action, action).ok().flatten());
+    let definition: ActionDefinition = serde_json::from_value(job.declaration.clone())?;
+    let call = check_kind(&job.action, &definition).ok().flatten();
     let Some(call) = call else {
         let attempt = Attempt { error: Some("action-gone"), ..Default::default() };
-        return finish(&data_root, &job.id, &attempt, None);
+        return finish(&data_root, &job.deployment, &job.id, job.attempts, &attempt, None);
     };
     let (url, body) = request_parts(&call, &job.input);
-    let extra_headers = request_headers(&call, &job.input);
-    let mut attempt = Attempt { method: Some(call.method.clone()), url: Some(url.to_string()), ..Default::default() };
-    let mut retry = false;
-    match send(state, &deployment, &call, &url, &body, &extra_headers, job.traceparent.as_deref()).await {
-        Ok((status, answer)) => {
-            attempt.status = Some(status);
-            attempt.answer = answer;
+    let attempt = if let Some(stored) = &job.stored_response {
+        Attempt { method: Some(call.method.clone()), url: Some(url.to_string()), status: stored.status, error: stored.error, answer: stored.answer.clone() }
+    } else {
+        let extra_headers = request_headers(&call, &job.input);
+        let mut attempt = Attempt { method: Some(call.method.clone()), url: Some(url.to_string()), ..Default::default() };
+        let mut retry = false;
+        match send(state, &deployment, &call, &url, &body, &extra_headers, job.traceparent.as_deref()).await {
+            Ok((status, answer)) => { attempt.status = Some(status); attempt.answer = answer; }
+            Err((kind, retryable)) => { attempt.error = Some(kind); retry = retryable; }
         }
-        Err((kind, retryable)) => {
-            attempt.error = Some(kind);
-            retry = retryable;
+        if !attempt.ok() && attempt.retryable(retry) && job.attempts < MAX_ATTEMPTS {
+            let backoff = FIRST_BACKOFF_MS << (job.attempts - 1).clamp(0, 10);
+            return release(&data_root, &job.deployment, &job.id, job.attempts, backoff, true, &attempt);
         }
-    }
-    if !attempt.ok() && attempt.retryable(retry) && job.attempts < MAX_ATTEMPTS {
-        let backoff = FIRST_BACKOFF_MS << (job.attempts - 1).clamp(0, 10);
-        return release(&data_root, &job.id, backoff, true, &attempt);
-    }
-    let then = match &call.then {
-        Some(then) => Some((then.action.clone(), run_then(state, &deployment, &program, then, &job.input, &attempt).await)),
-        None => None,
+        if call.then.is_some() && job.continuation.is_some()
+            && !store_response(&data_root, &job, &attempt)?
+        {
+            return Ok(());
+        }
+        attempt
+    };
+    let then = match (&call.then, &job.continuation) {
+        (Some(then), Some(continuation)) => {
+            let continuation_definition: ActionDefinition = serde_json::from_value(continuation["definition"].clone())?;
+            let program = ActionProgram { version: 1, actions: [(then.action.clone(), continuation_definition)].into_iter().collect() };
+            run_then(
+                state,
+                &deployment,
+                &program,
+                then,
+                &job.input,
+                &attempt,
+                ThenAttempt { call_id: &job.id, release: &job.release, number: job.attempts },
+            )
+            .await?;
+            return Ok(());
+        },
+        (None, _) => None,
+        (Some(_), None) => Some((call.then.as_ref().unwrap().action.clone(), ("failed", Some(String::from("The accepted continuation declaration is missing."))))),
     };
     let then = then.as_ref().map(|(action, (state, message))| (action.as_str(), *state, message.as_deref()));
-    finish(&data_root, &job.id, &attempt, then)
+    finish(&data_root, &job.deployment, &job.id, job.attempts, &attempt, then)
 }
 
 async fn send(
@@ -1526,13 +1974,32 @@ async fn run_then(
     then: &Then,
     input: &Value,
     attempt: &Attempt,
-) -> (&'static str, Option<String>) {
+    identity: ThenAttempt<'_>,
+) -> Result<(&'static str, Option<String>)> {
     if let Err(refused) = crate::modules::require_on(&deployment.modules, "calls") {
-        return ("failed", Some(refused.message));
+        let message = refused.message;
+        persist_then_failure(state, deployment, identity, &then.action, "failed", &message).await?;
+        return Ok(("failed", Some(message)));
     }
     let Some(mutation) = program.actions.get(&then.action) else {
-        return ("failed", Some(format!("Action {} is not declared.", then.action)));
+        let message = format!("Action {} is not declared.", then.action);
+        persist_then_failure(state, deployment, identity, &then.action, "failed", &message).await?;
+        return Ok(("failed", Some(message)));
     };
+    let execution = crate::execution::Context::new(
+        deployment.id.clone(),
+        identity.release.to_owned(),
+        crate::execution::Actor::Job {
+            id: format!("call:{}", then.action),
+            authority: crate::execution::JobAuthority::CallContinuation,
+        },
+        [then.action.clone()],
+    );
+    if let Err(code) = execution.authorize_action(&then.action, &mutation.access) {
+        let message = format!("Continuation action is not authorized: {code}.");
+        persist_then_failure(state, deployment, identity, &then.action, "failed", &message).await?;
+        return Ok(("failed", Some(message)));
+    }
     let document = answer_document(input, attempt);
     let mut values = serde_json::Map::new();
     for (key, pointer) in &then.inputs {
@@ -1553,38 +2020,130 @@ async fn run_then(
     let values = Value::Object(values);
     let params = match resolve_bindings(mutation, &values, None) {
         Ok(params) => params,
-        Err(message) => return ("failed", Some(message)),
+        Err(message) => {
+            persist_then_failure(state, deployment, identity, &then.action, "failed", &message).await?;
+            return Ok(("failed", Some(message)));
+        },
     };
-    let result = {
+    let call_id = identity.call_id.to_owned();
+    let release = identity.release.to_owned();
+    let app_id = deployment.id.clone();
+    let path = database_path(state, &deployment.id);
+    let action = mutation.clone();
+    let notify_context = crate::notify::MutationContext {
+        app: deployment.id.clone(), release: identity.release.to_owned(), action: then.action.clone(),
+        input: values.clone(), account: None, actor_id: None, at: crate::now_ms(),
+    };
+    let operation = {
         let _guard = action_lock(state, &deployment.id, &mutation.kind).await;
-        run_action(database_path(state, &deployment.id), mutation, params).await
+        match state.guards.statement_permit(&deployment.id).await {
+            Ok(permit) => {
+                let parameters = params;
+                let call_name = then.action.clone();
+                let receipt_call_id = call_id.clone();
+                let receipt_app_id = app_id.clone();
+                let receipt_release = release.clone();
+                tokio::task::spawn_blocking(move || -> anyhow::Result<crate::Ran> {
+                    let _permit = permit;
+                    let mut connection = crate::app_db::open(&path)?;
+                    let internal_access = connection.kernel_effect_token();
+                    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    let ran = crate::actions::run_mutation_effects_on_connection(
+                        &transaction, &internal_access, &action, parameters, action.notify.as_ref().map(|_| notify_context),
+                    )?;
+                    if let crate::guard::Outcome::Refused(message) =
+                        crate::guard::outcome(&call_name, &action, &ran.answer)
+                    {
+                        return Err(GuardRefused(message).into());
+                    }
+                    let changed = crate::app_data::with_kernel_effect_access(&internal_access, || transaction.execute(
+                        "UPDATE __konae_calls SET then_action=?1, then_state='done', then_message=NULL, leased_until=NULL, updated_at=?2
+                         WHERE id=?3 AND deployment=?4 AND release=?5 AND attempts=?6 AND then_state='processing' AND leased_until>=?2",
+                        rusqlite::params![call_name, now(), receipt_call_id, receipt_app_id, receipt_release, identity.number],
+                    ))?;
+                    anyhow::ensure!(changed == 1, "The call attempt no longer owns its continuation.");
+                    transaction.commit()?;
+                    Ok(ran)
+                }).await
+            },
+            Err(_) => {
+                let message = "The continuation could not acquire an app and installation SQL slot.";
+                persist_then_failure(state, deployment, identity, &then.action, "failed", message).await?;
+                return Ok(("failed", Some(message.into())));
+            },
+        }
     };
-    match result {
-        Ok(ran) => match crate::guard::outcome(&then.action, mutation, &ran.answer) {
-            crate::guard::Outcome::Refused(message) => {
+    match operation {
+        Ok(Ok(ran)) => {
+            let outcome = crate::guard::outcome(&then.action, mutation, &ran.answer);
+            crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "ok");
+            crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Action(then.action.clone()));
+            if matches!(outcome, crate::guard::Outcome::Changed) {
+                crate::usage::signal(&state.data_root, &deployment.id, &then.action, mutation, &values, None);
+                if let Some(id) = ran.notify_intent.as_deref() { crate::notify::record_intent(state, deployment, id).await; }
+            }
+            Ok(("done", None))
+        }
+        Ok(Err(error_value)) => {
+            let state_name = continuation_error(&error_value);
+            let root = state.data_root.clone();
+            let app = app_id.clone();
+            let receipt_app_id = app.clone();
+            let id = call_id;
+            let action = then.action.clone();
+            let attempt = identity.number;
+            let saved = state_name.1.clone();
+            let revision = release.clone();
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let changed = app_connection(&root, &app)?.execute(
+                    "UPDATE __konae_calls SET then_action=?1, then_state=?2, then_message=?3, leased_until=NULL, updated_at=?4
+                     WHERE id=?5 AND deployment=?6 AND release=?7 AND attempts=?8 AND then_state='processing' AND leased_until>=?4",
+                    rusqlite::params![action, state_name.0, saved, now(), id, receipt_app_id, revision, attempt],
+                )?;
+                anyhow::ensure!(changed == 1, "The call attempt no longer owns its continuation.");
+                Ok(())
+            }).await??;
+            if state_name.0 == "refused" {
                 crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "refused");
                 crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Refused(then.action.clone()));
-                ("refused", Some(message))
+            } else {
+                crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "failed");
             }
-            outcome => {
-                crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "ok");
-                crate::usage::count(&state.data_root, &deployment.id, crate::usage::Operation::Action(then.action.clone()));
-                if matches!(outcome, crate::guard::Outcome::Changed) {
-                    crate::usage::signal(&state.data_root, &deployment.id, &then.action, mutation, &values, None);
-                    crate::notify::record(
-                        state, deployment, &then.action, mutation, &values,
-                        crate::notify::Caller { account: None, actor_id: None },
-                        ran.changed(crate::now_ms()),
-                    ).await;
-                }
-                ("done", None)
-            }
-        },
+            Ok((state_name.0, Some(state_name.1)))
+        }
         Err(error_value) => {
-            crate::usage::execution(&state.data_root, &deployment.id, &then.action, "continuation", "failed");
-            ("failed", Some(error_value.to_string()))
+            let message = error_value.to_string();
+            persist_then_failure(state, deployment, identity, &then.action, "failed", &message).await?;
+            Ok(("failed", Some(message)))
         },
     }
+}
+
+async fn persist_then_failure(
+    state: &AppState,
+    deployment: &Deployment,
+    identity: ThenAttempt<'_>,
+    action: &str,
+    state_name: &str,
+    message: &str,
+) -> Result<()> {
+    let root = state.data_root.clone();
+    let app = deployment.id.clone();
+    let call = identity.call_id.to_owned();
+    let action = action.to_owned();
+    let state_name = state_name.to_owned();
+    let message = message.to_owned();
+    let revision = identity.release.to_owned();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let changed = app_connection(&root, &app)?.execute(
+            "UPDATE __konae_calls SET then_action=?1, then_state=?2, then_message=?3, leased_until=NULL, updated_at=?4
+             WHERE id=?5 AND deployment=?6 AND release=?7 AND attempts=?8 AND then_state='processing' AND leased_until>=?4",
+            rusqlite::params![action, state_name, message, now(), call, app, revision, identity.number],
+        )?;
+        anyhow::ensure!(changed == 1, "The call attempt no longer owns its continuation.");
+        Ok(())
+    }).await??;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1611,13 +2170,13 @@ pub async fn admin_call(state: &AppState, deployment: &Deployment, a: &Value) ->
 }
 
 fn read_outbox(data_root: &Path, deployment: &str, before: i64) -> Result<Value> {
-    let Some(db) = crate::app_db::read_optional(&data_root.join(CALLS_DATABASE))? else {
+    let Some(db) = crate::app_db::read_optional(&crate::layout::database(data_root, deployment))? else {
         return Ok(json!({"calls": [], "nextCursor": null}));
     };
     let mut query = db.prepare(
         "SELECT rowid, id, action, state, attempts, method, url, status, error, answer, then_action, then_state, then_message,
                 created_at, updated_at, next_attempt_at
-         FROM calls WHERE deployment = ?1 AND rowid < ?2 ORDER BY rowid DESC LIMIT ?3",
+         FROM __konae_calls WHERE deployment = ?1 AND rowid < ?2 ORDER BY rowid DESC LIMIT ?3",
     )?;
     let rows = query
         .query_map(rusqlite::params![deployment, before, OUTBOX_PAGE + 1], |row| {
@@ -1652,6 +2211,128 @@ fn read_outbox(data_root: &Path, deployment: &str, before: i64) -> Result<Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continuation_error_only_classifies_typed_guard_refusals_as_refused() {
+        let action: ActionDefinition = serde_json::from_value(json!({
+            "kind": "mutation",
+            "access": "anonymous",
+            "statement": "UPDATE items SET value='miss' WHERE id=999",
+            "bindings": [],
+            "guard": "No item changed."
+        }))
+        .unwrap();
+        let guard_error = match crate::guard::outcome("items.guarded", &action, &json!({"changes": 0})) {
+            crate::guard::Outcome::Refused(message) => anyhow::Error::new(GuardRefused(message)),
+            _ => panic!("expected a guard refusal"),
+        };
+        assert_eq!(
+            continuation_error(&guard_error),
+            ("refused", "No item changed.".into()),
+        );
+        assert_eq!(
+            continuation_error(&anyhow::anyhow!("guard-refused:database is locked")),
+            ("failed", "guard-refused:database is locked".into()),
+        );
+    }
+
+    #[tokio::test]
+    async fn continuation_persistence_rejects_an_update_that_matches_no_attempt() {
+        let root = std::env::temp_dir().join(format!("konae-continuation-persist-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let app = publish(
+            &state,
+            call_action("https://hooks.invalid/send"),
+            "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);",
+        )
+        .await
+        .unwrap();
+
+        let error = persist_then_failure(
+            &state,
+            &app,
+            ThenAttempt { call_id: "missing-call", release: &app.artifact_version, number: 1 },
+            "hook.logged",
+            "failed",
+            "synthetic persistence check",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("no longer owns its continuation"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn call_worker_schedules_the_lease_expiry_of_a_processing_continuation() {
+        let root = std::env::temp_dir().join(format!("konae-continuation-lease-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let app = publish(
+            &state,
+            call_action("https://hooks.invalid/send"),
+            "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);",
+        )
+        .await
+        .unwrap();
+        let lease = now() + LEASE_MS;
+        app_connection(&root, &app.id)
+            .unwrap()
+            .execute(
+                "INSERT INTO __konae_calls (id,deployment,action,input,state,next_attempt_at,leased_until,then_state,created_at,updated_at)
+                 VALUES ('continuation',?1,'hook.send','{}','delivered',0,?2,'processing',?3,?3)",
+                rusqlite::params![app.id, lease, now()],
+            )
+            .unwrap();
+
+        assert!(schedule_next_call(&state, &app.id).await.unwrap().is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pending_continuations_block_schema_removal_until_the_job_finishes() {
+        let root = std::env::temp_dir().join(format!("konae-pending-continuation-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = root.join("database.sqlite");
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE notes (id INTEGER PRIMARY KEY); CREATE TABLE __konae_calls (id TEXT, continuation TEXT, state TEXT, then_state TEXT, created_at INTEGER);").unwrap();
+        let continuation = json!({"action":"notes.finish","definition":{"kind":"mutation","access":"anonymous","bindings":[],"statement":"UPDATE notes SET retired = 1 WHERE id = 1"}}).to_string();
+        connection.execute("INSERT INTO __konae_calls VALUES ('job-a', ?1, 'pending', NULL, 1)", [&continuation]).unwrap();
+        drop(connection);
+
+        let refused = check_pending_continuations(&database).unwrap_err();
+        let refusal = crate::refusal::of(&refused).unwrap();
+        assert_eq!(refusal.code, "schema.pending-work");
+        assert!(refusal.message.contains("job-a"));
+        let unchanged: i64 = rusqlite::Connection::open(&database).unwrap()
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(unchanged, 0, "rehearsal must not alter the app database");
+
+        rusqlite::Connection::open(&database).unwrap()
+            .execute("UPDATE __konae_calls SET state='delivered', then_state='done' WHERE id='job-a'", []).unwrap();
+        check_pending_continuations(&database).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pending_continuation_keeps_columns_used_only_by_its_notice() {
+        let root = std::env::temp_dir().join(format!("konae-pending-notice-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = root.join("database.sqlite");
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE notes (id INTEGER PRIMARY KEY); CREATE TABLE __konae_calls (id TEXT, continuation TEXT, state TEXT, then_state TEXT, created_at INTEGER);").unwrap();
+        let continuation = json!({"action":"notes.finish","definition":{
+            "kind":"mutation","access":"anonymous","bindings":[],"statement":"UPDATE notes SET id=1 WHERE id=1",
+            "notify":{"to":"owner","changes":["retired"],"subject":"Updated","body":"{changes}"}
+        }}).to_string();
+        connection.execute("INSERT INTO __konae_calls VALUES ('job-notice', ?1, 'delivered', 'pending', 1)", [&continuation]).unwrap();
+        let refused = check_pending_continuations(&database).unwrap_err();
+        assert_eq!(crate::refusal::of(&refused).unwrap().code, "schema.pending-work");
+        connection.execute("ALTER TABLE notes ADD COLUMN retired TEXT", []).unwrap();
+        check_pending_continuations(&database).unwrap();
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn program(actions: &Value) -> ActionProgram {
         serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()
@@ -1851,8 +2532,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn call_claims_give_each_ready_app_one_turn_per_batch() {
+        let root = std::env::temp_dir().join(format!("konae-call-fair-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        for app in ["app-a", "app-b"] {
+            let db = app_connection(&root, app).unwrap();
+            for index in 0..3 {
+                db.execute(
+                    "INSERT INTO __konae_calls (id, deployment, action, input, state, next_attempt_at, created_at, updated_at)
+                     VALUES (?1, ?2, 'send', '{}', 'pending', 0, 0, 0)",
+                    rusqlite::params![format!("{app}-{index}"), app],
+                ).unwrap();
+            }
+            drop(db);
+        }
+
+        for app in ["app-a", "app-b"] {
+            assert_eq!(claim(&root, app).unwrap().len(), 1);
+            assert_eq!(claim(&root, app).unwrap().len(), 1);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_attempts_cannot_commit_a_call_result() {
+        let root = std::env::temp_dir().join(format!("konae-call-stale-{}", Uuid::new_v4()));
+        let db = app_connection(&root, "app").unwrap();
+        db.execute(
+            "INSERT INTO __konae_calls (id,deployment,action,input,state,next_attempt_at,created_at,updated_at)
+             VALUES ('call-stale','app','hook.send','{}','pending',0,0,0)", [],
+        ).unwrap();
+        drop(db);
+        let job = claim(&root, "app").unwrap().remove(0);
+        let success = Attempt { method: Some("POST".into()), url: Some("https://example.test".into()), status: Some(200), ..Default::default() };
+        finish(&root, "app", &job.id, job.attempts + 1, &success, None).unwrap();
+        let db = app_connection(&root, "app").unwrap();
+        let state: String = db.query_row("SELECT state FROM __konae_calls WHERE id='call-stale'", [], |row| row.get(0)).unwrap();
+        assert_eq!(state, "pending", "an old attempt cannot complete a job claimed by another attempt");
+        let installation = AppState::for_test(&root);
+        let blocked = crate::modules::prepare_transfer(&installation, "app").unwrap_err();
+        assert!(blocked.to_string().contains("Call call-stale has an in-flight attempt"), "{blocked}");
+        db.execute("UPDATE __konae_calls SET leased_until = 0 WHERE id = 'call-stale'", []).unwrap();
+        crate::modules::prepare_transfer(&installation, "app").unwrap();
+        drop(db);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     async fn publish(state: &AppState, actions: Value, schema: &str) -> Result<Deployment, String> {
-        publish_named(state, "caller", "Caller", "caller", actions, schema).await
+        publish_as(state, "caller", actions, schema).await
+    }
+
+    async fn publish_as(state: &AppState, id: &str, actions: Value, schema: &str) -> Result<Deployment, String> {
+        publish_named(state, id, id, id, actions, schema).await
     }
 
     async fn publish_named(
@@ -1867,14 +2599,14 @@ mod tests {
             "project": {"id": id, "name": name, "slug": slug, "manifest": {},
                 "files": {"actions.json": actions.to_string(), "schema.sql": schema}},
             "visibility": "public",
-            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>caller</p>"}}
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>app</p>"}}
         });
         let response = deploy(&state, body.to_string().as_bytes()).await;
         if response.status() != StatusCode::OK {
             let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
             return Err(serde_json::from_slice::<Value>(&bytes).unwrap()["error"].as_str().unwrap_or("").to_owned());
         }
-        Ok(state.deployments.read().await.values().find(|deployment| deployment.id == id).cloned().unwrap())
+        state.deployments.read().await.values().find(|deployment| deployment.project_id == id).cloned().ok_or_else(|| "Published Deployment was not loaded.".to_owned())
     }
 
     fn call_action(url: &str) -> Value {
@@ -1923,13 +2655,13 @@ mod tests {
         let call = declaration("hook.send", &action_program.actions["hook.send"]).unwrap();
         let url = url::Url::parse("http://hooks.example.net/hook").unwrap();
         let body = br#"{"message":"synthetic"}"#;
-        let db = connection(&root).unwrap();
+        let db = app_connection(&root, &deployment.id).unwrap();
         db.execute(
-            "INSERT INTO calls (id, deployment, action, input, state, next_attempt_at, traceparent, created_at, updated_at) VALUES ('pending', 'caller', 'hook.send', '{\"message\":\"synthetic\"}', 'pending', 0, ?1, 1, 1)",
+            "INSERT INTO __konae_calls (id, deployment, action, input, state, next_attempt_at, traceparent, created_at, updated_at) VALUES ('pending', 'caller', 'hook.send', '{\"message\":\"synthetic\"}', 'pending', 0, ?1, 1, 1)",
             [parent],
         ).unwrap();
         drop(db);
-        let first = claim(&root).unwrap().pop().unwrap();
+        let first = claim(&root, &deployment.id).unwrap().pop().unwrap();
         assert_eq!(first.traceparent.as_deref(), Some(parent));
         let (address, request) = server(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n".to_vec(), Duration::ZERO).await;
         let first_answer = send_to_target(&state, &deployment, &call, &url, body, &[], first.traceparent.as_deref(), Target::Outside(address)).await.unwrap();
@@ -1939,9 +2671,9 @@ mod tests {
         verify_captured_signature(&root, &first_headers["x-signature"], &first_body).await;
         let first_attempt = first_headers["traceparent"].clone();
         assert_eq!(crate::functions::trace::traceparent_id(&first_attempt), crate::functions::trace::traceparent_id(parent));
-        release(&root, "pending", FIRST_BACKOFF_MS, true, &Attempt { status: Some(503), ..Default::default() }).unwrap();
-        connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0 WHERE id = 'pending'", []).unwrap();
-        let retry = claim(&root).unwrap().pop().unwrap();
+        release(&root, &deployment.id, "pending", first.attempts, FIRST_BACKOFF_MS, true, &Attempt { status: Some(503), ..Default::default() }).unwrap();
+        app_connection(&root, &deployment.id).unwrap().execute("UPDATE __konae_calls SET next_attempt_at = 0 WHERE id = 'pending'", []).unwrap();
+        let retry = claim(&root, &deployment.id).unwrap().pop().unwrap();
         assert_eq!(retry.traceparent, first.traceparent);
         assert_eq!(retry.attempts, first.attempts + 1);
         let (address, request) = server(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}".to_vec(), Duration::ZERO).await;
@@ -2007,7 +2739,7 @@ mod tests {
         let queued = enqueue(&state, &app, "hook.send", &json!({})).await;
         assert_eq!(queued.status(), StatusCode::OK);
         let row = |root: &Path| {
-            connection(root).unwrap().query_row("SELECT state, attempts, error, next_attempt_at - updated_at FROM calls", [], |row| {
+            connection(root).unwrap().query_row("SELECT state, attempts, error, next_attempt_at - updated_at FROM __konae_calls", [], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, i64>(3)?))
             }).unwrap()
         };
@@ -2024,7 +2756,7 @@ mod tests {
             assert!(logged(&root).is_empty(), "the then mutation waits for the last attempt");
             // Not due yet: a pass leaves it alone.
             assert_eq!(run_once(&state).await.unwrap(), 0);
-            connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0", []).unwrap();
+            connection(&root).unwrap().execute("UPDATE __konae_calls SET next_attempt_at = 0", []).unwrap();
         }
         assert_eq!(run_once(&state).await.unwrap(), 1);
         assert_eq!(row(&root).0, "failed");
@@ -2039,33 +2771,55 @@ mod tests {
         assert_eq!(enqueue(&state, &app, "hook.send", &json!({})).await.status(), StatusCode::OK);
         assert_eq!(run_once(&state).await.unwrap(), 1);
         let waiting = connection(&root).unwrap().query_row(
-            "SELECT state, attempts FROM calls ORDER BY rowid DESC LIMIT 1", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).unwrap();
+            "SELECT state, attempts FROM __konae_calls ORDER BY rowid DESC LIMIT 1", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).unwrap();
         assert_eq!(waiting, ("pending".to_owned(), 0));
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn queued_calls_retries_and_then_refuse_when_calls_is_off() {
+    async fn accepted_calls_keep_their_declaration_when_calls_is_turned_off() {
         let root = std::env::temp_dir().join(format!("konae-calls-module-off-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, "https://editor.example.org");
         let mut app = publish(&state, call_action("https://hooks.invalid/send"), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
         assert_eq!(enqueue(&state, &app, "hook.send", &json!({})).await.status(), StatusCode::OK);
         assert_eq!(run_once(&state).await.unwrap(), 1, "the first failed send remains in the outbox for retry");
-        connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0", []).unwrap();
+        connection(&root).unwrap().execute("UPDATE __konae_calls SET next_attempt_at = 0", []).unwrap();
         app.modules.get_mut("calls").unwrap()["on"] = json!(false);
         state.deployments.write().await.insert(app.hostname.clone(), app.clone());
         assert_eq!(enqueue(&state, &app, "hook.send", &json!({})).await.status(), StatusCode::BAD_REQUEST, "new calls refuse before entering the outbox");
-        assert_eq!(run_once(&state).await.unwrap(), 1, "a queued retry is retired without sending");
+        assert_eq!(run_once(&state).await.unwrap(), 1, "the accepted call still uses its saved declaration");
         let (state_name, error, attempts): (String, Option<String>, i64) = connection(&root).unwrap().query_row(
-            "SELECT state, error, attempts FROM calls", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            "SELECT state, error, attempts FROM __konae_calls", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).unwrap();
-        assert_eq!((state_name.as_str(), error.as_deref(), attempts), ("failed", Some("module.off"), 2));
+        assert_eq!((state_name.as_str(), error.as_deref(), attempts), ("pending", Some("dns-failed"), 2));
+        let (call_id, revision): (String, String) = connection(&root).unwrap().query_row(
+            "SELECT id, release FROM __konae_calls", [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        connection(&root).unwrap().execute(
+            "UPDATE __konae_calls SET state='delivered', then_state='processing', leased_until=?1 WHERE id=?2",
+            rusqlite::params![now() + LEASE_MS, call_id],
+        ).unwrap();
         let program: ActionProgram = serde_json::from_value(call_action("https://hooks.invalid/send")).unwrap();
         let then = Then { action: "hook.logged".into(), inputs: Vec::new() };
-        let (then_state, message) = run_then(&state, &app, &program, &then, &json!({}), &Attempt::default()).await;
+        let (then_state, message) = run_then(
+            &state,
+            &app,
+            &program,
+            &then,
+            &json!({}),
+            &Attempt::default(),
+            ThenAttempt { call_id: &call_id, release: &revision, number: attempts },
+        )
+        .await
+        .unwrap();
         assert_eq!(then_state, "failed");
         assert_eq!(message.as_deref(), Some("Module calls is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run."));
+        let saved: (String, Option<String>) = connection(&root).unwrap().query_row(
+            "SELECT then_state, then_message FROM __konae_calls WHERE id=?1", [&call_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(saved, (then_state.to_owned(), message));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2081,7 +2835,8 @@ mod tests {
                 "body": {"password":"password", "message":"message"},
                 "then": {"action":"hook.logged", "inputs":{"status":"/status", "error":"/error", "ok":"/ok"}}},
             "hook.logged": {"kind":"mutation", "access":"anonymous", "statement":"INSERT INTO log (status, error, ok) VALUES (?1, ?2, ?3)",
-                "bindings":[{"source":"input","key":"status","type":"number","nullable":true}, {"source":"input","key":"error","type":"string","nullable":true}, {"source":"input","key":"ok","type":"boolean"}]}
+                "bindings":[{"source":"input","key":"status","type":"number","nullable":true}, {"source":"input","key":"error","type":"string","nullable":true}, {"source":"input","key":"ok","type":"boolean"}],
+                "notify":{"to":"owner","subject":"Call completed","body":"The continuation committed."}}
         }});
         let app = publish(&state, actions, "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT, ok INTEGER);").await.unwrap();
         enqueue(&state, &app, "hook.send", &json!({"password":"owner-secret", "message":"hello"})).await;
@@ -2095,7 +2850,7 @@ mod tests {
         assert_eq!(readback["input"], request["input"]);
         assert_eq!(readback["deployment"], app.id);
         assert!(readback["awaitingAt"].is_i64());
-        assert_eq!(connection(&root).unwrap().query_row("SELECT attempts, error FROM calls WHERE id = ?1", [&call_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))).unwrap(), (0, "awaiting-response".into()));
+        assert_eq!(connection(&root).unwrap().query_row("SELECT attempts, error FROM __konae_calls WHERE id = ?1", [&call_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))).unwrap(), (0, "awaiting-response".into()));
 
         // A restarted live worker must not drain a job captured in test mode.
         let mut restarted = test_state(&root, "https://editor.example.org");
@@ -2108,17 +2863,23 @@ mod tests {
         restarted.execution_mode = crate::execution::ExecutionMode::Test;
         assert_eq!(submit_synthetic_response(&restarted, "another-app", &call_id, 1, SyntheticOutcome::Http { status: 200, body: Vec::new() }).await.unwrap(), SyntheticSubmission::Unchanged);
         assert_eq!(submit_synthetic_response(&restarted, &app.id, &call_id, 1, SyntheticOutcome::Http { status: 503, body: b"busy".to_vec() }).await.unwrap(), SyntheticSubmission::Accepted);
-        let (attempts, error, state_name): (i64, Option<String>, String) = connection(&root).unwrap().query_row("SELECT attempts, error, state FROM calls WHERE id = ?1", [&call_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+        let (attempts, error, state_name): (i64, Option<String>, String) = connection(&root).unwrap().query_row("SELECT attempts, error, state FROM __konae_calls WHERE id = ?1", [&call_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
         assert_eq!((attempts, error, state_name.as_str()), (1, None, "pending"));
         let retry_state = list_test_calls_for_app(&restarted, &app.id).await.unwrap().remove(0);
         assert!(retry_state["awaitingAt"].is_null());
         let wait = retry_state["nextAttemptAt"].as_i64().unwrap() - now();
         assert!((FIRST_BACKOFF_MS - 1000..=FIRST_BACKOFF_MS).contains(&wait));
         assert_eq!(retry_state["responseNumber"], 2);
-        connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0 WHERE id = ?1", [&call_id]).unwrap();
+        connection(&root).unwrap().execute("UPDATE __konae_calls SET next_attempt_at = 0 WHERE id = ?1", [&call_id]).unwrap();
         assert_eq!(run_once(&restarted).await.unwrap(), 1);
         assert_eq!(list_captured_requests(&restarted).await.unwrap().len(), 1);
-        assert_eq!(submit_synthetic_response(&restarted, &app.id, &call_id, 2, SyntheticOutcome::Http { status: 200, body: br#"{"ok":true}"#.to_vec() }).await.unwrap(), SyntheticSubmission::Accepted);
+        connection(&root).unwrap().execute(
+            "UPDATE __konae_calls SET state='delivered', status=200, error=NULL, answer='{\"ok\":true}', response_body=?1,
+               then_action='hook.logged', then_state='processing', leased_until=NULL WHERE id=?2 AND state='pending' AND error='awaiting-response'",
+            rusqlite::params![br#"{"ok":true}"#.as_slice(), call_id],
+        ).unwrap();
+        assert_eq!(run_once(&restarted).await.unwrap(), 0, "a restarted worker resumes the stored provider response without capturing another request");
+        assert_eq!(submit_synthetic_response(&restarted, &app.id, &call_id, 2, SyntheticOutcome::Http { status: 200, body: br#"{"ok":true}"#.to_vec() }).await.unwrap(), SyntheticSubmission::Unchanged);
         assert_eq!(submit_synthetic_response(&restarted, &app.id, &call_id, 1, SyntheticOutcome::Http { status: 200, body: br#"{"ok":true}"#.to_vec() }).await.unwrap(), SyntheticSubmission::Unchanged);
         assert_eq!(submit_synthetic_response(&restarted, &app.id, &call_id, 2, SyntheticOutcome::Http { status: 200, body: br#"{"ok":true}"#.to_vec() }).await.unwrap(), SyntheticSubmission::Unchanged);
         let logged: Vec<(Option<i64>, Option<String>, bool)> = {
@@ -2127,17 +2888,255 @@ mod tests {
             query.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
         };
         assert_eq!(logged, vec![(Some(200), None, true)]);
+        let app_db = app_connection(&root, &app.id).unwrap();
+        let pending_notify: i64 = app_db.query_row("SELECT COUNT(*) FROM __konae_notify_intents WHERE state='pending'", [], |row| row.get(0)).unwrap();
+        assert_eq!(pending_notify, 1, "the continuation commits its notice intent with the log row");
         assert!(list_captured_requests(&restarted).await.unwrap().is_empty());
-        let app_db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
-        connection(&root).unwrap().execute("UPDATE calls SET then_state = 'processing', leased_until = NULL WHERE id = ?1", [&call_id]).unwrap();
         let mut after_restart = test_state(&root, "https://editor.example.org");
         after_restart.execution_mode = crate::execution::ExecutionMode::Test;
         after_restart.deployments.write().await.insert(app.hostname.clone(), app.clone());
         assert_eq!(run_once(&after_restart).await.unwrap(), 0);
         let recovered: i64 = app_db.query_row("SELECT COUNT(*) FROM log", [], |row| row.get(0)).unwrap();
         assert_eq!(recovered, 1, "restart must not replay an ambiguous committed continuation");
-        let outcome = list_test_calls_for_app(&after_restart, &app.id).await.unwrap().remove(0);
-        assert_eq!(outcome["then"]["state"], "interrupted");
+        let state_name: String = app_db.query_row("SELECT then_state FROM __konae_calls WHERE id=?1", [&call_id], |row| row.get(0)).unwrap();
+        assert_eq!(state_name, "done");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn call_continuations_keep_guard_and_sql_failures_out_of_the_commit() {
+        for (case, statement, guard, drop_table, expected_state) in [
+            ("guard", "UPDATE counter SET value=value+1 WHERE id=999", Some("No counter."), false, "refused"),
+            ("sql", "UPDATE counter SET value=value+1 WHERE id=1", None, true, "failed"),
+        ] {
+            let root = std::env::temp_dir().join(format!("konae-call-atomic-{case}-{}", Uuid::new_v4()));
+            tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+            let mut state = test_state(&root, "https://editor.example.org");
+            state.execution_mode = crate::execution::ExecutionMode::Test;
+            let mut continuation = json!({"kind":"mutation","access":"anonymous","statement":statement,"bindings":[],
+                "notify":{"to":"owner","subject":"Call result","body":"A continuation ran."}});
+            if let Some(guard) = guard { continuation["guard"] = json!(guard); }
+            let actions = json!({"version":1,"actions":{
+                "hook.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://hooks.invalid/send","bindings":[],
+                    "then":{"action":"hook.logged","inputs":{}}},
+                "hook.logged":continuation
+            }});
+            let app = publish(&state, actions, "CREATE TABLE IF NOT EXISTS counter (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);").await.unwrap();
+            enqueue(&state, &app, "hook.send", &json!({})).await;
+            assert_eq!(run_once(&state).await.unwrap(), 1);
+            let request = list_captured_requests(&state).await.unwrap().remove(0);
+            let call_id = request["callId"].as_str().unwrap();
+            if drop_table {
+                Connection::open(crate::layout::database(&root, &app.id)).unwrap().execute("DROP TABLE counter", []).unwrap();
+            }
+            assert_eq!(submit_synthetic_response(&state, &app.id, call_id, 1, SyntheticOutcome::Http { status: 200, body: Vec::new() }).await.unwrap(), SyntheticSubmission::Accepted);
+            let db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
+            let then_state: String = db.query_row("SELECT then_state FROM __konae_calls WHERE id=?1", [call_id], |row| row.get(0)).unwrap();
+            assert_eq!(then_state, expected_state);
+            let has_intents: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents')", [], |row| row.get(0)).unwrap();
+            let intents: i64 = if has_intents { db.query_row("SELECT COUNT(*) FROM __konae_notify_intents", [], |row| row.get(0)).unwrap() } else { 0 };
+            assert_eq!(intents, 0, "a refused or failed continuation commits no notify intention");
+            if !drop_table {
+                let count: i64 = db.query_row("SELECT COUNT(*) FROM counter", [], |row| row.get(0)).unwrap();
+                assert_eq!(count, 0);
+            }
+            drop(db);
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_call_survives_a_new_release_and_export_import() {
+        let root = std::env::temp_dir().join(format!("konae-call-portable-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let receiver_actions = json!({"version":1,"actions":{
+            "receiver.accept":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO received (message) VALUES (?1)",
+                "bindings":[{"source":"input","key":"message","type":"string"}],
+                "http":{"method":"POST","path":"/receive"}}
+        }});
+        let receiver = publish_as(&state, "receiver", receiver_actions, "CREATE TABLE IF NOT EXISTS received (message TEXT);").await.unwrap();
+        let accepted = json!({"version":1,"actions":{
+            "hook.send":{"kind":"call","access":"anonymous","method":"POST","url":format!("https://{}/receive", receiver.hostname),
+                "bindings":[{"source":"input","key":"message","type":"string"}],"body":{"message":"message"},
+                "auth":{"key":"receiver_credential"},
+                "then":{"action":"hook.logged","inputs":{"status":"/status","error":"/error"}}},
+            "hook.logged":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO log (status, error) VALUES (?1, ?2)",
+                "bindings":[{"source":"input","key":"status","type":"number","nullable":true},{"source":"input","key":"error","type":"string","nullable":true}]}
+        }});
+        let secrets = crate::http::secrets_store(&root, "caller").unwrap();
+        secrets.execute("INSERT INTO secrets(name,value,updated_at,use) VALUES ('receiver_credential','credential-value-never-exported',0,'call')", []).unwrap();
+        drop(secrets);
+        let app_a = publish(&state, accepted, "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let response = enqueue(&state, &app_a, "hook.send", &json!({"message":"from A"})).await;
+        let call_id = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let call_id = serde_json::from_slice::<Value>(&call_id).unwrap()["result"]["callId"].as_str().unwrap().to_owned();
+        let app_b = publish(&state, call_action("https://hooks.invalid/b"), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        assert_ne!(app_a.artifact_version, app_b.artifact_version);
+
+        let export = root.join("portable-export");
+        let source_data = crate::layout::data(&root, &app_b.id);
+        let store: std::sync::Arc<dyn crate::file_store::FileStore> = std::sync::Arc::new(crate::file_store::LocalFolder::new(&root));
+        let blobs = crate::file_store::BlockingFiles::new(store, &app_b.id);
+        crate::package::snapshot(&source_data, &export.join("data"), &blobs, &app_b.modules).unwrap();
+        let target = crate::import::Target::live(&state, &app_b).unwrap();
+        let imported = crate::import::import_folder(&state, &app_b, &export, &target, None).await.unwrap();
+        assert!(matches!(imported, crate::import::Outcome::Imported { .. }));
+
+        assert_eq!(run_once(&state).await.unwrap(), 1);
+        let receiver_db = Connection::open(crate::layout::database(&root, &receiver.id)).unwrap();
+        let message: String = receiver_db.query_row("SELECT message FROM received", [], |row| row.get(0)).unwrap();
+        assert_eq!(message, "from A", "the post-import delivery used the body saved by release A");
+        let db = Connection::open(crate::layout::database(&root, &app_b.id)).unwrap();
+        let (status, method, url, release): (Option<i64>, String, String, String) = db.query_row("SELECT status, method, url, release FROM __konae_calls WHERE id=?1", [&call_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap();
+        assert_eq!(status, Some(200), "the continuation accepted with release A ran after import under release B");
+        assert_eq!(method, "POST");
+        assert_eq!(url, format!("https://{}/receive", receiver.hostname));
+        assert_eq!(release, app_a.artifact_version);
+        let declaration: String = db.query_row("SELECT declaration FROM __konae_calls WHERE id=?1", [&call_id], |row| row.get(0)).unwrap();
+        assert!(declaration.contains(&receiver.hostname));
+        assert!(declaration.contains("receiver_credential"));
+        assert!(!declaration.contains("credential-value-never-exported"));
+        assert!(!declaration.contains("owner-secret"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn legacy_installation_jobs_move_once_into_the_app_database() {
+        let root = std::env::temp_dir().join(format!("konae-call-migration-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let mut state = test_state(&root, "https://editor.example.org");
+        state.execution_mode = crate::execution::ExecutionMode::Test;
+        let app = publish(&state, call_action("https://hooks.invalid/legacy"), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let legacy = legacy_connection(&root).unwrap();
+        legacy.execute(
+            "INSERT INTO calls (id,deployment,action,input,state,next_attempt_at,execution_mode,created_at,updated_at)
+             VALUES ('call_legacy','caller','hook.send','{}','pending',0,'test',1,1)", [],
+        ).unwrap();
+        drop(legacy);
+
+        assert_eq!(run_once(&state).await.unwrap(), 0, "ordinary worker startup leaves legacy rows untouched until preflighted migration");
+        let legacy = Connection::open(root.join(CALLS_DATABASE)).unwrap();
+        assert_eq!(legacy.query_row("SELECT count(*) FROM calls WHERE id='call_legacy'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        drop(legacy);
+        migrate_legacy_calls_explicit(&root, &app).unwrap();
+        assert_eq!(run_once(&state).await.unwrap(), 1);
+        let captured = list_captured_requests_for_app(&state, &app.id).await.unwrap();
+        assert_eq!(captured[0]["callId"], "call_legacy");
+        assert_eq!(captured[0]["url"], "https://hooks.invalid/legacy");
+        let legacy = Connection::open(root.join(CALLS_DATABASE)).unwrap();
+        assert_eq!(legacy.query_row("SELECT COUNT(*) FROM calls WHERE id='call_legacy'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        let app_db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
+        assert_eq!(app_db.query_row("SELECT COUNT(*) FROM __konae_calls WHERE id='call_legacy'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn migration_refuses_a_pending_call_without_its_accepted_declaration() {
+        let root = std::env::temp_dir().join(format!("konae-call-migration-preflight-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let app = publish(&state, call_action("https://hooks.invalid/current"), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let legacy = legacy_connection(&root).unwrap();
+        legacy.execute(
+            "INSERT INTO calls (id,deployment,action,input,state,next_attempt_at,created_at,updated_at)
+             VALUES ('call_old_release','caller','hook.removed','{}','pending',0,1,1)", [],
+        ).unwrap();
+        drop(legacy);
+
+        let report = crate::installation::queue_migration::preflight(&root, std::slice::from_ref(&app)).unwrap();
+        assert_eq!(report.affected_apps, vec!["caller"]);
+        assert!(report.blockers.iter().any(|blocker| blocker.contains("accepted declaration is missing") && blocker.contains("previous release")), "{:?}", report.blockers);
+        let legacy = Connection::open(root.join(CALLS_DATABASE)).unwrap();
+        assert_eq!(legacy.query_row("SELECT count(*) FROM calls WHERE id='call_old_release'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn queue_migration_resumes_without_duplicates_and_rolls_back_from_backup() {
+        let root = std::env::temp_dir().join(format!("konae-queue-migration-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let mut state = test_state(&root, "https://editor.example.org");
+        state.execution_mode = crate::execution::ExecutionMode::Test;
+        let app = publish(&state, call_action("https://hooks.invalid/migrate"), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let legacy = legacy_connection(&root).unwrap();
+        for id in ["call_first", "call_second"] {
+            legacy.execute(
+                "INSERT INTO calls (id,deployment,action,input,state,next_attempt_at,execution_mode,created_at,updated_at)
+                 VALUES (?1,'caller','hook.send','{}','pending',0,'test',1,1)", [id],
+            ).unwrap();
+        }
+        legacy.execute(
+            "INSERT INTO calls (id,deployment,action,input,state,attempts,next_attempt_at,method,url,status,error,answer,then_state,execution_mode,response_body,created_at,updated_at)
+             VALUES ('call_terminal','caller','hook.send','{\"note\":\"carry\"}','failed',4,0,'POST','https://hooks.invalid/old',502,'network','old answer','interrupted','test',X'6f6c64',2,3)", [],
+        ).unwrap();
+        drop(legacy);
+        assert!(!crate::installation::queue_migration::preflight(&root, std::slice::from_ref(&app)).unwrap().consumers_paused, "preflight reports that affected consumers still need pausing");
+        crate::maintenance::set(&root, &app.id, true).unwrap();
+        let mail = Connection::open(root.join(crate::mail::MAIL_DATABASE)).unwrap();
+        crate::mail::install(&mail).unwrap();
+        mail.execute("INSERT INTO jobs(id,purpose,recipient,scope,app_name,token_hash,link_expires_at,state,next_attempt_at,created_at,updated_at)
+            VALUES ('mail_keep','notify','reader@example.invalid','deployment:caller','Caller','hash',0,'pending',1,1,1)", []).unwrap();
+        drop(mail);
+        std::fs::write(root.join("preserved.marker"), b"leave this file untouched").unwrap();
+
+        let app_db = app_connection(&root, &app.id).unwrap();
+        app_db.execute_batch("CREATE TRIGGER fail_second BEFORE INSERT ON __konae_calls WHEN NEW.id='call_second' BEGIN SELECT RAISE(ABORT,'simulated interruption'); END;").unwrap();
+        drop(app_db);
+        assert!(crate::installation::queue_migration::migrate(&root, std::slice::from_ref(&app)).is_err());
+        let backup_root = root.join(".konae-queue-migration");
+        let interrupted_backup = std::fs::read_dir(&backup_root).unwrap().next().unwrap().unwrap().path();
+        let legacy = Connection::open(root.join(CALLS_DATABASE)).unwrap();
+        assert_eq!(legacy.query_row("SELECT count(*) FROM calls", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        drop(legacy);
+        let app_db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
+        app_db.execute_batch("DROP TRIGGER fail_second;").unwrap();
+        drop(app_db);
+
+        let resumed = crate::installation::queue_migration::migrate(&root, std::slice::from_ref(&app)).unwrap();
+        assert_eq!(resumed.calls_rows, 2);
+        let report_again = crate::installation::queue_migration::migrate(&root, std::slice::from_ref(&app)).unwrap();
+        assert_eq!(report_again.calls_rows, 0, "a second migration sees no legacy source rows");
+        let app_db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
+        assert_eq!(app_db.query_row("SELECT count(*) FROM __konae_calls WHERE id IN ('call_first','call_second','call_terminal')", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        let terminal: (String, Option<String>, Option<String>, i64) = app_db.query_row("SELECT state,error,then_state,attempts FROM __konae_calls WHERE id='call_terminal'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap();
+        assert_eq!(terminal, ("failed".to_owned(), Some("network".to_owned()), Some("interrupted".to_owned()), 4));
+        #[derive(Debug, PartialEq)]
+        struct StoredCallContent {
+            input: String,
+            method: Option<String>,
+            url: Option<String>,
+            status: Option<i64>,
+            answer: Option<String>,
+            response_body: Option<Vec<u8>>,
+        }
+        let content = app_db.query_row(
+            "SELECT input,method,url,status,answer,response_body FROM __konae_calls WHERE id='call_terminal'",
+            [],
+            |row| Ok(StoredCallContent {
+                input: row.get(0)?, method: row.get(1)?, url: row.get(2)?,
+                status: row.get(3)?, answer: row.get(4)?, response_body: row.get(5)?,
+            }),
+        ).unwrap();
+        assert_eq!(content, StoredCallContent {
+            input: "{\"note\":\"carry\"}".into(), method: Some("POST".into()),
+            url: Some("https://hooks.invalid/old".into()), status: Some(502),
+            answer: Some("old answer".into()), response_body: Some(b"old".to_vec()),
+        });
+        let legacy = Connection::open(root.join(CALLS_DATABASE)).unwrap();
+        assert_eq!(legacy.query_row("SELECT count(*) FROM calls", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        drop(legacy);
+        let mail = Connection::open(root.join(crate::mail::MAIL_DATABASE)).unwrap();
+        let recipient: String = mail.query_row("SELECT recipient FROM jobs WHERE id='mail_keep'", [], |row| row.get(0)).unwrap();
+        assert_eq!(recipient, "reader@example.invalid");
+        assert_eq!(std::fs::read(root.join("preserved.marker")).unwrap(), b"leave this file untouched");
+
+        crate::installation::queue_migration::rollback(&root, &interrupted_backup).unwrap();
+        let legacy = Connection::open(root.join(CALLS_DATABASE)).unwrap();
+        assert_eq!(legacy.query_row("SELECT count(*) FROM calls", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        let restored_app = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
+        assert_eq!(restored_app.query_row("SELECT count(*) FROM __konae_calls WHERE id IN ('call_first','call_second','call_terminal')", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        drop(restored_app);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2153,7 +3152,7 @@ mod tests {
         let call_id = list_captured_requests(&state).await.unwrap()[0]["callId"].as_str().unwrap().to_owned();
         submit_synthetic_response(&state, &app.id, &call_id, 1, SyntheticOutcome::Http { status: 400, body: br#"{"message":"bad request"}"#.to_vec() }).await.unwrap();
         submit_synthetic_response(&state, &app.id, &call_id, 1, SyntheticOutcome::Http { status: 400, body: Vec::new() }).await.unwrap();
-        let row = connection(&root).unwrap().query_row("SELECT state, then_state, status FROM calls WHERE id = ?1", [&call_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, i64>(2)?))).unwrap();
+        let row = connection(&root).unwrap().query_row("SELECT state, then_state, status FROM __konae_calls WHERE id = ?1", [&call_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, i64>(2)?))).unwrap();
         assert_eq!(row, ("failed".into(), Some("done".into()), 400));
         let db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
         let logged: (Option<i64>, Option<String>) = db.query_row("SELECT status, error FROM log", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
@@ -2167,16 +3166,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-reset-calls-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let mut state = test_state(&root, "https://editor.example.org");
-        let db = connection(&root).unwrap();
+        let db = app_connection(&root, "app").unwrap();
         for (id, mode, status, then_state) in [("live_pending", "live", "pending", "processing"), ("test_pending", "test", "pending", "processing"), ("done", "test", "delivered", "done")] {
-            db.execute("INSERT INTO calls (id, deployment, action, input, state, execution_mode, next_attempt_at, then_action, then_state, created_at, updated_at) VALUES (?1, 'app', 'hook.send', '{}', ?2, ?3, 0, 'hook.logged', ?4, 1, 1)", rusqlite::params![id, status, mode, then_state]).unwrap();
+            db.execute("INSERT INTO __konae_calls (id, deployment, action, input, state, execution_mode, next_attempt_at, then_action, then_state, created_at, updated_at) VALUES (?1, 'app', 'hook.send', '{}', ?2, ?3, 0, 'hook.logged', ?4, 1, 1)", rusqlite::params![id, status, mode, then_state]).unwrap();
         }
         assert!(retire_after_local_reset(&state, "app").await.is_err());
         state.execution_mode = crate::execution::ExecutionMode::Test;
         assert_eq!(retire_after_local_reset(&state, "app").await.unwrap(), 2);
-        let db = connection(&root).unwrap();
+        let db = app_connection(&root, "app").unwrap();
         let rows: Vec<(String, String, Option<String>)> = {
-            let mut query = db.prepare("SELECT id, state, error FROM calls ORDER BY id").unwrap();
+            let mut query = db.prepare("SELECT id, state, error FROM __konae_calls ORDER BY id").unwrap();
             query.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
         };
         assert_eq!(rows, vec![
@@ -2184,7 +3183,7 @@ mod tests {
             ("live_pending".into(), "failed".into(), Some("local-reset".into())),
             ("test_pending".into(), "failed".into(), Some("local-reset".into())),
         ]);
-        assert_eq!(db.query_row("SELECT then_state FROM calls WHERE id = 'test_pending'", [], |row| row.get::<_, Option<String>>(0)).unwrap(), Some("skipped".into()));
+        assert_eq!(db.query_row("SELECT then_state FROM __konae_calls WHERE id = 'test_pending'", [], |row| row.get::<_, Option<String>>(0)).unwrap(), Some("skipped".into()));
         let _ = std::fs::remove_dir_all(&root);
     }
 

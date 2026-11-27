@@ -22,6 +22,8 @@ const FIRST_BACKOFF_MS: i64 = 30_000;
 const MAX_BACKOFF_MS: i64 = 60 * 60 * 1000;
 const COMMIT_GRACE_MS: i64 = 60_000;
 const BATCH: i64 = 20;
+const NOTICE_SYNC_BATCH: i64 = 50;
+const NOTICE_SYNC_RETRY_MS: i64 = 60_000;
 const WEBHOOK_TOLERANCE_SECONDS: i64 = 5 * 60;
 const PREFLIGHT_RETRY_MS: i64 = 10 * 60 * 1000;
 const DEFAULT_RESEND_API: &str = "https://api.resend.com";
@@ -134,6 +136,21 @@ impl LinkKey {
     }
 }
 
+pub(crate) fn validate_migration_key(connection: &Connection, secret: &str) -> Result<()> {
+    let key = LinkKey::derive(secret);
+    let mut statement = connection.prepare("SELECT id, link_nonce, link_sealed FROM jobs WHERE link_sealed IS NOT NULL ORDER BY id")?;
+    let rows = statement.query_map([], |row| Ok((
+        row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?, row.get::<_, Option<Vec<u8>>>(2)?)
+    ))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, nonce, sealed) in rows {
+        let (Some(nonce), Some(sealed)) = (nonce, sealed) else {
+            anyhow::bail!("mail.sqlite job {id} has incomplete encrypted link data. Keep its backup and drain it with the Kernel release that created it.");
+        };
+        anyhow::ensure!(key.open(&id, &nonce, &sealed).is_some(), "The supplied installation mail key cannot decrypt a queued link in mail.sqlite (job {id}). Preserve the original key and run the release that created this queue; a new key cannot recover these bytes.");
+    }
+    Ok(())
+}
+
 
 #[derive(Clone, Debug)]
 pub struct OutgoingEmail {
@@ -169,6 +186,8 @@ pub enum SendOutcome {
     Accepted { provider_id: Option<String>, delivered: bool },
     /// Try again later: the provider is down, busy or rate limited.
     Retry(String),
+    /// SMTP may have accepted the message before the connection failed.
+    Uncertain(String),
     /// The provider refused this message; retrying sends the same refusal.
     Rejected(String),
     /// The provider refused the sender or the credentials. Sending stops for
@@ -428,6 +447,8 @@ impl Transport for SmtpTransport {
                         SendOutcome::SenderRefused(format!("the SMTP server refused the credentials ({code})"))
                     } else if error_value.is_permanent() {
                         SendOutcome::Rejected(format!("SMTP {code}"))
+                    } else if code.is_empty() {
+                        SendOutcome::Uncertain("SMTP ended without an acknowledgement".into())
                     } else {
                         SendOutcome::Retry(format!("SMTP {}", if code.is_empty() { "connection failed".into() } else { code }))
                     }
@@ -626,6 +647,10 @@ pub struct Notice<'a> {
     pub subject: &'a str,
     pub text: &'a str,
     pub html: &'a str,
+    /// App account ID for actor or column recipients. The worker rechecks it before sending.
+    pub account_id: Option<&'a str>,
+    /// Stable ID of the portable app intent. None for the compatibility API.
+    pub intent_id: Option<&'a str>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -690,6 +715,14 @@ struct SealedNotice {
     subject: String,
     text: String,
     html: String,
+}
+
+struct NoticeReceiptSync {
+    job_id: String,
+    intent_id: String,
+    recipient: String,
+    scope: String,
+    result: String,
 }
 
 /// The purpose of a notice job (`notify` on a mutation, ADR-0012).
@@ -877,6 +910,68 @@ impl MailQueue {
         }
     }
 
+    /// Transfers a portable intent into the installation queue once per intent and recipient.
+    pub fn record_notice_intent(&self, notice: &Notice<'_>) -> Result<NoticeOutcome> {
+        let intent_id = notice.intent_id.ok_or_else(|| anyhow::anyhow!("Notify intent ID is missing."))?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let receipt: Option<String> = transaction.query_row(
+            "SELECT outcome FROM notice_receipts WHERE intent_id=?1 AND recipient=?2",
+            params![intent_id, notice.recipient], |row| row.get(0),
+        ).optional()?;
+        if let Some(outcome) = receipt {
+            transaction.commit()?;
+            return Ok(notice_outcome(&outcome));
+        }
+        let at = now();
+        let job_id = hex::encode(sha2::Sha256::digest(format!("notify:{intent_id}:{}", notice.recipient).as_bytes()));
+        let outcome = if let Some(kind) = check_notice_budget(&transaction, &self.limits, notice, at)? {
+            NoticeOutcome::Refused(kind)
+        } else {
+            let sealed = serde_json::to_string(&SealedNotice {
+                subject: notice.subject.to_owned(), text: notice.text.to_owned(), html: notice.html.to_owned(),
+            })?;
+            let (nonce, sealed) = self.key.seal(&job_id, &sealed).map_err(|_| anyhow::anyhow!("The notice could not be sealed."))?;
+            transaction.execute(
+                "INSERT INTO jobs (id, purpose, recipient, scope, creator, app_name, token_hash, link_nonce, link_sealed,
+                   link_expires_at, state, attempts, next_attempt_at, created_at, updated_at, action)
+                 VALUES (?1, 'notify', ?2, ?3, ?4, ?5, '', ?6, ?7, ?8, 'pending', 0, ?9, ?9, ?9, ?10)",
+                params![job_id, notice.recipient, notice.scope, notice.creator, notice.app_name, nonce, sealed,
+                    (at + NOTICE_TTL_MS) / 1000, at, notice.action],
+            )?;
+            transaction.execute(
+                "INSERT INTO notice_receipts (intent_id, recipient, job_id, account_id, outcome, created_at)
+                 VALUES (?1, ?2, ?3, ?4, 'queued', ?5)",
+                params![intent_id, notice.recipient, job_id, notice.account_id, at],
+            )?;
+            NoticeOutcome::Queued
+        };
+        if let NoticeOutcome::Refused(kind) = &outcome {
+            transaction.execute(
+                "INSERT INTO notice_receipts (intent_id, recipient, job_id, account_id, outcome, created_at)
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5)",
+                params![intent_id, notice.recipient, notice.account_id, kind, at],
+            )?;
+        }
+        transaction.commit()?;
+        if outcome == NoticeOutcome::Queued { self.wake(); }
+        if outcome == NoticeOutcome::Queued { self.sync_notice_result(&job_id, "queued")?; }
+        Ok(outcome)
+    }
+
+    /// Synchronizes an app's receipts and refuses transfer while any notice can still send.
+    pub(crate) fn prepare_app_transfer(&self, scope: &str) -> Result<()> {
+        self.sync_notice_results_for_scope(scope)?;
+        let connection = self.connection()?;
+        let pending: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE scope=?1 AND purpose='notify' AND state='pending'",
+            [scope], |row| row.get(0),
+        )?;
+        anyhow::ensure!(pending == 0,
+            "App transfer is blocked while {pending} notice mail job(s) remain pending in mail.sqlite for {scope}. Keep the app on this installation until those jobs reach a terminal result, then retry.");
+        Ok(())
+    }
+
     /// Refuses a request that would exceed a limit, or that this
     /// installation cannot send now. On success it counts the request
     /// against the recipient and the client address, whether or not a
@@ -949,6 +1044,7 @@ impl MailQueue {
 
     /// Sends the jobs that are due. Returns how many reached the provider.
     pub async fn run_once(&self) -> Result<usize> {
+        self.sync_notice_results()?;
         if self.preflight().state != "ready" {
             return Ok(0);
         }
@@ -968,6 +1064,18 @@ impl MailQueue {
     fn claim(&self) -> Result<Vec<Claimed>> {
         let connection = self.connection()?;
         let at = now();
+        if self.transport.name() == "smtp" {
+            let uncertain = {
+                let mut statement = connection.prepare(
+                    "UPDATE jobs SET state='failed', error_kind='delivery-uncertain', link_nonce=NULL, link_sealed=NULL,
+                       leased_until=NULL, updated_at=?1
+                     WHERE purpose='notify' AND state='pending' AND leased_until IS NOT NULL AND leased_until < ?1
+                     RETURNING id",
+                )?;
+                statement.query_map([at], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for id in uncertain { self.sync_notice_result(&id, "uncertain")?; }
+        }
         let mut statement = connection.prepare(
             "UPDATE jobs SET leased_until = ?1, attempts = attempts + 1, updated_at = ?2
              WHERE id IN (
@@ -1071,6 +1179,10 @@ impl MailQueue {
     }
 
     async fn process_notice(&self, job: Claimed) -> Result<bool> {
+        if !self.notice_recipient_active(&job)? {
+            self.finish_failed(&job.id, "recipient-revoked")?;
+            return Ok(false);
+        }
         if job.link_expires_at * 1000 <= now() {
             self.finish_failed(&job.id, "notice-expired")?;
             return Ok(false);
@@ -1097,6 +1209,21 @@ impl MailQueue {
         self.deliver(job, email).await
     }
 
+    fn notice_recipient_active(&self, job: &Claimed) -> Result<bool> {
+        let connection = self.connection()?;
+        let account_id: Option<String> = connection.query_row(
+            "SELECT account_id FROM notice_receipts WHERE job_id=?1", [&job.id], |row| row.get(0),
+        ).optional()?.flatten();
+        let Some(account_id) = account_id else { return Ok(true) };
+        let Some(path) = self.identity_path(&job.scope).filter(|path| path.is_file()) else { return Ok(false) };
+        let identity = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        identity.busy_timeout(Duration::from_secs(5))?;
+        Ok(identity.query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_users WHERE id=?1 AND state='active' AND verified_at IS NOT NULL AND email=?2 COLLATE NOCASE)",
+            params![account_id, job.recipient], |row| row.get(0),
+        )?)
+    }
+
     async fn deliver(&self, job: Claimed, email: OutgoingEmail) -> Result<bool> {
         let pending = crate::copies::Pending::begin(&self.data_root, &job.id, "delivering mail and recording the provider outcome")?;
         let delivered: Result<bool> = match self.transport.send(&email).await {
@@ -1112,6 +1239,11 @@ impl MailQueue {
                     let backoff = (FIRST_BACKOFF_MS << (job.attempts - 1).clamp(0, 20)).min(MAX_BACKOFF_MS);
                     self.release(&job.id, backoff, true, Some("provider-unavailable"))?;
                 }
+                Ok(false)
+            }
+            SendOutcome::Uncertain(reason) => {
+                eprintln!("Email job {} has an uncertain SMTP result: {reason}", job.id);
+                self.finish_failed(&job.id, "delivery-uncertain")?;
                 Ok(false)
             }
             SendOutcome::Rejected(reason) => {
@@ -1148,6 +1280,7 @@ impl MailQueue {
              WHERE id = ?3 AND state = 'pending'",
             params![kind, now(), id],
         )?;
+        self.sync_notice_result(id, if kind == "delivery-uncertain" { "uncertain" } else { "failed" })?;
         Ok(())
     }
 
@@ -1170,6 +1303,115 @@ impl MailQueue {
             }
         }
         transaction.commit()?;
+        self.sync_notice_result(id, if delivered { "delivered" } else { "accepted" })?;
+        Ok(())
+    }
+
+    fn sync_notice_result(&self, job_id: &str, result: &str) -> Result<()> {
+        let connection = self.connection()?;
+        let receipt: Option<(String, String, String)> = connection.query_row(
+            "SELECT intent_id, recipient, (SELECT scope FROM jobs WHERE id=notice_receipts.job_id)
+             FROM notice_receipts WHERE job_id=?1", [job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        if let Some((intent_id, recipient, scope)) = receipt {
+            match crate::notify::record_delivery_result(&self.data_root, &scope, &intent_id, &recipient, result) {
+                Ok(Some(_)) => { self.confirm_notice_result(job_id, result)?; }
+                Ok(None) => { self.defer_notice_result(job_id)?; }
+                Err(error) => {
+                    self.defer_notice_result(job_id)?;
+                    eprintln!("Notice receipt {job_id} is not reflected in its app yet: {error}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_notice_results(&self) -> Result<()> {
+        let receipts = self.notice_receipts_to_sync(None, NOTICE_SYNC_BATCH, false)?;
+        for receipt in &receipts {
+            self.try_sync_notice_result(receipt)?;
+        }
+        Ok(())
+    }
+
+    fn sync_notice_results_for_scope(&self, scope: &str) -> Result<()> {
+        loop {
+            let receipts = self.notice_receipts_to_sync(Some(scope), NOTICE_SYNC_BATCH, true)?;
+            if receipts.is_empty() { return Ok(()); }
+            for receipt in receipts {
+                let reflected = crate::notify::record_delivery_result(
+                    &self.data_root,
+                    &receipt.scope,
+                    &receipt.intent_id,
+                    &receipt.recipient,
+                    &receipt.result,
+                )?;
+                anyhow::ensure!(reflected.is_some(), "Notice receipt {} cannot be confirmed because its app database is unavailable.", receipt.job_id);
+                self.confirm_notice_result(&receipt.job_id, &receipt.result)?;
+            }
+        }
+    }
+
+    fn notice_receipts_to_sync(&self, scope: Option<&str>, limit: i64, ignore_retry_after: bool) -> Result<Vec<NoticeReceiptSync>> {
+        let connection = self.connection()?;
+        let retry_after = if ignore_retry_after { i64::MAX } else { now() };
+        let query =
+            "SELECT r.job_id,r.intent_id,r.recipient,j.scope,
+                    CASE WHEN r.outcome <> 'queued' THEN 'refused:' || r.outcome
+                         WHEN j.error_kind='delivery-uncertain' THEN 'uncertain'
+                         WHEN j.state='accepted' THEN 'accepted'
+                         WHEN j.state='delivered' THEN 'delivered'
+                         WHEN j.state='failed' THEN 'failed'
+                         ELSE 'queued' END
+             FROM notice_receipts r JOIN jobs j ON j.id=r.job_id
+             WHERE r.reflected_result IS NULL AND r.sync_after<=?2 AND (?1 IS NULL OR j.scope=?1)
+             ORDER BY r.created_at,r.job_id LIMIT ?3"
+        ;
+        let mut statement = connection.prepare(query)?;
+        let rows = statement.query_map(params![scope, retry_after, limit], |row| Ok(NoticeReceiptSync {
+            job_id: row.get(0)?,
+            intent_id: row.get(1)?,
+            recipient: row.get(2)?,
+            scope: row.get(3)?,
+            result: row.get(4)?,
+        }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    fn try_sync_notice_result(&self, receipt: &NoticeReceiptSync) -> Result<()> {
+        match crate::notify::record_delivery_result(&self.data_root, &receipt.scope, &receipt.intent_id, &receipt.recipient, &receipt.result) {
+            Ok(Some(_)) => self.confirm_notice_result(&receipt.job_id, &receipt.result),
+            Ok(None) => self.defer_notice_result(&receipt.job_id),
+            Err(error) => {
+                self.defer_notice_result(&receipt.job_id)?;
+                eprintln!("Notice receipt {} for {} is not reflected yet: {error}", receipt.job_id, receipt.scope);
+                Ok(())
+            }
+        }
+    }
+
+    fn confirm_notice_result(&self, job_id: &str, result: &str) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE notice_receipts SET reflected_result=?1,sync_after=0
+             WHERE job_id=?2 AND EXISTS (
+               SELECT 1 FROM jobs j WHERE j.id=?2 AND ?1=CASE
+                 WHEN j.error_kind='delivery-uncertain' THEN 'uncertain'
+                 WHEN j.state='accepted' THEN 'accepted'
+                 WHEN j.state='delivered' THEN 'delivered'
+                 WHEN j.state='failed' THEN 'failed'
+                 ELSE 'queued' END
+             )",
+            params![result, job_id],
+        )?;
+        Ok(())
+    }
+
+    fn defer_notice_result(&self, job_id: &str) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE notice_receipts SET sync_after=?1 WHERE job_id=?2 AND reflected_result IS NULL",
+            params![now() + NOTICE_SYNC_RETRY_MS, job_id],
+        )?;
         Ok(())
     }
 
@@ -1423,6 +1665,33 @@ pub fn install(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(&jobs_table("jobs"))?;
     connection.execute_batch(JOB_INDEXES)?;
     connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS notice_receipts (
+           intent_id TEXT NOT NULL,
+           recipient TEXT NOT NULL,
+           job_id TEXT,
+           account_id TEXT,
+           outcome TEXT NOT NULL,
+           created_at INTEGER NOT NULL,
+           reflected_result TEXT,
+           sync_after INTEGER NOT NULL DEFAULT 0,
+           PRIMARY KEY (intent_id, recipient)
+         ) WITHOUT ROWID;
+         CREATE UNIQUE INDEX IF NOT EXISTS notice_receipts_job ON notice_receipts(job_id) WHERE job_id IS NOT NULL;",
+    )?;
+    for (column, definition) in [
+        ("reflected_result", "TEXT"),
+        ("sync_after", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let exists = connection.prepare("SELECT 1 FROM pragma_table_info('notice_receipts') WHERE name=?1")?.exists([column])?;
+        if !exists {
+            connection.execute(&format!("ALTER TABLE notice_receipts ADD COLUMN {column} {definition}"), [])?;
+        }
+    }
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS notice_receipts_reflection
+           ON notice_receipts(sync_after,created_at,job_id) WHERE reflected_result IS NULL;",
+    )?;
+    connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS requests (
            dimension TEXT NOT NULL,
            key TEXT NOT NULL,
@@ -1463,7 +1732,32 @@ pub fn install(connection: &Connection) -> rusqlite::Result<()> {
         ))?;
         transaction.commit()?;
     }
+    connection.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS notice_receipt_invalidate_reflection
+           AFTER UPDATE OF state,error_kind ON jobs
+           WHEN OLD.state <> NEW.state OR OLD.error_kind IS NOT NEW.error_kind
+           BEGIN
+             UPDATE notice_receipts SET reflected_result=NULL,sync_after=0 WHERE job_id=NEW.id;
+           END;",
+    )?;
     Ok(())
+}
+
+fn notice_outcome(value: &str) -> NoticeOutcome {
+    if value == "queued" { return NoticeOutcome::Queued; }
+    let kind = match value {
+        "installation-limit" => "installation-limit",
+        "creator-limit" => "creator-limit",
+        "app-limit" => "app-limit",
+        "recipient-limit" => "recipient-limit",
+        "owner-has-no-email" => "owner-has-no-email",
+        "no-account" => "no-account",
+        "unverified-email" => "unverified-email",
+        "not-a-verified-account" => "not-a-verified-account",
+        "recipient-cap" => "recipient-cap",
+        _ => "storage-error",
+    };
+    NoticeOutcome::Refused(kind)
 }
 
 /// Records one challenge's job inside the identity transaction.
@@ -1525,11 +1819,10 @@ impl ChallengeOutbox for JobOutbox<'_> {
 
 /// Runs the worker on its interval and whenever a job is enqueued. Sending
 /// happens on this task, never in a request handler.
-pub fn spawn_worker(queue: Arc<MailQueue>, copies: Arc<crate::copies::CopyStatus>) {
+pub fn spawn_worker(queue: Arc<MailQueue>, _copies: Arc<crate::copies::CopyStatus>, _state: crate::AppState) {
     tokio::spawn(async move {
         queue.run_preflight().await;
         loop {
-            let operation = copies.operations.read().await;
             if let Err(error_value) = queue.run_once().await {
                 eprintln!("Email worker pass failed: {error_value}");
             }
@@ -1537,7 +1830,6 @@ pub fn spawn_worker(queue: Arc<MailQueue>, copies: Arc<crate::copies::CopyStatus
             if preflight.state == "refused" && preflight.checked_at.is_some_and(|at| now() - at > PREFLIGHT_RETRY_MS) {
                 queue.run_preflight().await;
             }
-            drop(operation);
             tokio::select! {
                 _ = queue.wake.notified() => {}
                 _ = tokio::time::sleep(queue.interval) => {}
@@ -1663,6 +1955,21 @@ async fn resend_events(State(state): State<AppState>, headers: HeaderMap, body: 
 #[cfg(test)]
 mod tests {
     #[test]
+    fn queue_migration_checks_the_original_key_without_rewriting_ciphertext() {
+        let db = Connection::open_in_memory().unwrap();
+        super::install(&db).unwrap();
+        let key = super::LinkKey::derive("mail-key-for-migration-checks-0123456789");
+        let (nonce, sealed) = key.seal("job-old", "https://app.invalid/verify?token=private").unwrap();
+        db.execute("INSERT INTO jobs(id,purpose,recipient,scope,app_name,token_hash,link_nonce,link_sealed,link_expires_at,state,next_attempt_at,created_at,updated_at)
+            VALUES ('job-old','verification','user@example.invalid','deployment:app','App','hash',?1,?2,999999,'pending',1,1,1)", params![nonce,sealed]).unwrap();
+        let original: (Vec<u8>, Vec<u8>) = db.query_row("SELECT link_nonce,link_sealed FROM jobs WHERE id='job-old'", [], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert!(super::validate_migration_key(&db, "different-mail-key-that-is-not-original").is_err());
+        super::validate_migration_key(&db, "mail-key-for-migration-checks-0123456789").unwrap();
+        let after: (Vec<u8>, Vec<u8>) = db.query_row("SELECT link_nonce,link_sealed FROM jobs WHERE id='job-old'", [], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_eq!(after, original, "preflight validates the queued ciphertext without rewriting it");
+    }
+
+    #[test]
     fn test_mode_selects_local_mail_without_reading_sender_settings() {
         let root = std::env::temp_dir().join(format!("konae-mail-test-policy-{}", uuid::Uuid::new_v4()));
         let (transport, from) = super::transport_from_env(&root, true).unwrap().unwrap();
@@ -1732,6 +2039,18 @@ mod tests {
         }
         fn webhook_secret(&self) -> Option<&[u8]> {
             Some(b"webhook test secret")
+        }
+    }
+
+    struct SmtpNamed(Arc<Scripted>);
+
+    impl Transport for SmtpNamed {
+        fn name(&self) -> &'static str { "smtp" }
+        fn send<'a>(&'a self, email: &'a OutgoingEmail) -> BoxFuture<'a, SendOutcome> {
+            Box::pin(async move { self.0.send(email).await })
+        }
+        fn preflight<'a>(&'a self, sender: &'a str) -> BoxFuture<'a, PreflightResult> {
+            Box::pin(async move { self.0.preflight(sender).await })
         }
     }
 
@@ -2115,7 +2434,7 @@ mod tests {
     async fn the_worker_runs_on_its_own_task() {
         let transport = Scripted::new();
         let fixture = fixture(transport.clone()).await;
-        spawn_worker(fixture.queue(), Default::default());
+        spawn_worker(fixture.queue(), Default::default(), fixture.state.clone());
         fixture.signup(&fixture.app, "person@example.test").await.unwrap();
         for _ in 0..100 {
             if !transport.sent().is_empty() {
@@ -2609,6 +2928,250 @@ mod tests {
         let status = fixture.queue().status().unwrap();
         assert_eq!(status["queue"]["notices"]["accepted"], 2);
         assert_eq!(notice_usage(&fixture), vec![("alerts.raise: queued".into(), 1), ("bookings.create: queued".into(), 1)]);
+    }
+
+    fn intent_notice<'a>(recipient: &'a str, intent_id: &'a str, account_id: Option<&'a str>) -> Notice<'a> {
+        Notice { recipient, scope: "deployment:portable-app", creator: "creator-a", app_name: "Tasks", action: "tasks.changed",
+            subject: "Changed", text: "A row changed", html: "<p>A row changed</p>", account_id, intent_id: Some(intent_id) }
+    }
+
+    #[tokio::test]
+    async fn retrying_the_same_intent_and_recipient_reuses_its_receipt_and_budget() {
+        let fixture = fixture_with(Scripted::new(), Limits { notify_app_per_day: 1, ..Limits::default() }).await;
+        let queue = fixture.queue();
+        let first = intent_notice("owner@example.test", "intent-1", None);
+        assert_eq!(queue.record_notice_intent(&first).unwrap(), NoticeOutcome::Queued);
+        assert_eq!(queue.record_notice_intent(&first).unwrap(), NoticeOutcome::Queued);
+        let other = intent_notice("owner@example.test", "intent-2", None);
+        assert_eq!(queue.record_notice_intent(&other).unwrap(), NoticeOutcome::Refused("app-limit"));
+        assert_eq!(queue.record_notice_intent(&other).unwrap(), NoticeOutcome::Refused("app-limit"));
+        assert_eq!(fixture.db().query_row("SELECT COUNT(*) FROM jobs WHERE purpose='notify'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(fixture.db().query_row("SELECT COUNT(*) FROM notice_receipts", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn startup_recovery_transfers_a_committed_intent_once() {
+        let transport = Scripted::new();
+        let mut fixture = fixture(transport.clone()).await;
+        fixture.app.actions = json!({"version":1,"actions":{
+            "alerts.raise":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO alerts (title) VALUES (?1)",
+                "bindings":[{"source":"input","key":"title","type":"string"}],
+                "notify":{"to":"owner","subject":"Alert: {input.title}","body":"Raised: {input.title}"}}
+        }}).to_string();
+        fixture.state.deployments.write().await.insert(fixture.app.hostname.clone(), fixture.app.clone());
+        let database = crate::layout::database(&fixture.root, &fixture.app.id);
+        let app_db = Connection::open(&database).unwrap();
+        app_db.execute_batch(
+            "CREATE TABLE __konae_notify_intents (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
+               state TEXT NOT NULL CHECK(state IN ('pending','handed_off')), created_at INTEGER NOT NULL);",
+        ).unwrap();
+        let payload = json!({"app": fixture.app.id, "release":"v1", "action":"alerts.raise",
+            "declaration": json!({"to":"owner","subject":"Alert: {input.title}","body":"Raised: {input.title}"}), "input":{"title":"Recovered"},
+            "account":null, "actor_id":null, "count":1, "rows":[], "at":1});
+        app_db.execute("INSERT INTO __konae_notify_intents VALUES ('intent-recovery', ?1, 'pending', 1)", [payload.to_string()]).unwrap();
+        drop(app_db);
+        crate::notify::wake_pending(&fixture.state).await;
+        assert_eq!(fixture.state.dispatcher.next(crate::execution::WorkResource::Notices).await, fixture.app.id);
+        let newer_release = crate::Deployment { artifact_version: "release-b".into(), ..fixture.app.clone() };
+        assert!(fixture.state.accounts.queue.is_some());
+        crate::maintenance::set(&fixture.root, &fixture.app.id, true).unwrap();
+        crate::notify::handle_intent(&fixture.state, &newer_release, "intent-recovery").await;
+        assert_eq!(Connection::open(&database).unwrap().query_row(
+            "SELECT state FROM __konae_notify_intents WHERE id='intent-recovery'", [], |row| row.get::<_, String>(0),
+        ).unwrap(), "pending");
+        assert_eq!(fixture.db().query_row("SELECT COUNT(*) FROM jobs WHERE purpose='notify'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        crate::maintenance::set(&fixture.root, &fixture.app.id, false).unwrap();
+        crate::notify::handle_intent(&fixture.state, &newer_release, "intent-recovery").await;
+        crate::notify::handle_intent(&fixture.state, &newer_release, "intent-recovery").await;
+        assert_eq!(fixture.db().query_row("SELECT COUNT(*) FROM jobs WHERE purpose='notify'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(Connection::open(&database).unwrap().query_row("SELECT state FROM __konae_notify_intents WHERE id='intent-recovery'", [], |row| row.get::<_, String>(0)).unwrap(), "handed_off");
+        fixture.queue().run_once().await.unwrap();
+        assert_eq!(transport.sent().len(), 1);
+        assert!(transport.sent()[0].subject.contains("Recovered"));
+    }
+
+    #[tokio::test]
+    async fn an_idempotent_notice_is_suppressed_when_its_account_was_revoked() {
+        let transport = Scripted::new();
+        let fixture = fixture(transport.clone()).await;
+        notice_accounts(&fixture);
+        let scope = format!("deployment:{}", fixture.app.id);
+        let notice = Notice { recipient: "ana@example.test", scope: &scope, creator: "creator-a", app_name: "Tasks", action: "tasks.changed",
+            subject: "Changed", text: "A row changed", html: "<p>A row changed</p>", account_id: Some("ana"), intent_id: Some("intent-revoke") };
+        fixture.queue().record_notice_intent(&notice).unwrap();
+        Connection::open(crate::layout::identity(&fixture.root, &fixture.app.id)).unwrap()
+            .execute("UPDATE app_users SET state='suspended' WHERE id='ana'", []).unwrap();
+        fixture.queue().run_once().await.unwrap();
+        assert!(transport.sent().is_empty());
+        assert_eq!(fixture.jobs()[0].1, "failed");
+        assert_eq!(fixture.db().query_row("SELECT error_kind FROM jobs WHERE purpose='notify'", [], |row| row.get::<_, String>(0)).unwrap(), "recipient-revoked");
+    }
+
+    #[tokio::test]
+    async fn an_unacknowledged_smtp_result_is_recorded_as_uncertain_in_the_app_intent() {
+        let transport = Scripted::new();
+        transport.then(SendOutcome::Uncertain("connection ended after DATA".into()));
+        let fixture = fixture(transport).await;
+        let database = crate::layout::database(&fixture.root, &fixture.app.id);
+        let app_db = Connection::open(&database).unwrap();
+        app_db.execute_batch("CREATE TABLE __konae_notify_intents (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL);")
+            .unwrap();
+        app_db.execute("INSERT INTO __konae_notify_intents VALUES ('intent-uncertain', '{\"results\":{}}', 'handed_off', 1)", []).unwrap();
+        let scope = format!("deployment:{}", fixture.app.id);
+        let notice = Notice { recipient: "owner@example.test", scope: &scope, creator: "creator-a", app_name: "Tasks", action: "tasks.changed",
+            subject: "Changed", text: "A row changed", html: "<p>A row changed</p>", account_id: None, intent_id: Some("intent-uncertain") };
+        fixture.queue().record_notice_intent(&notice).unwrap();
+        fixture.queue().run_once().await.unwrap();
+        let payload: String = Connection::open(&database).unwrap().query_row("SELECT payload_json FROM __konae_notify_intents WHERE id='intent-uncertain'", [], |row| row.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&payload).unwrap()["results"]["owner@example.test"], "uncertain");
+        assert_eq!(fixture.db().query_row("SELECT error_kind FROM jobs WHERE purpose='notify'", [], |row| row.get::<_, String>(0)).unwrap(), "delivery-uncertain");
+    }
+
+    #[tokio::test]
+    async fn app_transfer_waits_for_pending_mail_and_restores_uncertain_smtp_without_retry() {
+        let transport = Scripted::new();
+        transport.then(SendOutcome::Uncertain("connection ended after DATA".into()));
+        let fixture = fixture(transport.clone()).await;
+        let scope = format!("deployment:{}", fixture.app.id);
+        let live = crate::layout::data(&fixture.root, &fixture.app.id);
+        let hold = crate::notify::TransferHold::begin(&fixture.root, &fixture.app.id).unwrap();
+        assert_eq!(crate::maintenance::read(&fixture.root, &fixture.app.id)["maintenance"], true);
+        drop(hold);
+        assert_eq!(crate::maintenance::read(&fixture.root, &fixture.app.id)["maintenance"], false);
+        crate::maintenance::set(&fixture.root, &fixture.app.id, true).unwrap();
+        let hold = crate::notify::TransferHold::begin(&fixture.root, &fixture.app.id).unwrap();
+        drop(hold);
+        assert_eq!(crate::maintenance::read(&fixture.root, &fixture.app.id)["maintenance"], true);
+        crate::maintenance::set(&fixture.root, &fixture.app.id, false).unwrap();
+        let database = live.join("database.sqlite");
+        let app_db = Connection::open(&database).unwrap();
+        app_db.execute_batch(
+            "CREATE TABLE __konae_notify_intents (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
+               state TEXT NOT NULL CHECK(state IN ('pending','handed_off','paused')), created_at INTEGER NOT NULL);",
+        ).unwrap();
+        app_db.execute(
+            "INSERT INTO __konae_notify_intents VALUES ('intent-transfer', ?1, 'handed_off', 1)",
+            [json!({"results":{}}).to_string()],
+        ).unwrap();
+        drop(app_db);
+
+        let notice = Notice { recipient: "owner@example.test", scope: &scope, creator: "creator-a", app_name: "Tasks", action: "tasks.changed",
+            subject: "Changed", text: "A row changed", html: "<p>A row changed</p>", account_id: None, intent_id: Some("intent-transfer") };
+        fixture.queue().record_notice_intent(&notice).unwrap();
+        let blocked = crate::notify::prepare_transfer(&fixture.state, &fixture.app.id).unwrap_err();
+        assert!(blocked.to_string().contains("remain pending in mail.sqlite"), "{blocked}");
+        let stale_package = fixture.root.join("stale-package.sqlite");
+        std::fs::copy(&database, &stale_package).unwrap();
+        let stale = crate::notify::validate_imported_intents(&stale_package).unwrap_err();
+        assert!(stale.to_string().contains("unconfirmed mail receipt"), "{stale}");
+
+        fixture.queue().run_once().await.unwrap();
+        assert_eq!(fixture.jobs()[0].1, "failed");
+        assert_eq!(fixture.jobs()[0].4.as_deref(), Some("delivery-uncertain"));
+        let reflected: Option<String> = fixture.db().query_row(
+            "SELECT reflected_result FROM notice_receipts WHERE intent_id='intent-transfer'", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(reflected.as_deref(), Some("uncertain"));
+        let observed_app_db = Connection::open(&database).unwrap();
+        let before_idle_tick: i64 = observed_app_db.query_row("PRAGMA data_version", [], |row| row.get(0)).unwrap();
+        fixture.queue().run_once().await.unwrap();
+        let after_idle_tick: i64 = observed_app_db.query_row("PRAGMA data_version", [], |row| row.get(0)).unwrap();
+        assert_eq!(after_idle_tick, before_idle_tick, "an idle tick must not rewrite reflected app intents");
+        crate::notify::prepare_transfer(&fixture.state, &fixture.app.id).unwrap();
+
+        let snapshot = fixture.root.join("transfer-snapshot");
+        let blobs = crate::file_store::BlockingFiles::new(
+            Arc::new(crate::file_store::LocalFolder::new(&fixture.root)), &fixture.app.id,
+        );
+        crate::app_folders::package::snapshot(&live, &snapshot, &blobs, &fixture.app.modules).unwrap();
+        crate::notify::validate_imported_intents(&snapshot.join("database.sqlite")).unwrap();
+        let restored = fixture.root.join("restored-app").join("database.sqlite");
+        std::fs::create_dir_all(restored.parent().unwrap()).unwrap();
+        std::fs::copy(snapshot.join("database.sqlite"), &restored).unwrap();
+        crate::notify::resume_imported_intents(&restored).unwrap();
+
+        let restored_db = Connection::open(&restored).unwrap();
+        let (state, payload): (String, String) = restored_db.query_row(
+            "SELECT state,payload_json FROM __konae_notify_intents WHERE id='intent-transfer'", [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(state, "handed_off");
+        assert_eq!(serde_json::from_str::<Value>(&payload).unwrap()["results"]["owner@example.test"], "uncertain");
+        fixture.queue().run_once().await.unwrap();
+        assert!(transport.sent().is_empty(), "an uncertain SMTP result must never be retried automatically");
+        assert_eq!(fixture.jobs()[0].1, "failed");
+        assert_eq!(fixture.jobs()[0].4.as_deref(), Some("delivery-uncertain"));
+    }
+
+    #[tokio::test]
+    async fn a_broken_app_receipt_does_not_stop_other_apps_from_sending() {
+        let transport = Scripted::new();
+        let fixture = fixture(transport.clone()).await;
+        let make_app_db = |app: &Deployment, intent: Option<&str>| {
+            let path = crate::layout::database(&fixture.root, &app.id);
+            let db = Connection::open(path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE __konae_notify_intents (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
+                   state TEXT NOT NULL CHECK(state IN ('pending','handed_off','paused')), created_at INTEGER NOT NULL);",
+            ).unwrap();
+            if let Some(intent) = intent {
+                db.execute("INSERT INTO __konae_notify_intents VALUES (?1, '{\"results\":{}}', 'handed_off', 1)", [intent]).unwrap();
+            }
+        };
+        make_app_db(&fixture.app, None);
+        make_app_db(&fixture.other, Some("healthy-intent"));
+
+        let broken_scope = format!("deployment:{}", fixture.app.id);
+        let broken = Notice { recipient: "owner@example.test", scope: &broken_scope, creator: "creator-a", app_name: "Tasks", action: "tasks.changed",
+            subject: "Broken app", text: "Still send", html: "<p>Still send</p>", account_id: None, intent_id: Some("missing-intent") };
+        fixture.queue().record_notice_intent(&broken).unwrap();
+        let healthy_scope = format!("deployment:{}", fixture.other.id);
+        let healthy = Notice { recipient: "other@example.test", scope: &healthy_scope, creator: "creator-a", app_name: "Notes", action: "notes.changed",
+            subject: "Healthy app", text: "Send too", html: "<p>Send too</p>", account_id: None, intent_id: Some("healthy-intent") };
+        fixture.queue().record_notice_intent(&healthy).unwrap();
+
+        assert_eq!(fixture.queue().run_once().await.unwrap(), 2);
+        assert_eq!(transport.sent().len(), 2, "receipt failure for one app must not halt the queue");
+        let reflected: Option<String> = fixture.db().query_row(
+            "SELECT reflected_result FROM notice_receipts WHERE intent_id='healthy-intent'", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(reflected.as_deref(), Some("accepted"));
+        let missing_reflection: Option<String> = fixture.db().query_row(
+            "SELECT reflected_result FROM notice_receipts WHERE intent_id='missing-intent'", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(missing_reflection, None, "a failed app mirror must remain recoverable");
+    }
+
+    #[tokio::test]
+    async fn a_restarted_smtp_worker_keeps_an_expired_inflight_notice_uncertain() {
+        let transport = Scripted::new();
+        let fixture = fixture_with(Arc::new(SmtpNamed(transport.clone())), Limits::default()).await;
+        let scope = format!("deployment:{}", fixture.app.id);
+        let notice = Notice { recipient: "owner@example.test", scope: &scope, creator: "creator-a", app_name: "Tasks", action: "tasks.changed",
+            subject: "Changed", text: "A row changed", html: "<p>A row changed</p>", account_id: None, intent_id: Some("intent-crashed-send") };
+        fixture.queue().record_notice_intent(&notice).unwrap();
+        assert_eq!(fixture.queue().claim().unwrap().len(), 1, "the first worker acquired the job before stopping");
+        fixture.db().execute("UPDATE jobs SET leased_until=1 WHERE purpose='notify'", []).unwrap();
+        assert_eq!(fixture.queue().run_once().await.unwrap(), 0);
+        assert!(transport.sent().is_empty(), "the restarted SMTP worker must not resend an unacknowledged message");
+        let result: (String, String) = fixture.db().query_row("SELECT state,error_kind FROM jobs WHERE purpose='notify'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(result, ("failed".into(), "delivery-uncertain".into()));
+    }
+
+    #[tokio::test]
+    async fn intent_delivery_uses_the_local_testbox_transport() {
+        let root = std::env::temp_dir().join(format!("konae-notify-testbox-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mailbox = root.join(TEST_MAILBOX_FILE);
+        let transport: Arc<dyn Transport> = Arc::new(DevelopmentTransport(DevelopmentMailbox::new(mailbox.clone())));
+        let queue = Arc::new(MailQueue::open(&root, transport, "Konae <konae@localhost>", SECRET, Limits::default(), Duration::from_millis(50)).unwrap());
+        queue.run_preflight().await;
+        let notice = intent_notice("owner@example.test", "intent-testbox", None);
+        queue.record_notice_intent(&notice).unwrap();
+        queue.run_once().await.unwrap();
+        let lines = std::fs::read_to_string(&mailbox).unwrap();
+        assert!(lines.contains("owner@example.test") && lines.contains("A row changed"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     async fn notify_rows(fixture: &Fixture, rows: &[Value]) {

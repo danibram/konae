@@ -23,6 +23,7 @@ use crate::{
 pub struct Ran {
     pub answer: Value,
     pub rows: Vec<serde_json::Map<String, Value>>,
+    pub notify_intent: Option<String>,
     pub sqlite: std::time::Duration,
 }
 
@@ -42,7 +43,7 @@ pub async fn run_action(
     action: &ActionDefinition,
     params: Vec<SqlValue>,
 ) -> Result<Ran> {
-    run_action_holding(path, action, params, None).await
+    run_action_holding(path, action, params, None, None).await
 }
 
 /// Like `run_action`, for a statement that holds one of the Deployment's
@@ -53,16 +54,27 @@ pub async fn run_action_in_slot(
     path: PathBuf,
     action: &ActionDefinition,
     params: Vec<SqlValue>,
-    permit: tokio::sync::OwnedSemaphorePermit,
+    permit: crate::limits::StatementPermit,
 ) -> Result<Ran> {
-    run_action_holding(path, action, params, Some(permit)).await
+    run_action_holding(path, action, params, Some(permit), None).await
+}
+
+pub async fn run_action_in_slot_with_notify(
+    path: PathBuf,
+    action: &ActionDefinition,
+    params: Vec<SqlValue>,
+    permit: crate::limits::StatementPermit,
+    context: notify::MutationContext,
+) -> Result<Ran> {
+    run_action_holding(path, action, params, Some(permit), Some(context)).await
 }
 
 async fn run_action_holding(
     path: PathBuf,
     action: &ActionDefinition,
     params: Vec<SqlValue>,
-    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    permit: Option<crate::limits::StatementPermit>,
+    notify_context: Option<notify::MutationContext>,
 ) -> Result<Ran> {
     let action = action.clone();
     tokio::task::spawn_blocking(move || {
@@ -73,10 +85,11 @@ async fn run_action_holding(
             run_query_on_connection(&connection, &action, params).map(|rows| Ran {
                 answer: Value::from(rows),
                 rows: Vec::new(),
+                notify_intent: None,
                 sqlite: started.elapsed(),
             })
         } else {
-            run_mutation(&path, &action, params)
+            run_mutation(&path, &action, params, notify_context)
         }
     })
     .await
@@ -114,10 +127,11 @@ pub fn run_query_on_connection(
     Ok(rows)
 }
 
-pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
+pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>, notify_context: Option<notify::MutationContext>) -> Result<Ran> {
     let mut connection = app_db::open(path)?;
+    let internal_access = connection.kernel_effect_token();
     let transaction = connection.transaction()?;
-    let ran = run_mutation_on_connection(&transaction, action, params)?;
+    let ran = run_mutation_effects_on_connection(&transaction, &internal_access, action, params, notify_context)?;
     transaction.commit()?;
     Ok(ran)
 }
@@ -175,6 +189,27 @@ pub fn run_mutation_on_connection(
     Ok(Ran {
         answer: json!({"changes": changes, "lastInsertId": last_insert_id}),
         rows,
+        notify_intent: None,
         sqlite: sqlite_started.elapsed(),
     })
+}
+
+pub(crate) fn run_mutation_effects_on_connection(
+    connection: &Connection,
+    internal_access: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    action: &ActionDefinition,
+    params: Vec<SqlValue>,
+    notify_context: Option<notify::MutationContext>,
+) -> Result<Ran> {
+    let mut ran = run_mutation_on_connection(connection, action, params)?;
+    if action.notify.is_some() && ran.answer["changes"].as_u64().unwrap_or(0) > 0 {
+        let context = notify_context.ok_or_else(|| anyhow::anyhow!("A notify mutation requires its app execution context."))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let effect = notify::IntentEffect::new(id.clone(), action, context, &ran)?;
+        crate::app_data::with_kernel_effect_access(internal_access, || {
+            crate::execution::TransactionEffect::prepare(&effect, connection)
+        })?;
+        ran.notify_intent = Some(id);
+    }
+    Ok(ran)
 }

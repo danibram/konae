@@ -156,7 +156,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_MAIL_LIMIT_NOTIFY_OWNER_PER_DAY` | `500` | Notices the apps of one owner may queue per 24 hours. `kernel` does not apply it. The old names `KONAE_MAIL_LIMIT_CREATOR_PER_DAY` and `KONAE_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY` are refused at startup with the new one. |
 | `KONAE_MAIL_LIMIT_NOTIFY_RECIPIENT_PER_DAY` | `50` | Notices one address may receive from one Deployment per 24 hours. |
 | `KONAE_MAIL_WORKER_INTERVAL_MS` | `5000` | How often the mail worker looks for due jobs. A new job also wakes it. |
-| `KONAE_CALLS_PER_MINUTE` | `20` | Calls one app's call actions may queue in any 60 seconds, from 1 to 10000. The Kernel sends them from `calls.sqlite`; see [Calls between apps](./reference/routes-and-calls.md#calls-between-apps). |
+| `KONAE_CALLS_PER_MINUTE` | `20` | Calls one app's call actions may queue in any 60 seconds, from 1 to 10000. The Kernel sends them from the app database. [Calls between apps](./reference/routes-and-calls.md#calls-between-apps) |
 | `KONAE_FILES_QUOTA_BYTES` | `20971520` (20 MiB) | Bytes the files of one Deployment may hold together. An upload past it is refused with the configured number, and so is an import whose files exceed it. |
 | `KONAE_FILE_MAX_BYTES` | `2097152` (2 MiB) | Bytes one file may hold. It must not exceed `KONAE_FILES_QUOTA_BYTES`, or the Kernel refuses to start. A browser upload sends the file in one request. An owner's transfers over MCP, exports among them, move in 4 MiB blocks, and `files.list` and copies read in 64 KiB blocks, so a larger file takes more calls there. The proxy in front of `/mcp` must accept bodies of about 5.4 MiB. |
 | `KONAE_SQLITE_HEAP_BYTES` | Half of available memory, including Linux cgroup limits; 256 MiB when unknown | Ceiling on the memory SQLite may hold across every app of the process. A statement that passes it fails with SQLite's out-of-memory error, and the process keeps running. The figure is one for the whole process, so while one statement holds SQLite at the ceiling, other apps' statements can fail with out-of-memory too. The installation's own stores, owner sign-in and the mail queue, share the figure. The Kernel refuses to start on a value that is not a whole number of bytes above 0. |
@@ -211,6 +211,8 @@ The editor, the `konae` CLI, the test configurations and an exported folder read
 
 ## Data directory and copies
 
+For an upgrade with legacy Calls or pending notices, stop the server and follow the [queue migration procedure](./architecture.md#migrating-the-legacy-queues).
+
 Operators can rehearse a retained restore with a post-cut revocation on an isolated host. [Rehearse loss of the installation volume](./recovery-drill.md).
 
 Each app is one app folder in the data directory. `kernel-rs/kernel/src/app_folders/layout.rs` names every path, and [the architecture](./architecture.md#the-app-folder) describes each file.
@@ -218,7 +220,7 @@ Each app is one app folder in the data directory. `kernel-rs/kernel/src/app_fold
 ```text
 <KONAE_DATA_DIR>/
 ├── mail.sqlite             # the email queue
-├── calls.sqlite            # the call actions' queue and outbox
+├── calls.sqlite            # legacy Calls rows awaiting migration
 ├── transfers.sqlite        # unfinished MCP transfers and the receipts of file uploads
 ├── transfers/              # the bytes of unfinished MCP uploads and downloads
 ├── owners.sqlite           # konae only: owner accounts, sessions and invitation codes

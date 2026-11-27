@@ -1,12 +1,414 @@
 
+use anyhow::Context;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::params;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::path::{Path, PathBuf};
 
 use super::mail::{self, Notice, NoticeOutcome};
 use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, AppState, Deployment};
 
 pub const CONTACT_EMAIL_INVALID: &str = "The contact email is not a valid email address.";
+const INTENT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS __konae_notify_intents (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending','handed_off','paused')), created_at INTEGER NOT NULL) WITHOUT ROWID";
+const MAX_PENDING_INTENTS_PER_APP: i64 = 1000;
+
+#[derive(Clone)]
+pub struct MutationContext {
+    pub app: String,
+    pub release: String,
+    pub action: String,
+    pub input: Value,
+    pub account: Option<String>,
+    pub actor_id: Option<String>,
+    pub at: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct IntentPayload {
+    app: String,
+    release: String,
+    action: String,
+    declaration: Value,
+    input: Value,
+    account: Option<String>,
+    actor_id: Option<String>,
+    count: u64,
+    rows: Vec<Map<String, Value>>,
+    at: u64,
+}
+
+pub struct IntentEffect {
+    pub id: String,
+    payload: IntentPayload,
+}
+
+impl IntentEffect {
+    pub fn new(id: String, action: &ActionDefinition, context: MutationContext, changed: &crate::Ran) -> anyhow::Result<Self> {
+        let declaration = action.notify.clone().ok_or_else(|| anyhow::anyhow!("Notify declaration is missing."))?;
+        Ok(Self { id, payload: IntentPayload {
+            app: context.app, release: context.release, action: context.action, declaration,
+            input: context.input, account: context.account, actor_id: context.actor_id,
+            count: changed.answer["changes"].as_u64().unwrap_or(0), rows: changed.rows.clone(), at: context.at,
+        } })
+    }
+}
+
+impl crate::execution::TransactionEffect for IntentEffect {
+    fn prepare(&self, connection: &Connection) -> rusqlite::Result<()> {
+        ensure_intent_schema(connection)?;
+        let pending: i64 = connection.query_row("SELECT COUNT(*) FROM __konae_notify_intents WHERE state='pending'", [], |row| row.get(0))?;
+        if pending >= MAX_PENDING_INTENTS_PER_APP { return Err(rusqlite::Error::InvalidQuery); }
+        let payload = serde_json::to_string(&self.payload).map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        connection.execute("INSERT INTO __konae_notify_intents (id,payload_json,state,created_at) VALUES (?1,?2,'pending',?3)",
+            params![self.id, payload, self.payload.at as i64])?;
+        Ok(())
+    }
+}
+
+fn ensure_intent_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(INTENT_SCHEMA)?;
+    let has_transfer_state = connection.prepare("SELECT 1 FROM pragma_table_info('__konae_notify_intents') WHERE name='transfer_state'")?.exists([])?;
+    if !has_transfer_state {
+        connection.execute("ALTER TABLE __konae_notify_intents ADD COLUMN transfer_state TEXT", [])?;
+    }
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS __konae_notify_pending
+           ON __konae_notify_intents(state,created_at,id);",
+    )?;
+    Ok(())
+}
+
+/// Pauses pending deliveries in an exported database until the receiving Kernel imports it.
+pub(crate) fn pause_exported_intents(path: &std::path::Path) -> anyhow::Result<()> {
+    let connection = rusqlite::Connection::open(path)?;
+    if !connection.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents'")?.exists([])? { return Ok(()) }
+    ensure_intent_schema(&connection)?;
+    connection.execute("UPDATE __konae_notify_intents SET transfer_state='paused' WHERE state='pending'", [])?;
+    Ok(())
+}
+
+/// Marks pending deliveries in the staged database ready for the receiving Kernel.
+pub(crate) fn resume_imported_intents(path: &std::path::Path) -> anyhow::Result<()> {
+    let connection = rusqlite::Connection::open(path)?;
+    if !connection.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents'")?.exists([])? { return Ok(()) }
+    ensure_intent_schema(&connection)?;
+    connection.execute("UPDATE __konae_notify_intents SET transfer_state=NULL WHERE state='pending' AND transfer_state='paused'", [])?;
+    Ok(())
+}
+
+/// Holds an app in maintenance while its portable state crosses an installation boundary.
+#[must_use = "Keep the hold alive until the app transfer has finished."]
+pub(crate) struct TransferHold {
+    data_root: PathBuf,
+    app: String,
+    owned: bool,
+}
+
+impl TransferHold {
+    pub(crate) fn begin(data_root: &Path, app: &str) -> anyhow::Result<Self> {
+        let already_held = crate::maintenance::read(data_root, app)["maintenance"] == true;
+        if !already_held {
+            crate::maintenance::set(data_root, app, true)?;
+        }
+        Ok(Self { data_root: data_root.to_path_buf(), app: app.to_owned(), owned: !already_held })
+    }
+}
+
+impl Drop for TransferHold {
+    fn drop(&mut self) {
+        if self.owned
+            && let Err(error) = crate::maintenance::set(&self.data_root, &self.app, false)
+        {
+            eprintln!("Could not restore maintenance after app transfer: {error}");
+        }
+    }
+}
+
+/// Copies terminal mail outcomes into the app before export or replacement.
+pub(crate) fn prepare_transfer(state: &AppState, app: &str) -> anyhow::Result<()> {
+    let scope = super::auth::deployment_scope(app);
+    if let Some(queue) = state.accounts.queue.as_ref() {
+        queue.prepare_app_transfer(&scope)?;
+    }
+    let path = crate::layout::data(&state.data_root, app).join("database.sqlite");
+    ensure_transfer_results(&path)
+}
+
+fn ensure_transfer_results(path: &Path) -> anyhow::Result<()> {
+    if !path.is_file() { return Ok(()); }
+    let connection = Connection::open(path)?;
+    if !connection.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents'")?.exists([])? {
+        return Ok(());
+    }
+    let mut statement = connection.prepare(
+        "SELECT id,payload_json FROM __konae_notify_intents WHERE state='handed_off'",
+    )?;
+    for row in statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))? {
+        let (id, payload) = row?;
+        let payload: Value = serde_json::from_str(&payload)?;
+        if payload["results"].as_object().is_some_and(|results| results.values().any(|result| result == "queued")) {
+            anyhow::bail!("App transfer is blocked because notice intent {id} still has an unconfirmed mail receipt. Keep the app on this installation until mail.sqlite records a terminal result.");
+        }
+    }
+    Ok(())
+}
+
+/// Refuses an older or incomplete package whose handed-off work lacks a terminal receipt.
+pub(crate) fn validate_imported_intents(path: &Path) -> anyhow::Result<()> {
+    ensure_transfer_results(path)
+}
+
+/// Reads the committed intent and runs the existing mail handoff from its stored payload.
+pub async fn record_intent(state: &AppState, deployment: &Deployment, _id: &str) {
+    state.dispatcher.wake(crate::execution::WorkResource::Notices, deployment.id.clone()).await;
+}
+
+pub(crate) async fn handle_intent(state: &AppState, deployment: &Deployment, id: &str) {
+    let _data = crate::database_lock(state, &deployment.id).await;
+    if crate::maintenance::pause(&state.data_root, &deployment.id).is_some() { return; }
+    let path = crate::layout::data(&state.data_root, &deployment.id).join("database.sqlite");
+    let intent_id = id.to_owned();
+    let query_id = intent_id.clone();
+    let payload = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<IntentPayload>> {
+        let connection = Connection::open(&path)?;
+        ensure_intent_schema(&connection)?;
+        let row: Option<String> = connection.query_row(
+            "SELECT payload_json FROM __konae_notify_intents WHERE id=?1 AND state='pending' AND COALESCE(transfer_state,'')<>'paused'", [query_id], |row| row.get::<_, String>(0)
+        ).optional()?;
+        row.map(|json| serde_json::from_str(&json).map_err(anyhow::Error::from)).transpose()
+    }).await;
+    let payload = match payload {
+        Ok(Ok(Some(payload))) => payload,
+        Ok(Ok(None)) => return,
+        Ok(Err(error_value)) => { eprintln!("Notify intent {id} could not be read: {error_value}"); return; },
+        Err(error_value) => { eprintln!("Notify intent read task {id} failed: {error_value}"); return; },
+    };
+    if payload.app != deployment.id { return; }
+    let bindings = payload.input.as_object().into_iter().flat_map(|input| input.keys()).map(|key| crate::ActionBinding {
+        source: "input".into(), key: Some(key.clone()), value_type: Some("string".into()), max_length: None,
+        nullable: true, field: None, value: None,
+    }).collect();
+    let action = ActionDefinition {
+        kind: "mutation".into(), access: "anonymous".into(), statement: String::new(), bindings,
+        http: None, page: None, signal: None, guard: None, notify: Some(payload.declaration),
+        schedule: None, subscribe: None, call: Default::default(), extra: Default::default(),
+    };
+    let Some(queue) = state.accounts.queue.as_ref() else { return };
+    let Ok(Some(declared)) = declaration(&payload.action, &action) else { return };
+    let creator = super::accounts::project_creator(state, &deployment.project_id).unwrap_or_else(|| "operator".into());
+    let all: Vec<&Map<String, Value>> = payload.rows.iter().collect();
+    let scope = super::auth::deployment_scope(&deployment.id);
+    let failed = std::cell::Cell::new(false);
+    let send = |account_id: Option<&str>, recipient: &str, rows: &[&Map<String, Value>], count: u64| {
+        let values = Fill { input: &payload.input, actor: payload.actor_id.as_deref(), now: payload.at,
+            columns: &declared.changes, rows, count };
+        let (subject, text, html) = render(&declared, &deployment.project_name, &values);
+        let notice = Notice { recipient, scope: &scope, creator: &creator, app_name: &deployment.project_name,
+            action: &payload.action, subject: &subject, text: &text, html: &html,
+            account_id, intent_id: Some(intent_id.as_str()) };
+        match queue.record_notice_intent(&notice) {
+            Ok(NoticeOutcome::Queued) => {},
+            Ok(NoticeOutcome::Refused(kind)) => {
+                if record_delivery_result(&state.data_root, &scope, &intent_id, recipient, &format!("refused:{kind}")).is_err() {
+                    failed.set(true);
+                }
+            },
+            Err(error_value) => { failed.set(true); eprintln!("Notify intent {id} remains pending: {error_value}"); },
+        }
+    };
+    let refuse_recipient = |recipient: &str, reason: &str| {
+        if record_delivery_result(&state.data_root, &scope, &intent_id, recipient, reason).is_err() { failed.set(true); }
+    };
+    match &declared.to {
+        Recipient::Owner => if let Some(email) = deployment.contact_email.as_deref() {
+            send(None, email, &all, payload.count);
+        } else { refuse_recipient("", "refused:owner-has-no-email"); },
+        Recipient::Actor => if let Some(account) = payload.account.as_deref() {
+            match verified_email(state, &deployment.id, account) {
+                Ok(Some(email)) => send(Some(account), &email, &all, payload.count),
+                _ => refuse_recipient(account, "refused:unverified-email"),
+            }
+        } else { refuse_recipient("", "refused:no-account"); },
+        Recipient::Column(column) => {
+            for (index, (account, rows)) in recipients(column, &payload.rows).into_iter().enumerate() {
+                if index >= MAX_RECIPIENTS_PER_RUN {
+                    refuse_recipient(account, "refused:recipient-cap");
+                    continue;
+                }
+                match verified_email(state, &deployment.id, account) {
+                    Ok(Some(email)) => send(Some(account), &email, &rows, rows.len() as u64),
+                    _ => refuse_recipient(account, "refused:not-a-verified-account"),
+                }
+            }
+        }
+    }
+    if !failed.get() {
+        let path = crate::layout::data(&state.data_root, &deployment.id).join("database.sqlite");
+        if let Ok(connection) = Connection::open(&path) {
+            let _ = connection.execute("UPDATE __konae_notify_intents SET state='handed_off' WHERE id=?1 AND state='pending'", [intent_id]);
+        }
+    }
+}
+
+/// Starts the notice handler. It receives only ready apps and claims one
+/// durable intent at a time. The mail queue has its own worker and capacity.
+pub fn spawn_worker(state: AppState) {
+    if state.accounts.queue.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        wake_pending(&state).await;
+        let mut timers = crate::execution::AppTimers::default();
+        loop {
+            let app = match timers.next_deadline() {
+                Some(deadline) => tokio::select! {
+                    app = state.dispatcher.next(crate::execution::WorkResource::Notices) => app,
+                    _ = tokio::time::sleep_until(deadline.into()) => {
+                        for due in timers.take_due(std::time::Instant::now()) {
+                            state.dispatcher.wake(crate::execution::WorkResource::Notices, due).await;
+                        }
+                        continue;
+                    }
+                },
+                None => state.dispatcher.next(crate::execution::WorkResource::Notices).await,
+            };
+            timers.cancel(&app);
+            let Some(deployment) = state.deployments.read().await.values().find(|item| item.id == app).cloned() else {
+                timers.remove(&app);
+                continue;
+            };
+            if crate::maintenance::pause(&state.data_root, &app).is_some() {
+                timers.reset_retries(&app);
+                timers.schedule(app, std::time::Instant::now() + std::time::Duration::from_secs(60));
+                continue;
+            }
+            let root = state.data_root.clone();
+            let query_app = app.clone();
+            let id = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+                let path = crate::layout::data(&root, &query_app).join("database.sqlite");
+                if !path.is_file() { return Ok(None); }
+                let connection = Connection::open(path)?;
+                ensure_intent_schema(&connection)?;
+                connection.query_row("SELECT id FROM __konae_notify_intents WHERE state='pending' AND COALESCE(transfer_state,'')<>'paused' ORDER BY created_at,id LIMIT 1", [], |row| row.get(0)).optional().map_err(Into::into)
+            }).await;
+            let mut claim_failed = false;
+            let intent_id = match id {
+                Ok(Ok(Some(id))) => Some(id),
+                Ok(Ok(None)) => None,
+                Ok(Err(error_value)) => {
+                    eprintln!("Notify intent for {app} could not be claimed: {error_value}");
+                    claim_failed = true;
+                    None
+                }
+                Err(error_value) => {
+                    eprintln!("Notify intent claim for {app} failed: {error_value}");
+                    claim_failed = true;
+                    None
+                }
+            };
+            if let Some(intent_id) = intent_id.as_deref() {
+                handle_intent(&state, &deployment, intent_id).await;
+            }
+            let root = state.data_root.clone();
+            let query_app = app.clone();
+            let query_intent = intent_id.clone();
+            let remains = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+                let path = crate::layout::data(&root, &query_app).join("database.sqlite");
+                if !path.is_file() { return Ok(false); }
+                let connection = Connection::open(path)?;
+                let schema = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents')", [], |row| row.get::<_, bool>(0))?;
+                if !schema { return Ok(false); }
+                let completed = match query_intent {
+                    Some(id) => connection.query_row("SELECT EXISTS(SELECT 1 FROM __konae_notify_intents WHERE id=?1 AND state='handed_off')", [id], |row| row.get::<_, bool>(0))?,
+                    None => false,
+                };
+                let pending = connection.query_row("SELECT EXISTS(SELECT 1 FROM __konae_notify_intents WHERE state='pending' AND COALESCE(transfer_state,'')<>'paused')", [], |row| row.get::<_, bool>(0))?;
+                Ok(pending && !completed)
+            }).await;
+            if claim_failed {
+                timers.schedule_retry(app, std::time::Instant::now());
+                continue;
+            }
+            match remains {
+                Ok(Ok(true)) => timers.schedule_retry(app, std::time::Instant::now()),
+                Ok(Ok(false)) => {
+                    timers.reset_retries(&app);
+                    if intent_id.is_some() {
+                        state.dispatcher.wake(crate::execution::WorkResource::Notices, app).await;
+                    }
+                }
+                Ok(Err(error_value)) => {
+                    eprintln!("Notify intent status for {app} could not be read: {error_value}");
+                    timers.schedule_retry(app, std::time::Instant::now());
+                }
+                Err(error_value) => {
+                    eprintln!("Notify intent status task for {app} failed: {error_value}");
+                    timers.schedule_retry(app, std::time::Instant::now());
+                }
+            }
+        }
+    });
+}
+
+/// Queues apps with portable pending notices after startup. The scan runs
+/// once; later commits and imports signal the same queue directly.
+pub(crate) async fn wake_pending(state: &AppState) {
+    let deployments: Vec<Deployment> = state.deployments.read().await.values().cloned().collect();
+    for deployment in deployments {
+        let root = state.data_root.clone();
+        let app = deployment.id.clone();
+        let pending = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            let path = crate::layout::data(&root, &app).join("database.sqlite");
+            if !path.is_file() { return Ok(false); }
+            let connection = Connection::open(path)?;
+            let exists = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents')", [], |row| row.get::<_, bool>(0))?;
+            if !exists { return Ok(false); }
+            ensure_intent_schema(&connection)?;
+            Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM __konae_notify_intents WHERE state='pending' AND COALESCE(transfer_state,'')<>'paused')", [], |row| row.get(0))?)
+        }).await;
+        match pending {
+            Ok(Ok(false)) => {},
+            Ok(Ok(true)) => state.dispatcher.wake(crate::execution::WorkResource::Notices, deployment.id).await,
+            Ok(Err(error_value)) => {
+                eprintln!("Notify startup scan for {} failed: {error_value}", deployment.id);
+                state.dispatcher.wake(crate::execution::WorkResource::Notices, deployment.id).await;
+            }
+            Err(error_value) => {
+                eprintln!("Notify startup scan task for {} failed: {error_value}", deployment.id);
+                state.dispatcher.wake(crate::execution::WorkResource::Notices, deployment.id).await;
+            }
+        }
+    }
+}
+
+/// Mirrors the installation queue outcome into the app's portable intent record.
+pub(crate) fn record_delivery_result(data_root: &std::path::Path, scope: &str, intent_id: &str, recipient: &str, result: &str) -> anyhow::Result<Option<bool>> {
+    let Some(app) = scope.strip_prefix("deployment:") else { return Ok(None) };
+    let path = crate::layout::data(data_root, app).join("database.sqlite");
+    if !path.is_file() { return Ok(None) }
+    let mut connection = rusqlite::Connection::open(&path)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    anyhow::ensure!(transaction.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents'")?.exists([])?,
+        "Mail receipt for notice intent {intent_id} cannot be copied because the app database has no portable notice table.");
+    let payload = transaction.query_row(
+        "SELECT payload_json FROM __konae_notify_intents WHERE id=?1", [intent_id], |row| row.get::<_, String>(0),
+    ).optional()?.with_context(|| format!("Mail receipt for notice intent {intent_id} cannot be copied because its app intent is missing."))?;
+    let mut payload: Value = serde_json::from_str(&payload)?;
+    if payload["results"][recipient] == result {
+        transaction.commit()?;
+        return Ok(Some(false));
+    }
+    if !payload["results"].is_object() { payload["results"] = Value::Object(Map::new()); }
+    payload["results"][recipient] = Value::String(result.to_owned());
+    let json = serde_json::to_string(&payload)?;
+    let changed = transaction.execute("UPDATE __konae_notify_intents SET payload_json=?1 WHERE id=?2", rusqlite::params![json, intent_id])?;
+    anyhow::ensure!(changed == 1, "Mail receipt for notice intent {intent_id} did not reach the app database.");
+    transaction.commit()?;
+    Ok(Some(true))
+}
 
 /// The actions of `actions` (an `actions.json`) whose notice goes to the
 /// owner, by name.
@@ -423,7 +825,7 @@ fn queue_notices(
         return Ok(vec![NoticeOutcome::Refused("no-transport")]);
     };
     let creator = super::accounts::project_creator(state, &deployment.project_id).unwrap_or_else(|| "operator".into());
-    let send = |recipient: &str, rows: &[&Map<String, Value>], count: u64| -> anyhow::Result<NoticeOutcome> {
+    let send = |account_id: Option<&str>, recipient: &str, rows: &[&Map<String, Value>], count: u64| -> anyhow::Result<NoticeOutcome> {
         let values = Fill { input, actor: actor_id, now: changed.now, columns: &declared.changes, rows, count };
         let (subject, text, html) = render(declared, &deployment.project_name, &values);
         let scope = super::auth::deployment_scope(&deployment.id);
@@ -436,12 +838,14 @@ fn queue_notices(
             subject: &subject,
             text: &text,
             html: &html,
+            account_id,
+            intent_id: None,
         })
     };
     let all: Vec<&Map<String, Value>> = changed.rows.iter().collect();
     match &declared.to {
         Recipient::Owner => match deployment.contact_email.as_deref() {
-            Some(email) => Ok(vec![send(email, &all, changed.count)?]),
+            Some(email) => Ok(vec![send(None, email, &all, changed.count)?]),
             None => Ok(vec![NoticeOutcome::Refused("owner-has-no-email")]),
         },
         Recipient::Actor => {
@@ -449,7 +853,7 @@ fn queue_notices(
                 return Ok(vec![NoticeOutcome::Refused("no-account")]);
             };
             match verified_email(state, &deployment.id, account)? {
-                Some(email) => Ok(vec![send(&email, &all, changed.count)?]),
+                Some(email) => Ok(vec![send(Some(account), &email, &all, changed.count)?]),
                 None => Ok(vec![NoticeOutcome::Refused("unverified-email")]),
             }
         }
@@ -463,7 +867,7 @@ fn queue_notices(
                     continue;
                 }
                 outcomes.push(match verified_email(state, &deployment.id, id)? {
-                    Some(email) => send(&email, &rows, rows.len() as u64)?,
+                    Some(email) => send(Some(id), &email, &rows, rows.len() as u64)?,
                     None => NoticeOutcome::Refused("not-a-verified-account"),
                 });
             }
@@ -497,6 +901,33 @@ fn verified_email(state: &AppState, deployment_id: &str, account: &str) -> anyho
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn startup_wakes_a_committed_notice_when_its_post_commit_signal_was_lost() {
+        let root = std::env::temp_dir().join(format!("konae-notify-recovery-{}", uuid::Uuid::new_v4()));
+        let state = AppState::for_test(&root);
+        let deployment: Deployment = serde_json::from_value(json!({
+            "id": "notice_app", "projectId": "notice_project", "projectName": "Notice app",
+            "slug": "notice-app", "url": "http://notice-app.localhost", "createdAt": 1,
+            "manifest": {}, "hostname": "notice-app.localhost", "actions": "{}",
+            "artifactVersion": "v1", "signupPolicy": {"mode": "open", "allowlist": []},
+            "signInMethods": ["password"]
+        })).unwrap();
+        state.deployments.write().await.insert(deployment.hostname.clone(), deployment.clone());
+        let database = crate::layout::data(&root, &deployment.id).join("database.sqlite");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let connection = Connection::open(&database).unwrap();
+        ensure_intent_schema(&connection).unwrap();
+        connection.execute(
+            "INSERT INTO __konae_notify_intents (id,payload_json,state,created_at) VALUES ('committed-intent','{}','pending',1)",
+            [],
+        ).unwrap();
+        drop(connection);
+
+        wake_pending(&state).await;
+        assert_eq!(state.dispatcher.next(crate::execution::WorkResource::Notices).await, deployment.id);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn program(actions: &Value) -> super::super::ActionProgram {
         serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()

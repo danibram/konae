@@ -76,7 +76,7 @@ All three need `read`. `usage_summary` and `signals_read` also need the named pr
 | `scheduled` | the action or `cron:<id>` | a [scheduled](#scheduled-work) mutation or cron job ran, whether it succeeded or failed |
 | `call` | the action | a call action queued a call |
 
-The app's Usage page shows daily counts by Function and Action name. Function counts start when the Kernel is updated and survive the pruning of individual latency samples. The Kernel groups counts in memory by UTC day and writes each batch off the request path. The read tools wait up to five seconds to enqueue a flush and up to five more for the writer to confirm it. Check `coverage` for dropped records, write errors or an incomplete drain.
+The app's Usage page shows daily counts by Function and Action name. Function counts start when the Kernel is updated and survive the pruning of individual latency samples. A skipped cron slot adds no Function call. The Kernel groups counts in memory by UTC day and writes each batch off the request path. The read tools wait up to five seconds to enqueue a flush and up to five more for the writer to confirm it. Check `coverage` for dropped records, write errors or an incomplete drain.
 
 `usage_summary` returns the counters, the published actions, daily execution and Signal totals by origin (`runtime`, `route`, `schedule`, `continuation`) and outcome (`ok`, `refused`, `failed`, `unchanged`), the states of retained calls and email, and `coverage`, which says whether queued records finished writing and how far back the store reaches. It also returns `accounts` and `storage`:
 

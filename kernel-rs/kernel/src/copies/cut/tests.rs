@@ -4,6 +4,30 @@ use rusqlite::Connection;
 use std::{ops::Range, sync::Arc};
 use tokio::sync::Notify;
 
+#[test]
+fn cut_uses_private_blob_references_when_files_is_off() {
+    let inventories = std::collections::BTreeMap::from([
+        ("files".to_owned(), "file-index".to_owned()),
+        ("private-test".to_owned(), "private-test".to_owned()),
+    ]);
+    let references = crate::modules::blob_references_with(
+        Path::new("."),
+        "app",
+        &inventories,
+        |provider, _, _| match provider {
+            "file-index" => Ok(Vec::new()),
+            "private-test" => Ok(vec![("00000000-0000-4000-8000-000000000002".into(), 9)]),
+            _ => unreachable!(),
+        },
+    )
+    .unwrap();
+    assert!(!crate::modules::is_on(&crate::modules::defaults(), "files"));
+    let files = attachments("app", b"[]", &std::collections::HashMap::new(), references).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].id, "00000000-0000-4000-8000-000000000002");
+    assert_eq!(files[0].size, 9);
+}
+
 struct Fixture {
     root: PathBuf,
     state: AppState,
@@ -57,7 +81,8 @@ impl Fixture {
             self.state.data_root.clone(),
             layout::apps(&self.state.data_root),
         ] {
-            File::open(path).unwrap().try_lock().unwrap();
+            File::open(&path).unwrap().try_lock()
+                .unwrap_or_else(|error| panic!("Copy left {} locked: {error}", path.display()));
         }
         let writer = Connection::open(layout::database(&self.state.data_root, "app")).unwrap();
         writer.busy_timeout(Duration::ZERO).unwrap();

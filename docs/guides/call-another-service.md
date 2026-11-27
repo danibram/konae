@@ -82,7 +82,7 @@ The URL is https, or http to an app of this installation. It never names a priva
 - Query the table the `then` mutation wrote. In the starter app, that is `status.escalations`.
 - After `secret_set`, read the names back with `secrets_list`. After `release_apply`, read the Deployment back with `project_inspect`.
 
-The editor preview answers `{ callId, queued: true }`, sends nothing and has no outbox. Try calls on `konae dev` or on a published Deployment. The outbox stays on the installation, so an export does not carry pending calls.
+The editor preview answers `{ callId, queued: true }`, sends nothing and has no outbox. Try calls on `konae dev` or on a published Deployment. The app database carries the outbox, including pending calls. Put the source app in maintenance before exporting it for a move. [Delivery and the outbox](../reference/routes-and-calls.md#delivery-and-the-outbox)
 
 ## Read next
 

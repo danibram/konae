@@ -335,7 +335,15 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
 
     let database_guard = database_lock(&state, &id).await;
     let staged_database = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}.sqlite"));
-    let staged = if actions_enabled { stage_database(&db_path, &staged_database, &schema, &program, input.project.files.get("schema-transforms.json").map(String::as_str), input.schema_confirmation.as_deref()) } else { Ok(schema_change::Change::default()) }
+    let candidate_transforms = input.project.files.get("schema-transforms.json").map(String::as_str);
+    let saved_transforms = std::fs::read_to_string(layout::sources(&state.data_root, &id).join("schema-transforms.json")).ok();
+    let schema_unchanged = actions_enabled && existing.is_some() && db_path.exists()
+        && existing.as_ref().is_some_and(|current| current.released_schema == schema)
+        && candidate_transforms == saved_transforms.as_deref();
+    let staged = if schema_unchanged {
+        Ok(schema_change::Change::default())
+    } else if actions_enabled { stage_database(&db_path, &staged_database, &schema, &program, candidate_transforms, input.schema_confirmation.as_deref())
+    } else { Ok(schema_change::Change::default()) }
         .and_then(|change| release_step(&id, "schema_change").map(|()| change));
     let change = match staged {
         Ok(change) => change,
@@ -449,6 +457,9 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
     if let Err(e) = pending.finish() { return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()); }
     http::routes_published(&deployment);
     state.functions.release_changed(&id, &deployment.artifact_version).await;
+    if input.initial_package.is_some() {
+        modules::wake_durable_work(state, &id).await;
+    }
     remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
         Ok(value) => value,

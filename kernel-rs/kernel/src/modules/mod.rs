@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::Settings;
@@ -9,6 +10,237 @@ use crate::Settings;
 pub(crate) fn registry() -> &'static Value {
     static REGISTRY: OnceLock<Value> = OnceLock::new();
     REGISTRY.get_or_init(|| serde_json::from_str(include_str!("../modules.json")).expect("modules.json is generated JSON"))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModuleData {
+    version: u64,
+    components: Vec<String>,
+    #[serde(default)]
+    reserved: Vec<String>,
+    #[serde(default)]
+    migrations: Vec<String>,
+    #[serde(default)]
+    objects: Option<BlobInventoryProvider>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum BlobInventoryProvider {
+    FileIndex,
+}
+
+impl BlobInventoryProvider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FileIndex => "file-index",
+        }
+    }
+}
+
+fn parse_data_registry(registry: &Value) -> Result<BTreeMap<String, ModuleData>> {
+    let modules = registry["modules"].as_object().context("Module registry has no modules object.")?;
+    modules.iter().filter_map(|(name, description)| {
+        description.get("data").map(|data| {
+            serde_json::from_value(data.clone())
+                .with_context(|| format!("Module {name} has invalid data metadata."))
+                .map(|data| (name.clone(), data))
+        })
+    }).collect()
+}
+
+fn data_registry() -> &'static BTreeMap<String, ModuleData> {
+    static DATA: OnceLock<BTreeMap<String, ModuleData>> = OnceLock::new();
+    DATA.get_or_init(|| parse_data_registry(registry()).expect("modules.json data metadata is valid"))
+}
+
+/// Reserved SQLite names and the state format each owning module reads.
+pub fn reserved_names() -> Vec<String> {
+    data_registry().values().flat_map(|data| data.reserved.iter().cloned()).collect()
+}
+
+pub fn is_reserved_name(name: &str) -> bool {
+    data_registry().values().any(|data| data.reserved.iter().any(|reserved| reserved.eq_ignore_ascii_case(name)))
+}
+
+/// Exportable package components declared by their owning modules.
+pub fn export_components() -> Vec<String> {
+    data_registry().values().flat_map(|data| data.components.iter().cloned()).collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+}
+
+/// A module's persisted format version, independent of its enabled switch.
+pub fn data_version(module: &str) -> Option<u64> {
+    data_registry().get(module).map(|data| data.version)
+}
+
+pub fn object_inventory(module: &str) -> Option<&'static str> {
+    data_registry().get(module)?.objects.map(BlobInventoryProvider::as_str)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlobReference {
+    pub module: String,
+    pub id: String,
+    pub size: u64,
+}
+
+/// Reads every registered module's blob references, regardless of its on/off setting.
+pub fn blob_references(root: &std::path::Path, app: &str) -> Result<Vec<BlobReference>> {
+    blob_references_in_data_dir(&crate::layout::data(root, app))
+}
+
+fn collect_blob_references<'a, P>(
+    inventories: impl IntoIterator<Item = (&'a str, P)>,
+    mut read: impl FnMut(P) -> Result<Vec<(String, u64)>>,
+) -> Result<Vec<BlobReference>> {
+    let mut references = BTreeMap::<String, BlobReference>::new();
+    for (module, provider) in inventories {
+        for (id, size) in read(provider)? {
+            if let Some(existing) = references.get(&id) {
+                ensure!(existing.size == size, "Modules {} and {module} disagree about blob {id}'s size.", existing.module);
+            } else {
+                references.insert(id.clone(), BlobReference { module: module.to_owned(), id, size });
+            }
+        }
+    }
+    Ok(references.into_values().collect())
+}
+
+/// The provider parameter keeps inventory consumers testable with a private provider.
+#[cfg(test)]
+pub(crate) fn blob_references_with(
+    root: &std::path::Path,
+    app: &str,
+    inventories: &BTreeMap<String, String>,
+    mut read: impl FnMut(&str, &std::path::Path, &str) -> Result<Vec<(String, u64)>>,
+) -> Result<Vec<BlobReference>> {
+    collect_blob_references(
+        inventories.iter().map(|(module, provider)| (module.as_str(), provider.as_str())),
+        |provider| read(provider, root, app),
+    )
+}
+
+pub fn blob_references_in_data_dir(directory: &std::path::Path) -> Result<Vec<BlobReference>> {
+    collect_blob_references(
+        data_registry().iter().filter_map(|(module, data)| data.objects.map(|provider| (module.as_str(), provider))),
+        |provider| match provider {
+            BlobInventoryProvider::FileIndex => crate::file_store::file_index_references_in(&directory.join("files")),
+        },
+    )
+}
+
+/// Reads the Files index when the caller has only an extracted Files directory.
+pub fn blob_references_in_files_dir(directory: &std::path::Path) -> Result<Vec<BlobReference>> {
+    collect_blob_references(
+        [("files", directory)],
+        crate::file_store::file_index_references_in,
+    )
+}
+
+pub fn data_versions() -> BTreeMap<String, u64> {
+    data_registry().iter().map(|(module, data)| (module.clone(), data.version)).collect()
+}
+
+pub fn data_versions_for_components<'a>(components: impl IntoIterator<Item = &'a str>) -> BTreeMap<String, u64> {
+    let components = components.into_iter().collect::<std::collections::HashSet<_>>();
+    data_registry().iter()
+        .filter(|(_, data)| data.components.iter().any(|component| components.contains(component.as_str())))
+        .map(|(module, data)| (module.clone(), data.version))
+        .collect()
+}
+
+/// Validates portable module data versions before import changes live data.
+pub fn check_data_versions(versions: &BTreeMap<String, u64>) -> Result<()> {
+    for (module, version) in versions {
+        let expected = data_version(module).with_context(|| format!("The package names unknown module data {module}."))?;
+        ensure!(*version == expected, "Module {module} data version {version} is not supported. This Kernel reads version {expected}.");
+    }
+    Ok(())
+}
+
+type CheckPending = fn(&rusqlite::Connection) -> Result<()>;
+type PrepareDatabase = fn(&std::path::Path) -> Result<()>;
+type PrepareTransfer = fn(&crate::AppState, &str) -> Result<()>;
+
+struct DurableWork {
+    resource: crate::execution::WorkResource,
+    start: fn(crate::AppState),
+    check_pending: Option<CheckPending>,
+    prepare_transfer: PrepareTransfer,
+    pause_export: Option<PrepareDatabase>,
+    resume_import: Option<PrepareDatabase>,
+}
+
+const DURABLE_WORK: &[DurableWork] = &[
+    DurableWork {
+        resource: crate::execution::WorkResource::Calls,
+        start: crate::calls::spawn_worker,
+        check_pending: Some(crate::calls::check_pending_continuations_on_connection),
+        prepare_transfer: crate::calls::prepare_transfer,
+        pause_export: None,
+        resume_import: None,
+    },
+    DurableWork {
+        resource: crate::execution::WorkResource::Notices,
+        start: crate::notify::spawn_worker,
+        check_pending: None,
+        prepare_transfer: crate::notify::prepare_transfer,
+        pause_export: Some(crate::notify::pause_exported_intents),
+        resume_import: Some(crate::notify::resume_imported_intents),
+    },
+];
+
+pub(crate) fn work_resources() -> impl Iterator<Item = crate::execution::WorkResource> {
+    DURABLE_WORK.iter().map(|module| module.resource)
+}
+
+pub(crate) fn start_durable_work(state: &crate::AppState) {
+    for module in DURABLE_WORK {
+        (module.start)(state.clone());
+    }
+}
+
+pub(crate) async fn wake_durable_work(state: &crate::AppState, app: &str) {
+    for resource in work_resources() {
+        state.dispatcher.wake(resource, app).await;
+    }
+}
+
+pub(crate) fn prepare_transfer(state: &crate::AppState, app: &str) -> Result<()> {
+    for module in DURABLE_WORK {
+        (module.prepare_transfer)(state, app)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn pause_exported_work(database: &std::path::Path) -> Result<()> {
+    for pause in DURABLE_WORK.iter().filter_map(|module| module.pause_export) {
+        pause(database)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn resume_imported_work(database: &std::path::Path) -> Result<()> {
+    for resume in DURABLE_WORK.iter().filter_map(|module| module.resume_import) {
+        resume(database)?;
+    }
+    Ok(())
+}
+
+pub fn check_pending_work(connection: &rusqlite::Connection) -> Result<()> {
+    for check in DURABLE_WORK.iter().filter_map(|module| module.check_pending) {
+        check(connection)?;
+    }
+    Ok(())
+}
+
+pub fn has_migration(module: &str, migration: &str) -> bool {
+    data_registry().get(module).is_some_and(|data| data.migrations.iter().any(|registered| registered == migration))
+}
+
+pub(crate) fn reserved_sql_names() -> String {
+    reserved_names().iter().map(|name| format!("'{}'", name.to_ascii_lowercase().replace('\'', "''"))).collect::<Vec<_>>().join(",")
 }
 
 pub fn defaults() -> BTreeMap<String, Value> {
@@ -106,8 +338,6 @@ fn contains(bytes: &[u8], marker: &[u8]) -> bool {
 }
 
 pub fn complete(modules: &mut BTreeMap<String, Value>) {
-    let switches = registry()["modules"].as_object().cloned().unwrap_or_default();
-    modules.retain(|name, _| switches.get(name).is_some_and(|description| description["switch"] == true));
     for (name, state) in defaults() {
         modules.entry(name).or_insert(state);
     }
@@ -291,7 +521,12 @@ fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> 
 pub fn validate_state(modules: &BTreeMap<String, Value>) -> std::result::Result<(), crate::refusal::Refusal> {
     for (module, state) in modules {
         let description = &registry()["modules"][module];
-        check_known(module, !description.is_null())?;
+        if description.is_null() {
+            if state["on"] != false {
+                check_known(module, false)?;
+            }
+            continue;
+        }
         let Some(object) = state.as_object() else { return Err(crate::refusal::refuse("module.option-invalid", format!("Module {module} state must be an object."))); };
         if !object.get("on").is_some_and(Value::is_boolean) { return Err(crate::refusal::refuse("module.option-invalid", format!("Module {module} option on must be a boolean."))); }
         for (key, value) in object.iter().filter(|(key, _)| key.as_str() != "on") { check_option(module, description, key, value)?; }
@@ -572,6 +807,78 @@ fn database_has_tables(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_data_metadata_rejects_malformed_entries_instead_of_omitting_them() {
+        let malformed = [
+            json!({"version": 1}),
+            json!({"components": ["database"]}),
+            json!({"version": "1", "components": ["database"]}),
+            json!({"version": 1, "components": "database"}),
+            json!({"version": 1, "components": ["database"], "reserved": "__konae_hidden"}),
+            json!({"version": 1, "components": ["database"], "objects": "future-provider"}),
+            json!({"version": 1, "components": ["database"], "futureField": true}),
+        ];
+        for data in malformed {
+            let registry = json!({"modules": {
+                "valid": {"data": {"version": 1, "components": ["database"]}},
+                "invalid": {"data": data}
+            }});
+            assert!(parse_data_registry(&registry).is_err(), "accepted malformed metadata: {data}");
+        }
+
+        let registry = json!({"modules": {"without-data": {"summary": "metadata-free module"}}});
+        assert!(parse_data_registry(&registry).unwrap().is_empty());
+    }
+
+    #[test]
+    fn private_blob_provider_joins_shared_inventory_when_files_is_off() {
+        let root = std::env::temp_dir().join(format!("konae-inventory-{}", uuid::Uuid::new_v4()));
+        let app = "fixture";
+        let inventories = BTreeMap::from([
+            ("files".to_owned(), "file-index".to_owned()),
+            ("private-test".to_owned(), "private-test".to_owned()),
+        ]);
+        let references = blob_references_with(&root, app, &inventories, |provider, _, _| match provider {
+            "file-index" => Ok(vec![("00000000-0000-4000-8000-000000000001".into(), 4)]),
+            "private-test" => Ok(vec![("00000000-0000-4000-8000-000000000002".into(), 9)]),
+            _ => unreachable!(),
+        }).unwrap();
+        assert!(!is_on(&defaults(), "files"));
+        assert_eq!(references.iter().map(|reference| reference.id.as_str()).collect::<Vec<_>>(), [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+        ]);
+        assert_eq!(references[1].module, "private-test");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn data_versions_are_portable_and_reject_unknown_or_incompatible_state() {
+        let current = data_versions();
+        assert!(check_data_versions(&current).is_ok());
+        let mut unknown = current.clone();
+        unknown.insert("future-private".into(), 1);
+        assert!(check_data_versions(&unknown).unwrap_err().to_string().contains("unknown module data future-private"));
+        let mut incompatible = current;
+        incompatible.insert("files".into(), 99);
+        assert!(check_data_versions(&incompatible).unwrap_err().to_string().contains("Module files data version 99 is not supported"));
+    }
+
+    #[test]
+    fn completing_settings_preserves_disabled_unknown_module_state() {
+        let saved = json!({"on": false, "futureOption": {"value": 4}});
+        let mut modules = BTreeMap::from([("future-module".to_owned(), saved.clone())]);
+        complete(&mut modules);
+        assert_eq!(modules["future-module"], saved);
+        assert!(validate_state(&modules).is_ok());
+        modules.get_mut("future-module").unwrap()["on"] = json!(true);
+        assert!(validate_state(&modules).unwrap_err().to_string().contains("Unknown module future-module"));
+        for malformed in [json!({}), json!({"on": null}), json!({"on": "false"}), json!(false)] {
+            let state = BTreeMap::from([("future-module".to_owned(), malformed)]);
+            assert!(validate_state(&state).unwrap_err().to_string().contains("Unknown module future-module"));
+        }
+    }
 
     #[test]
     fn module_cases_match_the_editor_answers() {

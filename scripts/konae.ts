@@ -35,7 +35,7 @@ import { ACTION_TYPES_FILE, renderActionTypes, renderFunctionContextTypes } from
 import { actionsModuleBody } from "../src/sdk/functions";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule, bundleFunctions } from "../src/lib/local-builder.js";
-import { parseFunctionSources, withCronModules, validateFunctions, validateServerArtifact, validateFunctionSources, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
+import { parseFunctionSources, parseFunctions, withCronModules, validateFunctions, validateServerArtifact, validateFunctionSources, serverFolderEntries, verifyServerFolder } from "../src/kernel/functions";
 import { readTar } from "../src/lib/tar";
 import { readAppFolder } from "../src/lib/import-folder";
 import { buildProjectEntries } from "../src/lib/build-project";

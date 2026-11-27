@@ -52,6 +52,14 @@ export type SdkDeclaration = {
   limits?: string[];
 };
 
+export type KernelModuleData = {
+  version: number;
+  components: string[];
+  reserved?: string[];
+  migrations?: string[];
+  objects?: "file-index";
+};
+
 export type SdkModule = {
   name: string;
   title: string;
@@ -62,6 +70,7 @@ export type SdkModule = {
   agentRule: "after-owner-confirms" | "never";
   requires: string[];
   uses: string[];
+  data?: KernelModuleData;
   calls: SdkCall[];
   declarations: SdkDeclaration[];
   notes: string[];
@@ -107,6 +116,19 @@ const unreadable: SdkError = { message: "File not found.", when: "the file does 
 const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is the path files.url returns for the file. The Kernel serves JavaScript, HTML, XML and SVG types as application/octet-stream";
 const storedShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }, where url is the path files.url returns for the new file";
 
+export const internalKernelModules = {
+  usage: {
+    summary: "Per-app usage records.",
+    switch: false,
+    options: [],
+    permission: "publish",
+    agentRule: "never",
+    requires: [],
+    uses: [],
+    data: { version: 1, components: ["usage"] },
+  },
+} satisfies Record<string, Pick<SdkModule, "summary" | "switch" | "options" | "permission" | "agentRule" | "requires" | "uses" | "data">>;
+
 export const sdkContract = {
   version: 1,
   global: "miniapp",
@@ -128,6 +150,7 @@ export const sdkContract = {
   modules: [
     {
       name: "auth",
+      data: {"version": 1, "components": ["identity"]},
       title: "App accounts",
       summary: "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
       switch: true, options: [
@@ -204,6 +227,7 @@ export const sdkContract = {
     },
     {
       name: "actions",
+      data: {"version": 2, "reserved": ["__konae_schema_state", "__konae_schema_history", "__konae_notify_intents"], "components": ["database"], "migrations": ["schema-transforms", "notify-intents"]},
       title: "Data and actions",
       summary: "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
       switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: [], uses: ["actions.json", "schema.sql", "miniapp.actions"],
@@ -391,6 +415,7 @@ export const sdkContract = {
     },
     {
       name: "files",
+      data: {"version": 1, "components": ["files"], "objects": "file-index"},
       title: "File storage",
       summary: "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
       switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader", default: null, label: "Who can read every file", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: ["auth"], uses: ["miniapp.files"],
@@ -516,6 +541,7 @@ export const sdkContract = {
     },
     {
       name: "calls",
+      data: {"version": 1, "components": ["database"], "reserved": ["__konae_calls"], "migrations": ["calls-app-outbox"]},
       title: "Outgoing calls",
       summary: "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
       switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: ["actions"], uses: ["actions.json kind=call"],
@@ -690,6 +716,7 @@ export const sdkContract = {
     },
     {
       name: "functions",
+      data: {"version": 1, "components": ["database"], "reserved": ["__konae_function_receipts"], "migrations": ["function-receipts"]},
       title: "Server functions",
       summary: "Run bundled JavaScript handlers on the Kernel with verified identity and named Server Actions.",
       switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: [],

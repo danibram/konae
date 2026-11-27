@@ -567,7 +567,7 @@ pub(crate) mod tests {
                 files.insert(entry.clone(), case["source"].as_str().unwrap().to_owned());
                 if let Some(helper) = case["helper"].as_str() { files.insert("functions/helper.js".into(), helper.to_owned()); }
             }
-            let manifest = Manifest { version: 1, functions: BTreeMap::from([("test".into(), Function { entry, mount: "/api/test".into(), methods: vec!["GET".into()], access: "anonymous".into(), actions: vec![] })]), crons: Default::default() };
+            let manifest = Manifest { version: 1, crons: Default::default(), functions: BTreeMap::from([("test".into(), Function { entry, mount: "/api/test".into(), methods: vec!["GET".into()], access: "anonymous".into(), actions: vec![] })]) };
             let result = validate_function_sources(&manifest, &files);
             if let Some(module) = case["module"].as_str() {
                 let error = result.unwrap_err();

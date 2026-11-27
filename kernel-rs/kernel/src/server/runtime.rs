@@ -472,7 +472,7 @@ pub fn transfer_tools(runtime: bool) -> Vec<Value> {
             } else {
                 "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a component of an export, which may be as large as that component's quota."
             },
-            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":crate::package::COMPONENT_NAMES}}),
+            json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":crate::package::component_names()}}),
             &["size", "sha256"],
             false,
         ),

@@ -27,6 +27,23 @@ pub const MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HEADERS: usize = 128;
 const MAX_OPERATIONS: usize = 64;
 
+struct FunctionReceiptEffect<'a> {
+    actor_scope: &'a str,
+    function_name: &'a str,
+    key: &'a str,
+    fingerprint: &'a str,
+}
+
+impl crate::execution::TransactionEffect for FunctionReceiptEffect<'_> {
+    fn prepare(&self, connection: &Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "INSERT INTO __konae_function_receipts (actor_scope,function_name,idempotency_key,fingerprint,response_json) VALUES (?1,?2,?3,?4,?5)",
+            params![self.actor_scope, self.function_name, self.key, self.fingerprint, RECEIPT_RESPONSE_MARKER],
+        )?;
+        Ok(())
+    }
+}
+
 type Result<T> = std::result::Result<T, Failure>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
@@ -85,6 +102,8 @@ impl From<Refusal> for Failure {
 }
 
 pub struct InvocationConfig {
+    pub app_id: String,
+    pub release_id: String,
     pub database: Option<PathBuf>,
     pub program: Arc<ActionProgram>,
     pub function_name: String,
@@ -186,6 +205,7 @@ pub fn lookup_receipt(
     Ok(receipt)
 }
 pub struct Invocation {
+    context: crate::execution::Context,
     database: Option<PathBuf>,
     program: Arc<ActionProgram>,
     function_name: String,
@@ -279,6 +299,25 @@ pub fn admit(config: InvocationConfig, budget: Budget) -> Result<Admission> {
     let fingerprint = config.fingerprint;
     let actor_scope = serde_json::to_string(&config.actor).map_err(|_| Failure::storage())?;
     let mut invocation = Invocation {
+        context: crate::execution::Context::new(
+            config.app_id,
+            config.release_id,
+            if config.function.access == "scheduled" {
+                crate::execution::Actor::Job {
+                    id: config.function_name.clone(),
+                    authority: crate::execution::JobAuthority::ScheduledFunction,
+                }
+            } else if let Some(actor) = config.actor.clone() {
+                crate::execution::Actor::Human(actor)
+            } else {
+                crate::execution::Actor::Anonymous
+            },
+            config.function.actions.iter().cloned(),
+        ).with_limits(crate::execution::Limits {
+            max_operations: MAX_OPERATIONS,
+            max_input_bytes: konae_functions_executor::protocol::MAX_OPERATION_BYTES,
+            deadline: Some(budget.deadline()),
+        }),
         database: config.database,
         program: config.program,
         function_name: config.function_name,
@@ -430,7 +469,7 @@ impl Invocation {
         action_span: Option<u8>,
     ) -> Result<Value> {
         self.budget.check()?;
-        if !self.allowed.contains(name) {
+        if !self.context.permits(name) || !self.allowed.contains(name) {
             return Err(Failure::new(
                 "function.action-not-allowed",
                 403,
@@ -438,17 +477,14 @@ impl Invocation {
             ));
         }
         self.operations += 1;
-        if self.operations > MAX_OPERATIONS {
+        if self.operations > self.context.limits.max_operations {
             return Err(Failure::new(
                 "function.operation-limit",
                 429,
                 "The function exceeded its Server Action limit.",
             ));
         }
-        bounded_json(
-            input,
-            konae_functions_executor::protocol::MAX_OPERATION_BYTES,
-        )
+        bounded_json(input, self.context.limits.max_input_bytes)
         .map_err(|_| {
             Failure::new(
                 "function.input-too-large",
@@ -471,13 +507,18 @@ impl Invocation {
                 "GET functions cannot invoke mutations.",
             ));
         }
-        if !matches!(action.access.as_str(), "anonymous" | "scheduled") && self.actor.is_none() {
-            return Err(Failure::new(
-                "authentication-required",
-                401,
-                "authentication-required",
-            ));
-        }
+        self.context
+            .authorize_action(name, &action.access)
+            .map_err(|error| match error {
+                crate::execution::AuthorizationError::AuthenticationRequired => {
+                    Failure::new("authentication-required", 401, "authentication-required")
+                }
+                _ => Failure::new(
+                    "function.action-not-allowed",
+                    403,
+                    "The function actor cannot invoke this Server Action.",
+                ),
+            })?;
         let params = crate::resolve_bindings(&action, input, self.actor.as_deref())
             .map_err(|message| Failure::new("function.input-invalid", 400, message))?;
         self.open_connection()?;
@@ -555,9 +596,15 @@ impl Invocation {
             let commit_started = std::time::Instant::now();
             let result = (|| {
                 conn.ensure_receipt_schema()?;
-                conn.internal(|| conn.sql(|| conn.db.execute(
-                    "INSERT INTO __konae_function_receipts (actor_scope,function_name,idempotency_key,fingerprint,response_json) VALUES (?1,?2,?3,?4,?5)",
-                    params![self.actor_scope, self.function_name, key, self.fingerprint, RECEIPT_RESPONSE_MARKER])))?;
+                let effect = FunctionReceiptEffect {
+                    actor_scope: &self.actor_scope,
+                    function_name: &self.function_name,
+                    key: &key,
+                    fingerprint: &self.fingerprint,
+                };
+                conn.internal(|| {
+                    conn.sql(|| crate::execution::TransactionEffect::prepare(&effect, &conn.db))
+                })?;
                 self.budget.begin_commit()?;
                 conn.commit()?;
                 self.budget.committed();

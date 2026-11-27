@@ -1,6 +1,7 @@
 pub mod inventory;
 pub mod maintenance;
 pub mod mail;
+pub mod queue_migration;
 pub mod recovery;
 
 mod stores;

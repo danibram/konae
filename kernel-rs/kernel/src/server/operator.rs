@@ -10,23 +10,7 @@ use crate::{
     find_project_deployment, http, invitations, layout, recovery, runtime,
 };
 
-const COMMANDS: &[&str] = &[
-    "users",
-    "invite",
-    "suspend",
-    "resume",
-    "signup-policy",
-    "module",
-    "modules",
-    "api-key",
-    "secret",
-    "sql",
-    "events",
-    "import",
-    "maintenance",
-    "enter",
-    "test",
-];
+const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "module", "modules", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test", "queues"];
 
 pub fn usage() -> &'static str {
     "Commands on an app this Kernel serves. Add --app <id> when the data directory holds more than one app.
@@ -52,6 +36,7 @@ pub fn usage() -> &'static str {
   kernel test calls [--app <id>]
   kernel test reply <call id> [--app <id>]   reads response JSON from standard input
   kernel test reset-effects [--app <id>]   retires pending work after a stopped local reset
+  kernel queues preflight|migrate|rollback <backup>   migrate legacy queues while consumers are stopped
   kernel maintenance on|off
   kernel enter <email>   prints a one-time link that signs this browser in as the account, for 2 minutes
   kernel import <folder> [--confirm-schema <confirmation>]   replaces the app's data with the data/ of an exported folder, after a backup"
@@ -136,6 +121,16 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     let mut words = Arguments::new(&args[1..]);
     let app = words.option("app")?;
     let startup = Startup::from_env()?;
+    let _stopped = if name == "queues" {
+        Some(crate::file_store::hold_while_stopped(&startup.data_root, "queue migration")?)
+    } else { None };
+    if name == "queues" {
+        ensure!(std::env::var("KONAE_QUEUE_CONSUMERS_PAUSED").as_deref() == Ok("1"), "Stop the Kernel service and set KONAE_QUEUE_CONSUMERS_PAUSED=1 for this offline queue operation.");
+        let deployments = crate::installation::queue_migration::deployments(&startup.data_root, &startup.hosts.public_origin)?;
+        let answer = queues_command(&startup.data_root, &deployments, &mut words)?;
+        println!("{}", serde_json::to_string_pretty(&answer)?);
+        return Ok(true);
+    }
     let _operation = crate::file_store::external_operation(&startup.data_root)?;
     let _generation = if name == "import" {
         Some(crate::file_store::external_operation(&layout::apps(
@@ -239,6 +234,28 @@ async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Resu
             Ok(json!({"callsRetired": calls, "mailRetired": mail}))
         }
         _ => bail!("{}", usage()),
+    }
+}
+
+fn queues_command(data_root: &std::path::Path, deployments: &[Deployment], words: &mut Arguments) -> Result<Value> {
+    let operation = words.required("preflight, migrate or rollback")?;
+    match operation.as_str() {
+        "preflight" | "migrate" => {
+            ensure!(words.rest().is_empty(), "kernel queues {operation}");
+            let report = if operation == "migrate" {
+                crate::installation::queue_migration::migrate(data_root, deployments)?
+            } else {
+                crate::installation::queue_migration::preflight(data_root, deployments)?
+            };
+            Ok(serde_json::to_value(report)?)
+        }
+        "rollback" => {
+            let backup = words.required("the backup path returned by queue migration")?;
+            ensure!(words.rest().is_empty(), "kernel queues rollback <backup>");
+            crate::installation::queue_migration::rollback(data_root, std::path::Path::new(&backup))?;
+            Ok(json!({"rolledBack": true, "backup": backup}))
+        }
+        _ => anyhow::bail!("kernel queues preflight|migrate|rollback <backup>"),
     }
 }
 
@@ -429,7 +446,11 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                 "off" => false,
                 _ => bail!("Say maintenance on or maintenance off."),
             };
-            crate::maintenance::set(&state.data_root, id, on)
+            let result = crate::maintenance::set(&state.data_root, id, on)?;
+            if !on {
+                crate::modules::wake_durable_work(state, id).await;
+            }
+            Ok(result)
         }
         "enter" => {
             let email = words.required("the account's email")?;

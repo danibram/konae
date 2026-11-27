@@ -126,6 +126,11 @@ a.brand { color: inherit; text-decoration: none; }
 .arrow::before { content: ""; width: 100%; height: 1px; background: var(--ink); }
 .arrow::after { content: "›"; position: absolute; right: -1px; font: 22px var(--mono); transform: translateY(-1px); }
 
+.complete-map { overflow: auto; border: 1px solid var(--ink); background: #fff; }
+.complete-map img { display: block; width: 100%; min-width: 1400px; height: auto; }
+.complete-map:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+.architecture-decisions h3 { margin-top: 0; }
+
 .kernel-detail { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 56px; border: 1px solid var(--ink); }
 .kernel-detail article { min-height: 215px; padding: 24px; border-right: 1px solid var(--ink); background: var(--paper); }
 .kernel-detail article:last-child { border: 0; }

@@ -141,7 +141,7 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
         let _guard = database_lock(state, &deployment.id).await;
         match read_file_index(&directory).await {
             Ok(files) => {
-                if let Some(refused) = file_room(state, &files, size) {
+                if let Some(refused) = file_room(state, &deployment.id, &files, size).await {
                     return refused;
                 }
             }
@@ -175,7 +175,7 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
             .await
             .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
         let mut files = read_file_index(&directory).await?;
-        if let Some(refused) = file_room(state, &files, size) {
+        if let Some(refused) = file_room(state, &deployment.id, &files, size).await {
             return Err(refused);
         }
         files.insert(0, metadata.clone());

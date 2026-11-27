@@ -1,4 +1,3 @@
-
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv6Addr, SocketAddr},
@@ -17,6 +16,7 @@ pub const SIGNED_IN_ACTIONS: u32 = 120;
 pub const SIGNED_IN_ACTIONS_PERIOD: Duration = Duration::from_secs(10);
 /// Action statements one Deployment may have running at once.
 pub const STATEMENTS_PER_DEPLOYMENT: usize = 4;
+pub const STATEMENTS_PER_INSTALLATION: usize = 64;
 /// How long a call waits for one of them before it is refused.
 pub const STATEMENT_WAIT: Duration = Duration::from_secs(2);
 const MAX_TRACKED_DEPLOYMENTS: usize = 10_000;
@@ -96,7 +96,10 @@ impl RateLimiter {
     }
 
     fn take_at(&self, key: &str, now: Instant, take: bool) -> Result<(), Duration> {
-        let mut buckets = self.buckets.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut buckets = self
+            .buckets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !take {
             let Some(bucket) = buckets.get(key) else {
                 return Ok(());
@@ -121,7 +124,9 @@ impl RateLimiter {
             bucket.tokens -= 1.0;
             Ok(())
         } else {
-            Err(Duration::from_secs_f64((1.0 - bucket.tokens) / self.per_second))
+            Err(Duration::from_secs_f64(
+                (1.0 - bucket.tokens) / self.per_second,
+            ))
         }
     }
 
@@ -163,6 +168,14 @@ pub struct Guards {
     trusted_proxies: Vec<IpAddr>,
     statement_wait: Duration,
     statements: Mutex<HashMap<String, Arc<Semaphore>>>,
+    installation_statements: Arc<Semaphore>,
+}
+
+/// Counts one SQL operation against both its app and the whole Kernel.
+#[derive(Debug)]
+pub struct StatementPermit {
+    _deployment: OwnedSemaphorePermit,
+    _installation: OwnedSemaphorePermit,
 }
 
 impl Guards {
@@ -178,19 +191,40 @@ impl Guards {
                 SIGNED_IN_ACTIONS_PERIOD,
                 MAX_TRACKED_CLIENTS,
             ),
-            registrations: RateLimiter::new(REGISTRATIONS, REGISTRATIONS_PERIOD, MAX_TRACKED_CLIENTS),
-            auth_clients: RateLimiter::new(AUTH_CLIENT_ATTEMPTS, AUTH_ATTEMPTS_PERIOD, MAX_TRACKED_CLIENTS),
-            auth_client_emails: RateLimiter::new(AUTH_EMAIL_ATTEMPTS, AUTH_ATTEMPTS_PERIOD, MAX_TRACKED_CLIENTS),
-            auth_email_failures: RateLimiter::new(AUTH_EMAIL_FAILURES, AUTH_FAILURES_PERIOD, MAX_TRACKED_CLIENTS),
+            registrations: RateLimiter::new(
+                REGISTRATIONS,
+                REGISTRATIONS_PERIOD,
+                MAX_TRACKED_CLIENTS,
+            ),
+            auth_clients: RateLimiter::new(
+                AUTH_CLIENT_ATTEMPTS,
+                AUTH_ATTEMPTS_PERIOD,
+                MAX_TRACKED_CLIENTS,
+            ),
+            auth_client_emails: RateLimiter::new(
+                AUTH_EMAIL_ATTEMPTS,
+                AUTH_ATTEMPTS_PERIOD,
+                MAX_TRACKED_CLIENTS,
+            ),
+            auth_email_failures: RateLimiter::new(
+                AUTH_EMAIL_FAILURES,
+                AUTH_FAILURES_PERIOD,
+                MAX_TRACKED_CLIENTS,
+            ),
             auth_client_email_failures: RateLimiter::new(
                 AUTH_CLIENT_EMAIL_FAILURES,
                 AUTH_FAILURES_PERIOD,
                 MAX_TRACKED_CLIENTS,
             ),
-            api_key_failures: RateLimiter::new(API_KEY_FAILURES, API_KEY_FAILURES_PERIOD, MAX_TRACKED_CLIENTS),
+            api_key_failures: RateLimiter::new(
+                API_KEY_FAILURES,
+                API_KEY_FAILURES_PERIOD,
+                MAX_TRACKED_CLIENTS,
+            ),
             trusted_proxies,
             statement_wait: STATEMENT_WAIT,
             statements: Mutex::new(HashMap::new()),
+            installation_statements: Arc::new(Semaphore::new(STATEMENTS_PER_INSTALLATION)),
         }
     }
 
@@ -203,23 +237,41 @@ impl Guards {
     /// One of the Deployment's statement slots, or how long to tell the
     /// caller to wait when none frees within the wait. The permit holds the
     /// slot until it is dropped, so move it into the work it guards.
-    pub async fn statement_permit(&self, deployment: &str) -> Result<OwnedSemaphorePermit, Duration> {
+    pub async fn statement_permit(&self, deployment: &str) -> Result<StatementPermit, Duration> {
         let slots = self.statement_slots(deployment);
-        match tokio::time::timeout(self.statement_wait, slots.acquire_owned()).await {
-            Ok(Ok(permit)) => Ok(permit),
-            _ => Err(self.statement_wait),
-        }
+        let deadline = tokio::time::Instant::now() + self.statement_wait;
+        let deployment = tokio::time::timeout_at(deadline, slots.acquire_owned())
+            .await
+            .map_err(|_| self.statement_wait)?
+            .map_err(|_| self.statement_wait)?;
+        let installation = tokio::time::timeout_at(
+            deadline,
+            self.installation_statements.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| self.statement_wait)?
+        .map_err(|_| self.statement_wait)?;
+        Ok(StatementPermit {
+            _deployment: deployment,
+            _installation: installation,
+        })
     }
 
     fn statement_slots(&self, deployment: &str) -> Arc<Semaphore> {
-        let mut slots = self.statements.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slots = self
+            .statements
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = slots.get(deployment) {
             return existing.clone();
         }
         if slots.len() >= MAX_TRACKED_DEPLOYMENTS {
             slots.retain(|_, semaphore| Arc::strong_count(semaphore) > 1);
         }
-        slots.entry(deployment.to_owned()).or_insert_with(|| Arc::new(Semaphore::new(STATEMENTS_PER_DEPLOYMENT))).clone()
+        slots
+            .entry(deployment.to_owned())
+            .or_insert_with(|| Arc::new(Semaphore::new(STATEMENTS_PER_DEPLOYMENT)))
+            .clone()
     }
 
     #[cfg(test)]
@@ -238,12 +290,21 @@ impl Guards {
         self.auth_attempt_at(scope, client, email, Instant::now())
     }
 
-    fn auth_attempt_at(&self, scope: &str, client: IpAddr, email: &str, now: Instant) -> Result<(), Duration> {
+    fn auth_attempt_at(
+        &self,
+        scope: &str,
+        client: IpAddr,
+        email: &str,
+        now: Instant,
+    ) -> Result<(), Duration> {
         let client = client_key(client);
         let email = email_key(email);
-        self.auth_clients.check_at(&format!("{scope}|{client}"), now)?;
-        self.auth_client_emails.check_at(&format!("{scope}|{email}|{client}"), now)?;
-        self.auth_email_failures.peek_at(&format!("{scope}|{email}"), now)
+        self.auth_clients
+            .check_at(&format!("{scope}|{client}"), now)?;
+        self.auth_client_emails
+            .check_at(&format!("{scope}|{email}|{client}"), now)?;
+        self.auth_email_failures
+            .peek_at(&format!("{scope}|{email}"), now)
     }
 
     /// Records a wrong password for `email`. It counts toward the email's
@@ -255,8 +316,14 @@ impl Guards {
     fn auth_failed_at(&self, scope: &str, client: IpAddr, email: &str, now: Instant) {
         let email = email_key(email);
         let share = format!("{scope}|{email}|{}", client_key(client));
-        if self.auth_client_email_failures.check_at(&share, now).is_ok() {
-            let _ = self.auth_email_failures.check_at(&format!("{scope}|{email}"), now);
+        if self
+            .auth_client_email_failures
+            .check_at(&share, now)
+            .is_ok()
+        {
+            let _ = self
+                .auth_email_failures
+                .check_at(&format!("{scope}|{email}"), now);
         }
     }
 
@@ -264,12 +331,15 @@ impl Guards {
     /// Only failures use the bucket up, as wrong passwords do: `key_failed`
     /// takes from it, so a client presenting a valid key never waits here.
     pub fn key_attempt(&self, scope: &str, client: IpAddr) -> Result<(), Duration> {
-        self.api_key_failures.peek_at(&format!("{scope}|{}", client_key(client)), Instant::now())
+        self.api_key_failures
+            .peek_at(&format!("{scope}|{}", client_key(client)), Instant::now())
     }
 
     /// Records an unknown or revoked key from this client.
     pub fn key_failed(&self, scope: &str, client: IpAddr) {
-        let _ = self.api_key_failures.check(&format!("{scope}|{}", client_key(client)));
+        let _ = self
+            .api_key_failures
+            .check(&format!("{scope}|{}", client_key(client)));
     }
 
     /// The address a rate limit should count. X-Forwarded-For is read only
@@ -292,7 +362,10 @@ impl Guards {
             .collect::<Vec<_>>();
         let mut client = peer;
         for entry in forwarded.into_iter().rev() {
-            let Ok(address) = entry.parse::<IpAddr>().map(|address| address.to_canonical()) else {
+            let Ok(address) = entry
+                .parse::<IpAddr>()
+                .map(|address| address.to_canonical())
+            else {
                 break;
             };
             client = address;
@@ -348,7 +421,9 @@ pub fn trusted_proxies(value: &str) -> anyhow::Result<Vec<IpAddr>> {
             entry
                 .parse::<IpAddr>()
                 .map(|address| address.to_canonical())
-                .map_err(|_| anyhow::anyhow!("KONAE_TRUSTED_PROXIES entry {entry} is not an IP address."))
+                .map_err(|_| {
+                    anyhow::anyhow!("KONAE_TRUSTED_PROXIES entry {entry} is not an IP address.")
+                })
         })
         .collect()
 }
@@ -367,9 +442,20 @@ mod tests {
         }
         let wait = limiter.check_at("a", start).unwrap_err();
         assert!(wait > Duration::ZERO && wait <= Duration::from_secs(1));
-        assert!(limiter.check_at("b", start).is_ok(), "other keys keep their own bucket");
-        assert!(limiter.check_at("a", start + Duration::from_millis(350)).is_ok());
-        assert!(limiter.check_at("a", start + Duration::from_millis(350)).is_err());
+        assert!(
+            limiter.check_at("b", start).is_ok(),
+            "other keys keep their own bucket"
+        );
+        assert!(
+            limiter
+                .check_at("a", start + Duration::from_millis(350))
+                .is_ok()
+        );
+        assert!(
+            limiter
+                .check_at("a", start + Duration::from_millis(350))
+                .is_err()
+        );
     }
 
     #[test]
@@ -390,21 +476,36 @@ mod tests {
         let proxy: SocketAddr = "10.0.0.2:5000".parse().unwrap();
         let direct: SocketAddr = "203.0.113.9:5000".parse().unwrap();
         let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", HeaderValue::from_static("6.6.6.6, 198.51.100.7"));
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("6.6.6.6, 198.51.100.7"),
+        );
 
         let untrusting = Guards::new(Vec::new());
         assert_eq!(untrusting.client_ip(Some(proxy), &headers), proxy.ip());
 
         let guards = Guards::new(trusted_proxies("10.0.0.2, 10.0.0.3").unwrap());
         assert_eq!(guards.client_ip(Some(direct), &headers), direct.ip());
-        assert_eq!(guards.client_ip(Some(proxy), &headers), "198.51.100.7".parse::<IpAddr>().unwrap());
-        headers.insert("x-forwarded-for", HeaderValue::from_static("6.6.6.6, 198.51.100.7, 10.0.0.3"));
-        assert_eq!(guards.client_ip(Some(proxy), &headers), "198.51.100.7".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            guards.client_ip(Some(proxy), &headers),
+            "198.51.100.7".parse::<IpAddr>().unwrap()
+        );
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("6.6.6.6, 198.51.100.7, 10.0.0.3"),
+        );
+        assert_eq!(
+            guards.client_ip(Some(proxy), &headers),
+            "198.51.100.7".parse::<IpAddr>().unwrap()
+        );
         headers.insert("x-forwarded-for", HeaderValue::from_static("garbage"));
         assert_eq!(guards.client_ip(Some(proxy), &headers), proxy.ip());
         assert_eq!(guards.client_ip(Some(proxy), &HeaderMap::new()), proxy.ip());
         assert!(trusted_proxies("10.0.0.0/8").is_err());
-        assert_eq!(client_key("2001:db8:1:2:aaaa::1".parse().unwrap()), client_key("2001:db8:1:2:bbbb::9".parse().unwrap()));
+        assert_eq!(
+            client_key("2001:db8:1:2:aaaa::1".parse().unwrap()),
+            client_key("2001:db8:1:2:bbbb::9".parse().unwrap())
+        );
     }
 
     #[test]
@@ -420,19 +521,44 @@ mod tests {
         let guards = Guards::new(Vec::new());
         let client: IpAddr = "192.0.2.1".parse().unwrap();
         for i in 0..AUTH_CLIENT_ATTEMPTS {
-            assert!(guards.auth_attempt("app", client, &format!("user{i}@example.test")).is_ok());
+            assert!(
+                guards
+                    .auth_attempt("app", client, &format!("user{i}@example.test"))
+                    .is_ok()
+            );
         }
-        let wait = guards.auth_attempt("app", client, "other@example.test").unwrap_err();
+        let wait = guards
+            .auth_attempt("app", client, "other@example.test")
+            .unwrap_err();
         assert!(wait > Duration::ZERO && wait <= AUTH_ATTEMPTS_PERIOD);
-        assert!(guards.auth_attempt("other-app", client, "user0@example.test").is_ok(), "each app has its own buckets");
+        assert!(
+            guards
+                .auth_attempt("other-app", client, "user0@example.test")
+                .is_ok(),
+            "each app has its own buckets"
+        );
 
         let other: IpAddr = "198.51.100.1".parse().unwrap();
         for _ in 0..AUTH_EMAIL_ATTEMPTS {
-            assert!(guards.auth_attempt("app", other, "Victim@Example.test").is_ok());
+            assert!(
+                guards
+                    .auth_attempt("app", other, "Victim@Example.test")
+                    .is_ok()
+            );
         }
-        assert!(guards.auth_attempt("app", other, " victim@example.test").is_err(), "one email from one client shares a bucket");
+        assert!(
+            guards
+                .auth_attempt("app", other, " victim@example.test")
+                .is_err(),
+            "one email from one client shares a bucket"
+        );
         let fresh: IpAddr = "203.0.113.1".parse().unwrap();
-        assert!(guards.auth_attempt("app", fresh, "victim@example.test").is_ok(), "another client keeps its own bucket");
+        assert!(
+            guards
+                .auth_attempt("app", fresh, "victim@example.test")
+                .is_ok(),
+            "another client keeps its own bucket"
+        );
     }
 
     #[test]
@@ -453,7 +579,12 @@ mod tests {
         assert!(refused > 0, "the attacker is throttled");
         let later = start + Duration::from_secs(2 * 60 * 60);
         for _ in 0..AUTH_EMAIL_ATTEMPTS {
-            assert!(guards.auth_attempt_at("owner", victim, email, later).is_ok(), "the victim signs in from its own address");
+            assert!(
+                guards
+                    .auth_attempt_at("owner", victim, email, later)
+                    .is_ok(),
+                "the victim signs in from its own address"
+            );
         }
     }
 
@@ -473,12 +604,25 @@ mod tests {
             }
         }
         let fresh: IpAddr = "203.0.113.9".parse().unwrap();
-        let wait = guards.auth_attempt_at("app", fresh, email, now).unwrap_err();
+        let wait = guards
+            .auth_attempt_at("app", fresh, email, now)
+            .unwrap_err();
         assert!(wait > Duration::ZERO && wait <= AUTH_FAILURES_PERIOD);
-        assert!(guards.auth_attempt_at("app", fresh, "someone@example.test", now).is_ok(), "other emails are unaffected");
-        assert!(guards.auth_attempt_at("owner", fresh, email, now).is_ok(), "each scope counts separately");
+        assert!(
+            guards
+                .auth_attempt_at("app", fresh, "someone@example.test", now)
+                .is_ok(),
+            "other emails are unaffected"
+        );
+        assert!(
+            guards.auth_attempt_at("owner", fresh, email, now).is_ok(),
+            "each scope counts separately"
+        );
         let later = now + AUTH_FAILURES_PERIOD / AUTH_EMAIL_FAILURES + Duration::from_millis(10);
-        assert!(guards.auth_attempt_at("app", fresh, email, later).is_ok(), "the count refills over time");
+        assert!(
+            guards.auth_attempt_at("app", fresh, email, later).is_ok(),
+            "the count refills over time"
+        );
     }
 
     #[test]
@@ -487,7 +631,9 @@ mod tests {
         let start = Instant::now();
         for i in 0..1000 {
             let address: IpAddr = format!("10.0.{}.{}", i / 250, i % 250 + 1).parse().unwrap();
-            guards.auth_attempt_at("app", address, "busy@example.test", start).unwrap();
+            guards
+                .auth_attempt_at("app", address, "busy@example.test", start)
+                .unwrap();
         }
     }
 
@@ -501,11 +647,22 @@ mod tests {
         }
         let wait = guards.key_attempt("app", client).unwrap_err();
         assert!(wait > Duration::ZERO && wait <= API_KEY_FAILURES_PERIOD);
-        assert!(guards.key_attempt("app", "198.51.100.8".parse().unwrap()).is_ok(), "another client keeps its own bucket");
-        assert!(guards.key_attempt("other-app", client).is_ok(), "each Deployment counts separately");
+        assert!(
+            guards
+                .key_attempt("app", "198.51.100.8".parse().unwrap())
+                .is_ok(),
+            "another client keeps its own bucket"
+        );
+        assert!(
+            guards.key_attempt("other-app", client).is_ok(),
+            "each Deployment counts separately"
+        );
         let busy: IpAddr = "198.51.100.9".parse().unwrap();
         for _ in 0..1000 {
-            assert!(guards.key_attempt("app", busy).is_ok(), "presenting a valid key takes nothing");
+            assert!(
+                guards.key_attempt("app", busy).is_ok(),
+                "presenting a valid key takes nothing"
+            );
         }
     }
 
@@ -518,9 +675,32 @@ mod tests {
         }
         let started = Instant::now();
         let wait = guards.statement_permit("app").await.unwrap_err();
-        assert!(started.elapsed() >= Duration::from_millis(60), "the call waits before it is refused");
+        assert!(
+            started.elapsed() >= Duration::from_millis(60),
+            "the call waits before it is refused"
+        );
         assert!(wait > Duration::ZERO);
-        assert!(guards.statement_permit("other-app").await.is_ok(), "each Deployment has its own slots");
+        assert!(
+            guards.statement_permit("other-app").await.is_ok(),
+            "each Deployment has its own slots"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_installation_caps_sql_across_deployments_and_releases_both_slots() {
+        let guards = Guards::new(Vec::new()).with_statement_wait(Duration::from_millis(10));
+        let mut held = Vec::new();
+        for index in 0..STATEMENTS_PER_INSTALLATION {
+            held.push(
+                guards
+                    .statement_permit(&format!("app-{index}"))
+                    .await
+                    .unwrap(),
+            );
+        }
+        assert!(guards.statement_permit("another-app").await.is_err());
+        drop(held.pop());
+        assert!(guards.statement_permit("another-app").await.is_ok());
     }
 
     #[tokio::test]
@@ -547,6 +727,13 @@ mod tests {
         for _ in 1..STATEMENTS_PER_DEPLOYMENT {
             held.push(guards.statement_permit("busy").await.unwrap());
         }
-        assert!(guards.with_statement_wait(Duration::from_millis(10)).statement_permit("busy").await.is_err(), "a Deployment with statements running keeps its slots");
+        assert!(
+            guards
+                .with_statement_wait(Duration::from_millis(10))
+                .statement_permit("busy")
+                .await
+                .is_err(),
+            "a Deployment with statements running keeps its slots"
+        );
     }
 }

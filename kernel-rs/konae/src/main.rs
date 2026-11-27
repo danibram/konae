@@ -43,6 +43,7 @@ async fn main() -> Result<()> {
     let installation = mcp::installation();
     if kernel::inventory::command("konae", &installation)? { return Ok(()); }
     if kernel::operator_command(&installation).await? { return Ok(()); }
+    if std::env::args().nth(1).as_deref() == Some("queues") && kernel::operator::command(&installation).await? { return Ok(()); }
     if owners::operator_command()? { return Ok(()); }
     if owners::admission::operator_command()? { return Ok(()); }
     refuse_old_setup_key(

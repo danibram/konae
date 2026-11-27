@@ -4,7 +4,7 @@ use anyhow::{ensure, Context, Result};
 use futures_util::{stream, StreamExt, TryStreamExt};
 use konae_backup::SqliteSnapshot;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs::{self, File, Metadata},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -258,7 +258,9 @@ impl Cut {
         if !index.try_exists()? {
             return Ok(());
         }
-        for mut file in attachments(app, &fs::read(index)?, prior)? {
+        let index_bytes = fs::read(index)?;
+        let references = crate::modules::blob_references(staging, app)?;
+        for mut file in attachments(app, &index_bytes, prior, references)? {
             self.budget.reserve(file.size)?;
             self.budget.reader()?;
             file.open(state, app).await?;
@@ -268,33 +270,35 @@ impl Cut {
     }
 }
 
-fn attachments(app: &str, index: &[u8], prior: &HashMap<&str, &str>) -> Result<Vec<Attachment>> {
+fn attachments(
+    app: &str,
+    index: &[u8],
+    prior: &HashMap<&str, &str>,
+    references: Vec<crate::modules::BlobReference>,
+) -> Result<Vec<Attachment>> {
     let entries: Vec<serde_json::Value> = serde_json::from_slice(index)?;
-    let mut seen = HashSet::new();
-    entries
-        .iter()
-        .map(|entry| {
-            let id = entry["id"]
-                .as_str()
-                .filter(|id| crate::files::valid_file_id(id))
-                .context("The file index has an invalid ID.")?;
-            ensure!(seen.insert(id), "The file index lists {id} twice.");
-            let size = entry["size"]
-                .as_u64()
-                .context("An indexed file has no size.")?;
-            let indexed = entry
-                .get("sha256")
+    let indexed = entries.iter().map(|entry| {
+        let id = entry["id"].as_str().context("The file index has an invalid ID.")?;
+        Ok::<_, anyhow::Error>((id.to_owned(), entry))
+    }).collect::<Result<HashMap<_, _>>>()?;
+    references.into_iter().map(|reference| {
+            let id = reference.id.as_str();
+            ensure!(crate::files::valid_file_id(id), "Blob reference {id} has an invalid ID.");
+            let entry = indexed.get(id).copied();
+            let size = reference.size;
+            let indexed_digest = entry.and_then(|entry| entry
+                .get("sha256"))
                 .map(|v| v.as_str().context("Invalid indexed SHA-256."))
                 .transpose()?;
             let path = format!("apps/{app}/data/files/{id}.blob");
             Ok(Attachment {
                 id: id.to_owned(),
-                expected: indexed
+                expected: indexed_digest
                     .or_else(|| prior.get(path.as_str()).copied())
                     .map(str::to_owned),
                 path,
                 size,
-                legacy: indexed.is_none(),
+                legacy: indexed_digest.is_none(),
                 reader: None,
                 digest: None,
                 version: None,
@@ -308,6 +312,22 @@ struct Index {
     _file: File,
     metadata: Metadata,
     bytes: Vec<u8>,
+}
+
+struct AppInventory {
+    index: Option<Index>,
+    references: Vec<crate::modules::BlobReference>,
+}
+
+impl AppInventory {
+    fn matches(&self, current: &Self) -> bool {
+        let index_matches = match (&self.index, &current.index) {
+            (Some(old), Some(new)) => old.matches(new),
+            (None, None) => true,
+            _ => false,
+        };
+        index_matches && self.references == current.references
+    }
 }
 
 impl Index {
@@ -345,7 +365,7 @@ impl Index {
     }
 }
 
-fn indexes(root: &Path, mut visit: impl FnMut(String, Index) -> Result<()>) -> Result<()> {
+fn indexes(root: &Path, mut visit: impl FnMut(String, AppInventory) -> Result<()>) -> Result<()> {
     for entry in fs::read_dir(layout::apps(root))? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -355,8 +375,10 @@ fn indexes(root: &Path, mut visit: impl FnMut(String, Index) -> Result<()>) -> R
             .file_name()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Invalid app folder name."))?;
-        if let Some(index) = Index::open(&layout::files(root, &app).join("index.json"))? {
-            visit(app, index)?;
+        let index = Index::open(&layout::files(root, &app).join("index.json"))?;
+        let references = crate::modules::blob_references(root, &app)?;
+        if index.is_some() || !references.is_empty() {
+            visit(app, AppInventory { index, references })?;
         }
     }
     Ok(())
@@ -471,7 +493,7 @@ impl SourceCache {
 
 struct Prepared {
     scratch: super::Staging,
-    indexes: HashMap<String, Index>,
+    indexes: HashMap<String, AppInventory>,
     blobs: Result<Vec<Attachment>>,
 }
 
@@ -488,15 +510,16 @@ impl Prepared {
         let staging = &scratch.0;
         fs::create_dir_all(layout::apps(staging))?;
         let mut captured = HashMap::new();
-        indexes(&state.data_root, |app, index| {
-            captured.insert(app, index);
+        indexes(&state.data_root, |app, inventory| {
+            captured.insert(app, inventory);
             Ok(())
         })?;
         let blobs = tokio::time::timeout(Duration::from_secs(60), async {
             let mut pending = Vec::new();
             let mut remaining = bytes;
-            for (app, index) in &captured {
-                let files = attachments(app, &index.bytes, prior)?;
+            for (app, inventory) in &captured {
+                let index = inventory.index.as_ref().map_or(&b"[]"[..], |index| index.bytes.as_slice());
+                let files = attachments(app, index, prior, inventory.references.clone())?;
                 for file in &files {
                     remaining = remaining
                         .checked_sub(file.size)
@@ -554,10 +577,7 @@ impl Prepared {
                 "The copy exceeded its staging pause."
             );
             count += 1;
-            matches &= self
-                .indexes
-                .get(&app)
-                .is_some_and(|old| old.matches(&current));
+            matches &= self.indexes.get(&app).is_some_and(|old| old.matches(&current));
             Ok(())
         })?;
         Ok(matches && count == self.indexes.len())

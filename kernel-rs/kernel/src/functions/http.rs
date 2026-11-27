@@ -224,7 +224,7 @@ fn acquire_action_resources(
     deployment: &str,
     method: &str,
     budget: &Budget,
-) -> Result<(tokio::sync::OwnedSemaphorePermit, crate::ActionLock), &'static str> {
+) -> Result<(crate::limits::StatementPermit, crate::ActionLock), &'static str> {
     let deadline = tokio::time::Instant::from_std(budget.deadline());
     tokio::runtime::Handle::current().block_on(async {
         tokio::time::timeout_at(deadline, async {
@@ -650,7 +650,7 @@ pub(super) async fn invoke(
     trigger: Trigger<'_>,
 ) -> Result<Response, Request> {
     let started = Instant::now();
-    let runner_kind = if std::env::var("KONAE_FUNCTIONS_RUNNER_KIND").as_deref() == Ok("wasm") {
+    let runner_kind = if super::runtime::wasm_selected() {
         "wasm"
     } else {
         "deno"
@@ -666,6 +666,22 @@ pub(super) async fn invoke(
     let budget = Budget::until(started + state.functions.deadline);
     let _cancel = Cancel(budget.clone());
     let deadline = tokio::time::Instant::from_std(budget.deadline());
+    let early_admission = if matches!(trigger, Trigger::Http)
+        && !crate::is_private(observed)
+        && declaration(observed, request.uri().path())
+            .is_some_and(|(_, function)| function.access == "anonymous")
+    {
+        match state.functions.admit(&observed.id, &budget) {
+            Ok(admission) => Some(admission),
+            Err(code) if code == "queue_full" => {
+                let timed = Timed::refusal(executor_failure(&code), started.elapsed());
+                return Ok(record(state, observed, observed_name, &budget, started, timed, &trace));
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     let skip_cron = || (StatusCode::NO_CONTENT, axum::Extension(CronSkipped)).into_response();
     let (generation, held, deployment) = match tokio::time::timeout_at(deadline, async {
         let generation = state.copies.generations.clone().read_owned().await;
@@ -778,10 +794,6 @@ pub(super) async fn invoke(
                 "The function request exceeds 100000000 bytes.",
             ));
         }
-        let admission = state
-            .functions
-            .admit(&deployment.id, &budget)
-            .map_err(|code| executor_failure(&code))?;
         let headers = [header::ACCEPT, header::CONTENT_TYPE]
             .into_iter()
             .filter_map(|name| {
@@ -851,6 +863,10 @@ pub(super) async fn invoke(
             "{}:{}:{server_digest}",
             deployment.id, deployment.artifact_version
         );
+        let admission = match early_admission {
+            Some(admission) => admission,
+            None => state.functions.admit(&deployment.id, &budget).map_err(|code| executor_failure(&code))?,
+        };
         let lease = state
             .functions
             .lease_admitted(cache_key, &budget, admission)
@@ -871,6 +887,8 @@ pub(super) async fn invoke(
             )
         })?);
         let config = InvocationConfig {
+            app_id: deployment.id.clone(),
+            release_id: deployment.artifact_version.clone(),
             database: has_data.then(|| crate::layout::database(&state.data_root, &deployment.id)),
             program,
             function_name: name.clone(),

@@ -1837,6 +1837,10 @@ async fn run_verified(
     let _guard = action_lock(state, &deployment.id, &action.kind).await;
     crate::copies::operation::action(state, &deployment.id, name, action, async {
         let result = match state.guards.statement_permit(&deployment.id).await {
+            Ok(permit) if action.notify.is_some() => crate::run_action_in_slot_with_notify(db_path, action, params, permit,
+                crate::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.to_owned(),
+                    input: input.clone(), account: match &caller { Caller::Person(user) => Some(user.user_id.clone()), _ => None },
+                    actor_id: caller.actor_id().map(str::to_owned), at: crate::now_ms() }).await,
             Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
             Err(wait) => return rate_limited(wait),
         };
@@ -1883,24 +1887,7 @@ async fn run_verified(
                             caller.actor_id(),
                         );
                     }
-                    let account = match &caller {
-                        Caller::Person(user) => Some(user.user_id.as_str()),
-                        Caller::Key(_) | Caller::Visitor => None,
-                    };
-                    let notice = crate::notify::Caller {
-                        account,
-                        actor_id: caller.actor_id(),
-                    };
-                    crate::notify::record(
-                        state,
-                        deployment,
-                        name,
-                        action,
-                        &input,
-                        notice,
-                        ran.changed(crate::now_ms()),
-                    )
-                    .await;
+                    if let Some(id) = ran.notify_intent.as_deref() { crate::notify::record_intent(state, deployment, id).await; }
                 }
                 let mut response = Json(json!({"result": ran.answer})).into_response();
                 response

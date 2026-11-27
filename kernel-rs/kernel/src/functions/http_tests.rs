@@ -719,7 +719,83 @@ async fn a_join_failure_reports_unknown_if_a_mutation_may_have_committed() {
 }
 
 #[tokio::test]
-async fn function_trace_is_returned_on_pre_worker_refusal() {
+async fn admission_includes_requests_waiting_for_publication_and_releases_on_drop() {
+    let from = crate::usage::day(crate::now_ms());
+    let root = std::env::temp_dir().join(format!("konae-function-queue-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut state = AppState::for_test(&root);
+    state.functions = Arc::new(Runtime::configured(
+        "/nonexistent/worker".into(),
+        MemoryPolicy::DevelopmentPolling,
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+    ));
+    let id = "function_queue";
+    let deployed = publish(&state, &release(id, "export function handle() {}")).await;
+    let lock = crate::named_lock(&state, &format!("publish:{id}"), true).await;
+    let reservations = (0..63)
+        .map(|index| {
+            state
+                .functions
+                .admit(&format!("reserved-{index}"), &Budget::new(Duration::from_secs(2)))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let request = || {
+        Request::builder()
+            .uri("/api/orders")
+            .header("host", &deployed.hostname)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let service = crate::stack(state.clone(), axum::Router::new());
+    let mut waiting = Box::pin(service.clone().oneshot(request()));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+            .await
+            .is_err()
+    );
+    let refused = tokio::time::timeout(Duration::from_millis(250), service.oneshot(request()))
+        .await
+        .unwrap()
+        .unwrap();
+    let body = axum::body::to_bytes(refused.into_body(), 1024)
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["code"], "queue_full");
+    drop(waiting);
+    assert!(
+        state
+            .functions
+            .admit(id, &Budget::new(Duration::from_secs(2)))
+            .is_ok()
+    );
+    drop(reservations);
+    let mut waiting = Box::pin(crate::stack(state.clone(), axum::Router::new()).oneshot(request()));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+            .await
+            .is_err()
+    );
+    crate::maintenance::pause_for_test(&root, id, true);
+    drop(lock);
+    let response = waiting.await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()[header::RETRY_AFTER], "300");
+    crate::usage::flush();
+    let to = crate::usage::day(crate::now_ms());
+    let usage = crate::usage::read_usage(&crate::layout::usage(&root, id), &from, &to).unwrap();
+    assert_eq!(
+        usage["totals"],
+        json!([{"kind": "function", "name": "orders", "count": 2}])
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn function_trace_is_returned_on_pre_worker_refusal_and_does_not_hold_admission() {
+    let from = crate::usage::day(crate::now_ms());
     let root = std::env::temp_dir().join(format!("konae-function-queue-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let mut state = AppState::for_test(&root);
@@ -777,6 +853,12 @@ async fn function_trace_is_returned_on_pre_worker_refusal() {
     let value: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["code"], "authentication-required");
     crate::usage::flush();
+    let to = crate::usage::day(crate::now_ms());
+    let usage = crate::usage::read_usage(&crate::layout::usage(&root, id), &from, &to).unwrap();
+    assert_eq!(
+        usage["totals"],
+        json!([{"kind": "function", "name": "orders", "count": 2}])
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

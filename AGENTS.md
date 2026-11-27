@@ -50,6 +50,8 @@ After any write through MCP or the editor, observe the effect through the same d
 
 Prefer a declaration inside the Capsule over a new platform resource. Topic `pieces` of `platform_guide` is the same table for agents.
 
+For cron declarations, permissions and local runs, read [Run a function on a cron schedule](docs/functions.md#run-a-function-on-a-cron-schedule).
+
 ## First run
 
 For cron declarations, permissions and local runs, read [Run a function on a cron schedule](docs/functions.md#run-a-function-on-a-cron-schedule).

@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 
 use crate::limits::{Guards, trusted_proxies};
 use crate::{
-    AppState, LockMap, accounts, calls, copies, copy_bucket_from_env, domain, env, execution,
+    AppState, LockMap, accounts, copies, copy_bucket_from_env, domain, env, execution,
     file_store, functions, heap, hosts, installation, load_deployments, mail, path, runtime,
     schedule, security,
 };
@@ -116,9 +116,9 @@ pub async fn start_locked(
                 mailbox.display()
             );
         }
-        mail::spawn_worker(queue, state.copies.clone());
+        mail::spawn_worker(queue, state.copies.clone(), state.clone());
     }
-    calls::spawn_worker(state.clone());
+    crate::modules::start_durable_work(&state);
     Ok(Running { state, _lock: lock, copy_config })
 }
 
@@ -175,6 +175,7 @@ pub async fn state_from_env(
         )?)),
         accounts: account_settings,
         functions: Arc::new(functions::runtime::Runtime::from_env()?),
+        dispatcher: Arc::new(execution::Dispatcher::default()),
         otlp,
         audit,
         installation: Arc::new(installation),

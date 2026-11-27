@@ -54,6 +54,8 @@ impl Fixture {
             ("accept".into(), "application/json".into()),
         ];
         InvocationConfig {
+            app_id: "test-app".into(),
+            release_id: "test-release".into(),
             database: Some(self.path.clone()),
             program: self.program.clone(),
             function_name: "orders".into(),

@@ -1,6 +1,6 @@
 # The architecture map
 
-A static Konae app that draws the system as a map: the editor, the Validation Gate, the Kernel and what each one holds. It has no Server Actions and no rows.
+A static Konae app showing the complete running architecture and proposed additions. The first Mermaid diagram in `docs/architecture.md` is the source for `kernel-architecture.svg`. Regenerate that image when the diagram changes. Blue boxes mark implemented shared services. Orange boxes mark proposed capabilities.
 
 Publish it from the repository root, with an owner account on the installation:
 

@@ -75,6 +75,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let dist_digest = version_of(&dist);
     let server_artifact = crate::functions::read_artifact(&layout::server(root, id))?;
     let server = crate::functions::validate_artifact(server_artifact.as_ref().map(|a| &a.manifest), server_artifact.as_ref())?;
+    crate::functions::enable_cron_modules(&mut settings.modules, server.as_ref().map(|server| &server.manifest));
     let prepared = crate::functions::prepare_artifact(state, server_artifact.as_ref()).await
         .with_context(|| format!("Could not prepare published functions for app {id}"))?;
     if server.as_ref().is_some_and(|published| !published.manifest.functions.is_empty())

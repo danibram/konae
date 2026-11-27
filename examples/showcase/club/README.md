@@ -9,6 +9,7 @@ Club is a members-only book club. The owner invites people by email. Members pro
 | `index.html`, `styles.css`, `app.js` | The page. `app.js` calls only `miniapp.auth`, `miniapp.actions`, `miniapp.files.upload` and `miniapp.files.url`, plus `fetch` and `<img>` on `/_konae/files/<id>`. `styles.css` copies the design system's tokens as plain CSS and follows the system theme. |
 | `schema.sql` | `members` (user ID, display name, role), `books` (title, author, cover file ID, status, meeting date) and `notes` (owner, book, file ID). |
 | `actions.json` | Ten authenticated Server Actions. Every query names a `LIMIT`. `books.schedule`, `books.finish` and `books.remove` check `role = 'organizer'` in their `WHERE`, and `books.schedule` also checks that no other book is being read. `books.propose` and `notes.add` check that the caller joined. Each of these five declares a guard. |
+| `tests/portable-permission.json` | Synthetic actor and row-rule expectations used by replay after export and import. It travels with the app folder and stays out of `dist/`. |
 | `replay.ts` | Starts two Kernels, runs every flow below, asserts the results and the refusals, and removes both Kernels and their data when it exits. |
 
 ## Platform parts it uses
@@ -30,7 +31,9 @@ From the repository root, with Bun, Cargo and Google Chrome installed:
 KONAE_SHOWCASE_PORT=19472 bun run examples/showcase/club/replay.ts
 ```
 
-The replay builds the Kernel with `cargo build --offline`. The origin Kernel listens on `KONAE_SHOWCASE_PORT` (default 19470) and the destination on the next port. Both use `KONAE_MAIL_TRANSPORT=development`, and the replay reads links from each Kernel's `mailbox.jsonl`. Set `KONAE_SHOWCASE_SCREENSHOTS` to a directory to keep a light and a dark screenshot, and `KONAE_SHOWCASE_BROWSER=0` to skip Chrome. The replay prints one `PASS` line per flow and a JSON report of every refusal it observed, and exits 0 when all of them pass.
+The replay builds the Kernel with `cargo build --offline`. The origin Kernel listens on `KONAE_SHOWCASE_PORT` (default 19470) and the destination on the next port. Both use `KONAE_MAIL_TRANSPORT=development`, and the replay reads links from each Kernel's `mailbox.jsonl`. It reports the source fixture digest separately from the active artifact release. After import, it creates new app sessions and checks both the allowed and denied rows. Set `KONAE_SHOWCASE_SCREENSHOTS` to a directory to keep a light and a dark screenshot, and `KONAE_SHOWCASE_BROWSER=0` to skip Chrome. The replay prints one `PASS` line per flow and a JSON report of every refusal it observed, and exits 0 when all of them pass.
+
+The replay passes a `Config` directly to `publishLocal`, without first writing `konae.json`. In that path the first Signup Policy comes from `project.manifest.signupPolicy`. Turning `auth` on in `modules` only enables the module and leaves its policy at the private app default, `closed`. The replay declares `invitation` in the manifest and keeps the unrelated republish refusal assertion.
 
 ## Publish it yourself
 

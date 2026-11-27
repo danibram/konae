@@ -26,3 +26,8 @@ CREATE TABLE IF NOT EXISTS calls (
 );
 CREATE INDEX IF NOT EXISTS calls_due ON calls(state, next_attempt_at);
 CREATE INDEX IF NOT EXISTS calls_deployment ON calls(deployment, created_at);
+CREATE TABLE IF NOT EXISTS calls_dispatcher (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  last_deployment TEXT
+);
+INSERT OR IGNORE INTO calls_dispatcher (singleton, last_deployment) VALUES (1, NULL);

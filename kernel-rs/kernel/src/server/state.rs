@@ -37,6 +37,8 @@ pub struct AppState {
     /// Where an app user's file uploads and deletes are recorded.
     pub audit: Option<runtime::AuditSink>,
     pub functions: Arc<functions::runtime::Runtime>,
+    /// Shared fair wake-up queues for module-owned durable work.
+    pub dispatcher: Arc<execution::Dispatcher>,
     pub otlp: Option<functions::otlp::Exporter>,
 }
 
@@ -69,6 +71,7 @@ impl AppState {
             installation: Arc::new(installation::Installation::for_test()),
             audit: None,
             functions: Arc::new(functions::runtime::Runtime::disabled()),
+            dispatcher: Arc::new(execution::Dispatcher::default()),
             otlp: None,
         }
     }

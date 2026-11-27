@@ -115,6 +115,7 @@ enum Message {
         account: String,
         kind: AccountKind,
     },
+    #[cfg(test)]
     FunctionLatency {
         folder: PathBuf,
         at: u64,
@@ -281,26 +282,8 @@ pub fn count_account(data_root: &Path, deployment_id: &str, account: &str, kind:
 
 /// Records one completed execution without retaining its inputs or error text.
 pub fn execution(data_root: &Path, deployment_id: &str, name: &str, origin: &str, outcome: &str) {
-    enqueue(Message::Execution {
-        folder: folder(data_root, deployment_id),
-        at: super::now_ms(),
-        name: name.into(),
-        origin: origin.into(),
-        outcome: outcome.into(),
-    });
-}
-
-/// Records host timings without retaining request inputs, accounts or cookies.
-pub fn function_latency(data_root: &Path, deployment_id: &str, timing: FunctionTiming) {
-    if !timing.valid() {
-        DROPPED.fetch_add(1, Ordering::Relaxed);
-        return;
-    }
-    enqueue(Message::FunctionLatency {
-        folder: folder(data_root, deployment_id),
-        at: super::now_ms(),
-        timing,
-    });
+    enqueue(Message::Execution { folder: folder(data_root, deployment_id), at: super::now_ms(),
+        name: name.into(), origin: origin.into(), outcome: outcome.into() });
 }
 
 pub fn function_action_latency(
@@ -470,6 +453,14 @@ struct Batch {
     function_traces: Vec<(u64, Value)>,
 }
 
+struct PendingFunctionTrace {
+    folder: PathBuf,
+    at: u64,
+    version: String,
+    trace: crate::functions::trace::TraceBuffer,
+    local: bool,
+}
+
 #[derive(PartialEq, Eq, Hash)]
 struct ExecutionKey {
     day: u64,
@@ -489,15 +480,8 @@ impl Batch {
     }
 }
 
-struct PendingFunctionTrace {
-    folder: PathBuf,
-    at: u64,
-    version: String,
-    trace: crate::functions::trace::TraceBuffer,
-    local: bool,
-}
-
 fn writer(receiver: Receiver<Message>) {
+    let mut reported_drops = 0;
     let mut pending_traces = Vec::new();
     loop {
         let first = match if pending_traces.is_empty() {
@@ -574,6 +558,7 @@ fn writer(receiver: Receiver<Message>) {
                     entry.0 += 1;
                     entry.1 = entry.1.max(at);
                 }
+                #[cfg(test)]
                 Message::FunctionLatency { folder, at, timing } => {
                     batches
                         .entry(folder)
@@ -655,6 +640,11 @@ fn writer(receiver: Receiver<Message>) {
                 WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
                 eprintln!("Usage write failed for {}: {error}", folder.display());
             }
+        }
+        let dropped = DROPPED.load(Ordering::Relaxed);
+        if dropped > reported_drops && (reported_drops == 0 || dropped - reported_drops >= 1_000) {
+            eprintln!("Usage dropped {dropped} entries since restart.");
+            reported_drops = dropped;
         }
         if let Some(done) = flush {
             let _ = done.try_send(());
@@ -1372,7 +1362,7 @@ pub fn read_summary(
         "functionActionLatency": function_latency::read_actions(&path, start, end)?,
         "accounts": read_accounts(&path, &crate::layout::identity(data_root, &deployment.id), from, to)?,
         "storage": storage(data_root, &deployment.id),
-        "calls": retained_states(&data_root.join("calls.sqlite"), "calls", "deployment", &deployment.id, start, end)?,
+        "calls": retained_states(&crate::layout::database(data_root, &deployment.id), "__konae_calls", "deployment", &deployment.id, start, end)?,
         "mail": retained_states(&data_root.join("mail.sqlite"), "jobs", "scope", &format!("deployment:{}", deployment.id), start, end)?,
         "coverage": {"startedAt": started_at, "earliestMetricDay": earliest_day, "prunedThrough": pruned_through, "retentionDays": USAGE_DAYS,
             "approximate": true, "previewIncluded": false, "queueFlushed": flushed,
@@ -1591,33 +1581,11 @@ pub fn compact_overview(mut summary: Value) -> Value {
     summary
 }
 
-fn retained_states(
-    path: &Path,
-    table: &str,
-    column: &str,
-    scope: &str,
-    from: i64,
-    to: i64,
-) -> Result<Value> {
-    let Some(db) = read_only(path)? else {
-        return Ok(json!({"states": [], "retainedOnly": true}));
-    };
-    let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1)",
-        [table],
-        |r| r.get(0),
-    )?;
-    if !exists {
-        return Ok(json!({"states": [], "retainedOnly": true}));
-    }
-    let sql = format!(
-        "SELECT state, COUNT(*) FROM {table} WHERE {column} = ?1 AND created_at >= ?2 AND created_at < ?3{} GROUP BY state",
-        if table == "jobs" {
-            " AND purpose = 'notify'"
-        } else {
-            ""
-        }
-    );
+fn retained_states(path: &Path, table: &str, column: &str, scope: &str, from: i64, to: i64) -> Result<Value> {
+    let Some(db) = read_only(path)? else { return Ok(json!({"states": [], "retainedOnly": true})); };
+    let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1)", [table], |r| r.get(0))?;
+    if !exists { return Ok(json!({"states": [], "retainedOnly": true})); }
+    let sql = format!("SELECT state, COUNT(*) FROM {table} WHERE {column} = ?1 AND created_at >= ?2 AND created_at < ?3{} GROUP BY state ORDER BY state", if table == "jobs" { " AND purpose = 'notify'" } else { "" });
     let mut q = db.prepare(&sql)?;
     let states = q
         .query_map(params![scope, from, to], |r| {
@@ -1864,6 +1832,23 @@ mod tests {
                 .map(|p| p["bytes"].as_u64().unwrap())
                 .sum::<u64>()
         );
+    }
+
+    #[test]
+    fn events_read_call_states_from_the_apps_portable_database() {
+        let root = scratch("calls-portable-events");
+        let app_id = "deployment-events";
+        let database = crate::layout::database(&root, app_id);
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let db = Connection::open(&database).unwrap();
+        db.execute_batch("CREATE TABLE __konae_calls (deployment TEXT, state TEXT, created_at INTEGER);").unwrap();
+        let today = super::super::now_ms() as i64;
+        db.execute("INSERT INTO __konae_calls VALUES (?1, 'pending', ?2)", params![app_id, today]).unwrap();
+        db.execute("INSERT INTO __konae_calls VALUES (?1, 'delivered', ?2)", params![app_id, today]).unwrap();
+        drop(db);
+        let states = retained_states(&database, "__konae_calls", "deployment", app_id, today - 1, today + 1).unwrap();
+        assert_eq!(states["states"], json!([{"state":"delivered","count":1},{"state":"pending","count":1}]));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

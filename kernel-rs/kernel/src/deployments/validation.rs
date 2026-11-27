@@ -164,7 +164,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         } else {
             initialize_database(&temp)?;
         }
-        crate::schema_change::apply_with_transforms(
+        let change = crate::schema_change::apply_with_transforms(
             &temp,
             input
                 .project
@@ -175,7 +175,8 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
             &program,
             input.project.files.get("schema-transforms.json").map(String::as_str),
             crate::schema_change::Mode::Plan,
-        )
+        )?;
+        Ok(change)
     })();
     let _ = tokio::fs::remove_file(temp).await;
     result

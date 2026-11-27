@@ -12,6 +12,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - Exported apps with server functions can start on a matching Kernel image under Docker's default security profile. The app folder carries the published bundles, accounts, data, and rules. The destination prepares the bundles in its own cache. [Server functions](./docs/functions.md)
 - The `konae:actions` helper types each function's named Server Actions from its allowlist and Action Contract. Both runners support request-scoped timers and Web Crypto, and the builders include a documented subset of Node.js modules.
 - Function timing includes individual Server Actions. `konae events` shows local function traces, and operators can send sampled traces to an OTLP/HTTP collector.
+- App exports carry pending Calls and notice intents alongside their database rows. The destination can resume them after import. [Export and import](./docs/reference/export-and-import.md)
 - Usage shows daily Function calls and successful Server Actions by name. Function counts start after the Kernel update and survive pruning of the latency samples. [Usage and Signals](./docs/reference/usage-and-signals.md)
 
 ### Changed
@@ -19,11 +20,13 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - StarlingMonkey now serves server functions by default. Installations can select deno_core with `KONAE_FUNCTIONS_RUNNER_KIND=deno`.
 - Server Actions and HTTP routes check app sessions on worker threads with read-only SQLite connections. HTTP routes use the same approach for API keys. Requests without a session token skip the session lookup.
 - Usage groups counters for up to 2 ms before writing them in the background. A mutation that declares a Signal still waits for confirmation that the Signal was written.
+- Mutations commit notice intentions with their row changes. Operators moving legacy Calls can rehearse the offline migration and rollback before upgrading the installation. [Queue migration](./docs/architecture.md#migrating-the-legacy-queues)
 
 ### Fixed
 
 - Imports wait for runtime credential checks and Usage operations before replacing their SQLite files.
 - The Kernel bundles SQLite 3.51.3, which fixes the WAL reset race.
+- Static responses keep the body and ETag on the same revision while publishing or rolling back. Package import checks the shared blob inventory and app-wide file quota before installing the files.
 
 ## [0.12.1] - 2026-11-19
 

@@ -111,7 +111,7 @@ pub async fn admin_database(state: &AppState, id: &str, body: &[u8]) -> Response
 
 pub fn inspect_database(path: &Path) -> Result<Vec<Value>> {
     let db = Connection::open(path)?;
-    let mut statement = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY name")?;
+    let mut statement = db.prepare(&format!("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ({}) ORDER BY name", crate::modules::reserved_sql_names()))?;
     let names = statement
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;

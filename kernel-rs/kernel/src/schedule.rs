@@ -201,12 +201,21 @@ pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name
     let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
     let action = program.actions.get(name).ok_or_else(|| anyhow::anyhow!("Action {name} does not exist."))?;
     let schedule = declaration(name, action)?.ok_or_else(|| anyhow::anyhow!("Action {name} does not declare a schedule."))?;
+    let execution = crate::execution::Context::new(deployment.id.clone(), deployment.artifact_version.clone(), crate::execution::Actor::Job {
+        id: format!("schedule:{name}"),
+        authority: crate::execution::JobAuthority::ScheduledAction,
+    }, [name.to_owned()]);
+    execution.authorize_action(name, &action.access).map_err(|code| anyhow::anyhow!("Scheduled action {name} is not authorized: {code}."))?;
     let folder = crate::layout::data(&state.data_root, &deployment.id);
     anyhow::ensure!(folder.is_dir(), "App data for {} does not exist.", deployment.id);
     let _lock = super::action_lock(state, &deployment.id, &action.kind).await;
     anyhow::ensure!(super::maintenance::pause(&state.data_root, &deployment.id).is_none(), "App {} is in maintenance.", deployment.id);
     let at = super::now_ms();
-    let outcome = super::run_action(folder.join("database.sqlite"), action, parameters(action, at)).await;
+    let permit = state.guards.statement_permit(&deployment.id).await.map_err(|_| anyhow::anyhow!("Scheduled operation could not acquire an app and installation SQL slot."))?;
+    let outcome = if action.notify.is_some() {
+        super::run_action_in_slot_with_notify(folder.join("database.sqlite"), action, parameters(action, at), permit,
+            super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.to_owned(), input: json!({}), account: None, actor_id: None, at }).await
+    } else { super::run_action_in_slot(folder.join("database.sqlite"), action, parameters(action, at), permit).await };
     let key_value = format!("{} (manual test)", schedule.key());
     let slot = at as i64;
     match outcome {
@@ -219,8 +228,7 @@ pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name
             })).await?;
             if changes > 0 {
                 usage::signal(&state.data_root, &deployment.id, name, action, &json!({}), None);
-                super::notify::record(state, deployment, name, action, &json!({}),
-                    super::notify::Caller { account: None, actor_id: None }, ran.changed(at)).await;
+                if let Some(id) = ran.notify_intent.as_deref() { super::notify::record_intent(state, deployment, id).await; }
             }
             Ok(json!({"ran": true, "action": name, "schedule": schedule.key(), "changes": changes, "at": at}))
         }
@@ -291,6 +299,14 @@ async fn run_due(
     }
     let done = blocking(&folder, usage::schedule_slots).await?;
     for (name, action, schedule) in work {
+        let execution = crate::execution::Context::new(id.clone(), deployment.artifact_version.clone(), crate::execution::Actor::Job {
+            id: format!("schedule:{name}"),
+            authority: crate::execution::JobAuthority::ScheduledAction,
+        }, [name.clone()]);
+        if execution.authorize_action(name, &action.access).is_err() {
+            eprintln!("Scheduled action {name} on deployment {id} failed its execution authorization.");
+            continue;
+        }
         let (slot, key) = clock.place(schedule, now());
         match done.get(name) {
             Some((ran_under, ran_slot)) if *ran_under == key && *ran_slot >= slot => continue,
@@ -307,7 +323,14 @@ async fn run_due(
         }
         let at = now();
         let pending = crate::copies::Pending::begin(&state.data_root, &format!("{id}/{name} slot {slot}"), "committing a scheduled action and its run")?;
-        let outcome = super::run_action(folder.join("database.sqlite"), action, parameters(action, at)).await;
+        let permit = match state.guards.statement_permit(id).await {
+            Ok(permit) => permit,
+            Err(_) => { eprintln!("Scheduled run of {name} on deployment {id} could not acquire an app and installation SQL slot."); drop(pending); continue; }
+        };
+        let outcome = if action.notify.is_some() {
+            super::run_action_in_slot_with_notify(folder.join("database.sqlite"), action, parameters(action, at), permit,
+                super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.clone(), input: json!({}), account: None, actor_id: None, at }).await
+        } else { super::run_action_in_slot(folder.join("database.sqlite"), action, parameters(action, at), permit).await };
         let (ran, error) = match outcome {
             Ok(ran) => (Some(ran), None),
             Err(error) => {
@@ -325,11 +348,7 @@ async fn run_due(
             usage::confirmed_signals(async {
                 usage::signal(&state.data_root, id, name, action, &json!({}), None);
             }).await?;
-            super::notify::record(
-                state, deployment, name, action, &json!({}),
-                super::notify::Caller { account: None, actor_id: None },
-                ran.changed(at),
-            ).await;
+            if let Some(id) = ran.notify_intent.as_deref() { super::notify::record_intent(state, deployment, id).await; }
         }
         pending.finish()?;
     }
@@ -493,6 +512,7 @@ mod tests {
     fn release(schedule: Value) -> Value {
         json!({"holds.release": {"kind": "mutation", "access": "authenticated", "schedule": schedule,
             "guard": "Nothing to release.", "signal": {"name": "holds.released", "properties": ["actor"]},
+            "notify": {"to": "owner", "subject": "Holds released", "body": "The scheduled mutation committed."},
             "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1 AND ?2 IS NULL",
             "bindings": [{"source": "kernel", "field": "now"}, {"source": "actor", "field": "id"}]}})
     }
@@ -512,6 +532,8 @@ mod tests {
         rig.run(&actions, real).await;
         assert_eq!(rig.released(), 2);
         assert_eq!(rig.runs(), vec![("holds.release".into(), "ok".into(), 2)]);
+        let db = rusqlite::Connection::open(crate::layout::database(&rig.root, &rig.id)).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM __konae_notify_intents WHERE state='pending'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
 
         rig.at("2026-11-07T10:29:59");
         rig.run(&actions, real).await;

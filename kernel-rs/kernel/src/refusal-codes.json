@@ -178,6 +178,7 @@
   "schedule.too-rare": { "fix": "capsule", "remedy": "Use \"daily\" or a period of 24 hours or less." },
 
   "schema.confirmation-required": { "fix": "owner", "remedy": "Read the losses release_plan lists under schema, then call release_apply with confirmSchema set to that plan's schema.confirmation, or keep the table or column in schema.sql.", "tool": "release_apply" },
+  "schema.pending-work": { "fix": "owner", "remedy": "Keep the schema required by pending Calls continuations, or let those jobs finish before publishing." },
   "schema.statement-refused": { "fix": "capsule", "remedy": "Keep only CREATE TABLE and CREATE INDEX in schema.sql. Rows change through mutations." },
 
   "schema-transform.after-mismatch": { "fix": "capsule", "remedy": "Set the transition after fingerprint to the fingerprint of the SQLite schema its statements produce." },
