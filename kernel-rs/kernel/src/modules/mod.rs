@@ -166,14 +166,16 @@ pub fn check_data_versions(versions: &BTreeMap<String, u64>) -> Result<()> {
 }
 
 type CheckPending = fn(&rusqlite::Connection) -> Result<()>;
-type PrepareTransfer = fn(&std::path::Path) -> Result<()>;
+type PrepareDatabase = fn(&std::path::Path) -> Result<()>;
+type PrepareTransfer = fn(&crate::AppState, &str) -> Result<()>;
 
 struct DurableWork {
     resource: crate::execution::WorkResource,
     start: fn(crate::AppState),
     check_pending: Option<CheckPending>,
-    pause_export: Option<PrepareTransfer>,
-    resume_import: Option<PrepareTransfer>,
+    prepare_transfer: PrepareTransfer,
+    pause_export: Option<PrepareDatabase>,
+    resume_import: Option<PrepareDatabase>,
 }
 
 const DURABLE_WORK: &[DurableWork] = &[
@@ -181,6 +183,7 @@ const DURABLE_WORK: &[DurableWork] = &[
         resource: crate::execution::WorkResource::Calls,
         start: crate::calls::spawn_worker,
         check_pending: Some(crate::calls::check_pending_continuations_on_connection),
+        prepare_transfer: crate::calls::prepare_transfer,
         pause_export: None,
         resume_import: None,
     },
@@ -188,6 +191,7 @@ const DURABLE_WORK: &[DurableWork] = &[
         resource: crate::execution::WorkResource::Notices,
         start: crate::notify::spawn_worker,
         check_pending: None,
+        prepare_transfer: crate::notify::prepare_transfer,
         pause_export: Some(crate::notify::pause_exported_intents),
         resume_import: Some(crate::notify::resume_imported_intents),
     },
@@ -207,6 +211,13 @@ pub(crate) async fn wake_durable_work(state: &crate::AppState, app: &str) {
     for resource in work_resources() {
         state.dispatcher.wake(resource, app).await;
     }
+}
+
+pub(crate) fn prepare_transfer(state: &crate::AppState, app: &str) -> Result<()> {
+    for module in DURABLE_WORK {
+        (module.prepare_transfer)(state, app)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn pause_exported_work(database: &std::path::Path) -> Result<()> {

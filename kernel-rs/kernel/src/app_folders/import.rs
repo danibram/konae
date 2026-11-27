@@ -215,7 +215,7 @@ async fn import_incoming(
         return Ok(Outcome::NeedsConfirmation(change));
     }
     let _data = database_lock(state, &deployment.id).await;
-    crate::notify::prepare_transfer(state, &deployment.id)?;
+    crate::modules::prepare_transfer(state, &deployment.id)?;
     let mut holds = vec![HOLDS_DATA];
     if sources {
         holds.push(HOLDS_SOURCES);

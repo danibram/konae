@@ -717,6 +717,29 @@ async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static st
 // ---------------------------------------------------------------------------
 // The queue.
 
+pub(crate) fn prepare_transfer(state: &AppState, app: &str) -> Result<()> {
+    let database = crate::layout::database(&state.data_root, app);
+    if !database.is_file() {
+        return Ok(());
+    }
+    let connection = Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    if !crate::table_exists(&connection, "__konae_calls")? {
+        return Ok(());
+    }
+    let in_flight: Option<String> = connection.query_row(
+        "SELECT id FROM __konae_calls WHERE leased_until >= ?1
+         AND (state = 'pending' OR then_state = 'processing') ORDER BY leased_until LIMIT 1",
+        [now()],
+        |row| row.get(0),
+    ).optional()?;
+    anyhow::ensure!(
+        in_flight.is_none(),
+        "App transfer is blocked while Call {} has an in-flight attempt. Keep the app in maintenance and retry after the attempt finishes.",
+        in_flight.as_deref().unwrap_or_default()
+    );
+    Ok(())
+}
+
 fn app_connection(data_root: &Path, app_id: &str) -> Result<Connection> {
     let path = crate::layout::database(data_root, app_id);
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
@@ -1140,9 +1163,10 @@ pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment,
         })
     } else { None };
     let queued = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
-        let db = app_connection(&data_root, &deployment_id)?;
+        let mut db = app_connection(&data_root, &deployment_id)?;
+        let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let at = now();
-        let recent: i64 = db.query_row(
+        let recent: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM __konae_calls WHERE deployment = ?1 AND created_at > ?2",
             rusqlite::params![deployment_id, at - 60_000],
             |row| row.get(0),
@@ -1150,22 +1174,23 @@ pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment,
         if recent >= limit {
             return Ok(None);
         }
-        let pending: i64 = db.query_row(
+        let pending: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM __konae_calls WHERE deployment=?1 AND state='pending'",
             [&deployment_id], |row| row.get(0),
         )?;
         if pending >= MAX_PENDING_PER_APP { return Ok(None); }
         let id = format!("call_{}", Uuid::new_v4().simple());
-        db.execute(
+        transaction.execute(
             "INSERT INTO __konae_calls (id, deployment, action, release, declaration, continuation, input, state, attempts, next_attempt_at, execution_mode, traceparent, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, ?8, ?9, ?10, ?8, ?8)",
             rusqlite::params![id, deployment_id, action, revision, declaration.to_string(), continuation.map(|value| value.to_string()), input.to_string(), at, execution_mode, traceparent],
         )?;
-        db.execute(
-            "DELETE FROM __konae_calls WHERE deployment = ?1 AND state <> 'pending' AND id NOT IN
+        transaction.execute(
+            "DELETE FROM __konae_calls WHERE deployment = ?1 AND state <> 'pending' AND COALESCE(then_state, '') NOT IN ('pending', 'processing') AND id NOT IN
                (SELECT id FROM __konae_calls WHERE deployment = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2)",
             rusqlite::params![deployment_id, KEEP_PER_DEPLOYMENT],
         )?;
+        transaction.commit()?;
         Ok(Some(id))
     })
     .await;
@@ -1579,11 +1604,14 @@ async fn schedule_next_call(state: &AppState, app: &str) -> Result<Option<std::t
 
 async fn run_app_once(state: &AppState, app_id: &str) -> Result<usize> {
     let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == app_id).cloned() else { return Ok(0) };
+    let claim_lock = crate::database_lock(state, app_id).await;
     if crate::maintenance::pause(&state.data_root, app_id).is_some() { return Ok(0); }
     if state.execution_mode.is_test() {
         let root = state.data_root.clone();
         let id = app_id.to_owned();
-        if let Some(job) = tokio::task::spawn_blocking(move || claim_recovery(&root, &id)).await?? {
+        let job = tokio::task::spawn_blocking(move || claim_recovery(&root, &id)).await??;
+        drop(claim_lock);
+        if let Some(job) = job {
             process(state, job).await?;
         }
         let root = state.data_root.clone();
@@ -1601,6 +1629,7 @@ async fn run_app_once(state: &AppState, app_id: &str) -> Result<usize> {
         }
         Ok::<_, anyhow::Error>(claimed.pop())
     }).await??;
+    drop(claim_lock);
     let Some(job) = job else { return Ok(0) };
     let pending = crate::copies::Pending::begin(&state.data_root, &format!("{app_id}/{} job {}", job.action, job.id), "delivering a call and committing its continuation")?;
     crate::usage::confirmed_signals(process(state, job)).await??;
@@ -2541,6 +2570,11 @@ mod tests {
         let db = app_connection(&root, "app").unwrap();
         let state: String = db.query_row("SELECT state FROM __konae_calls WHERE id='call-stale'", [], |row| row.get(0)).unwrap();
         assert_eq!(state, "pending", "an old attempt cannot complete a job claimed by another attempt");
+        let installation = AppState::for_test(&root);
+        let blocked = crate::modules::prepare_transfer(&installation, "app").unwrap_err();
+        assert!(blocked.to_string().contains("Call call-stale has an in-flight attempt"), "{blocked}");
+        db.execute("UPDATE __konae_calls SET leased_until = 0 WHERE id = 'call-stale'", []).unwrap();
+        crate::modules::prepare_transfer(&installation, "app").unwrap();
         drop(db);
         let _ = std::fs::remove_dir_all(root);
     }

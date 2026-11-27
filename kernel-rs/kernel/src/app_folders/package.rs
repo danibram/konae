@@ -249,7 +249,7 @@ pub async fn export(
             sources: sources_revision,
         } = revisions(&deployment)?;
         let _data = database_lock(state, &deployment.id).await;
-        crate::notify::prepare_transfer(state, &id)?;
+        crate::modules::prepare_transfer(state, &id)?;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
         if crate::modules::is_on(&deployment.modules, "auth") {
             open_auth(state, &deployment)?;
