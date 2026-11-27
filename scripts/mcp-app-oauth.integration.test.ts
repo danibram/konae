@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { initLocal } from "./konae";
+import { buildLocal, initLocal } from "./konae";
 
 const binary = process.env.KONAE_KERNEL_BIN;
 const integration = binary ? test : test.skip;
@@ -31,11 +31,25 @@ integration("app OAuth grants run MCP SDK calls as two isolated app members", as
     settings.signupPolicy = { mode: "open", allowlist: [] };
     settings.modules = { ...settings.modules, actions: { on: true }, auth: { on: true }, mcp: { on: true } };
     await writeFile(path.join(root, "konae.json"), `${JSON.stringify(settings, null, 2)}\n`);
-    await writeFile(path.join(root, "app/schema.sql"), "CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, body TEXT NOT NULL);\n");
-    await writeFile(path.join(root, "app/actions.json"), `${JSON.stringify({ version: 1, actions: {
+    const schema = "CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, body TEXT NOT NULL);\n";
+    const actions = `${JSON.stringify({ version: 1, actions: {
       "notes.mine": { kind: "query", access: "authenticated", statement: "SELECT body FROM notes WHERE user_id = ?1 LIMIT 20", bindings: [{ source: "actor", field: "id" }], mcp: { description: "List the signed-in member's notes." } },
       "notes.hidden": { kind: "query", access: "authenticated", statement: "SELECT body FROM notes LIMIT 20", bindings: [], mcp: { description: "Not granted to this client." } },
-    } }, null, 2)}\n`);
+    } }, null, 2)}\n`;
+    await writeFile(path.join(root, "app/schema.sql"), schema);
+    await writeFile(path.join(root, "app/actions.json"), actions);
+
+    const otherRoot = path.join(root, ".other-app");
+    const other = await initLocal(otherRoot, { name: "Other MCP app" });
+    other.visibility = "public";
+    other.modules = settings.modules;
+    await writeFile(path.join(otherRoot, "konae.json"), `${JSON.stringify(other, null, 2)}\n`);
+    await writeFile(path.join(otherRoot, "app/schema.sql"), schema);
+    await writeFile(path.join(otherRoot, "app/actions.json"), actions);
+    await buildLocal(otherRoot);
+    const kernelApps = path.join(root, ".konae/kernel/apps");
+    await mkdir(kernelApps, { recursive: true });
+    await symlink(otherRoot, path.join(kernelApps, other.id), "dir");
 
     const port = await freePort();
     let eventsPort = await freePort();
@@ -122,8 +136,11 @@ integration("app OAuth grants run MCP SDK calls as two isolated app members", as
     expect(JSON.stringify(answerB)).not.toContain("member A note");
     await expect(memberA.client.callTool({ name: "notes.hidden", arguments: {} })).rejects.toThrow("Unknown tool or insufficient permission");
 
-    const crossApp = await fetch(`http://other-app.localhost:${port}/_konae/mcp`, { method: "POST", headers: { authorization: `Bearer ${tokenA}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/list" }) });
-    expect(crossApp.status).not.toBe(200);
+    const otherUrl = `http://${other.slug}.localhost:${port}`;
+    const otherMetadata = await fetch(`${otherUrl}/.well-known/oauth-protected-resource/_konae/mcp`);
+    expect(otherMetadata.status).toBe(200);
+    const crossApp = await fetch(`${otherUrl}/_konae/mcp`, { method: "POST", headers: { authorization: `Bearer ${tokenA}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/list" }) });
+    expect(crossApp.status).toBe(401);
 
     const resource = `${appUrl}/_konae/mcp`;
     const revoked = await fetch(`${resource}/oauth/revoke`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: "desktop-notes", token: tokenA }) });

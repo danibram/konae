@@ -93,11 +93,16 @@ pub fn answer(id: Value, result: Result<Value>) -> Response {
 }
 
 pub fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
+    oauth_challenge(&format!("{}/.well-known/oauth-protected-resource", origin(state, headers)))
+}
+
+fn app_unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
+    oauth_challenge(&crate::server::app_oauth::protected_resource_url(state, headers))
+}
+
+fn oauth_challenge(resource_metadata: &str) -> Response {
     let mut response = error(StatusCode::UNAUTHORIZED, "Sign in to use Konae MCP.");
-    let metadata = format!(
-        "Bearer resource_metadata=\"{}\"",
-        crate::server::app_oauth::protected_resource_url(state, headers)
-    );
+    let metadata = format!("Bearer resource_metadata=\"{resource_metadata}\"");
     response.headers_mut().insert(
         header::WWW_AUTHENTICATE,
         HeaderValue::from_str(&metadata).unwrap(),
@@ -170,13 +175,13 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
     let has_app_oauth_bearer = bearer(headers).is_some_and(crate::server::app_oauth::is_app_token);
     let session_user = if has_app_oauth_bearer { None } else { match authenticate_deployment(state, &deployment, headers).await {
         Ok(user) => user,
-        Err(_) => return Err(unauthorized(state, headers)),
+        Err(_) => return Err(app_unauthorized(state, headers)),
     }};
     let full_app_tools = published_mcp_tools(&deployment);
     let oauth = if session_user.is_none() {
         match crate::server::app_oauth::authenticate(state, &deployment, headers, &full_app_tools).await {
             Ok(value) => value,
-            Err(()) => return Err(unauthorized(state, headers)),
+            Err(()) => return Err(app_unauthorized(state, headers)),
         }
     } else { None };
     let (actor, oauth_scopes, identity_guard) = match oauth {
@@ -241,7 +246,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
             || (method == "tools/call"
                 && call["params"]["name"].as_str().is_some_and(|name| tools.iter().any(|t| t["name"] == name))))
     {
-        return unauthorized(&state, &headers);
+        return app_unauthorized(&state, &headers);
     }
     if call.get("id").is_none() {
         return without_id(method);
