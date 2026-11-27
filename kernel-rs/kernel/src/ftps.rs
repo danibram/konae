@@ -30,6 +30,7 @@ const SETTINGS_FILE: &str = "ftps.json";
 const DEFAULT_MAX_UPLOAD_BYTES: u64 = 16 * 1024 * 1024;
 const STAGING_DIR: &str = ".konae/ftps/staging";
 const MAX_SESSIONS: usize = 32;
+const MAX_RELATIVE_PATH_BYTES: usize = 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -139,7 +140,11 @@ fn normalize_device_path(path: &FtpPath) -> std::result::Result<String, FsError>
     if components.is_empty() {
         return Err(FsError::NameNotAllowed);
     }
-    Ok(components.join("/"))
+    let relative = components.join("/");
+    if relative.len() > MAX_RELATIVE_PATH_BYTES {
+        return Err(FsError::NameNotAllowed);
+    }
+    Ok(relative)
 }
 
 fn file_error(error: std::io::Error) -> FsError {
@@ -221,7 +226,8 @@ impl Backend for BackendState {
             .deployments
             .read()
             .await
-            .get(&credential.app_id)
+            .values()
+            .find(|deployment| deployment.id == credential.app_id)
             .cloned()
             .ok_or(LoginError::Unavailable)?;
         Ok(BoundUser {
@@ -267,7 +273,7 @@ impl Backend for BackendState {
     ) -> std::result::Result<u64, FsError> {
         let relative_path = normalize_device_path(path)?;
         let (staged, bytes) = stage(data, &self.staging, self.max_upload_bytes).await?;
-        crate::file_intake::accept::accept_staged(
+        crate::file_intake::accept_staged(
             &self.state,
             &user.deployment,
             &user.credential.source_id,
@@ -296,7 +302,7 @@ impl Backend for BackendState {
         if path.is_root() {
             Ok(())
         } else {
-            Err(FsError::PermissionDenied)
+            normalize_device_path(path).map(|_| ())
         }
     }
 }
@@ -438,12 +444,15 @@ pub async fn start(state: &AppState) -> Result<Option<Runtime>> {
     let deployments = state.deployments.read().await;
     let mut credentials = HashMap::new();
     for credential in &settings.credentials {
-        let deployment = deployments.get(&credential.app_id).with_context(|| {
-            format!(
-                "FTPS credential {} names app {}, which is not served by this installation",
-                credential.username, credential.app_id
-            )
-        })?;
+        let deployment = deployments
+            .values()
+            .find(|deployment| deployment.id == credential.app_id)
+            .with_context(|| {
+                format!(
+                    "FTPS credential {} names app {}, which is not served by this installation",
+                    credential.username, credential.app_id
+                )
+            })?;
         ensure_declared_source(deployment, &credential.source_id).with_context(|| {
             format!(
                 "FTPS credential {} must bind to a declared intake source",
@@ -547,14 +556,8 @@ pub async fn start(state: &AppState) -> Result<Option<Runtime>> {
 fn ensure_declared_source(deployment: &Deployment, source_id: &str) -> Result<()> {
     let sources = deployment
         .manifest
-        .get("intake")
+        .get("fileIntake")
         .and_then(|value| value.get("sources"))
-        .or_else(|| {
-            deployment
-                .manifest
-                .get("fileIntake")
-                .and_then(|value| value.get("sources"))
-        })
         .and_then(serde_json::Value::as_array)
         .context("the app does not declare intake sources")?;
     ensure!(
