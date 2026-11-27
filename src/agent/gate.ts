@@ -11,6 +11,7 @@ import { checkModuleChange, moduleCheckOrder } from "../lib/module-state";
 import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
+import { validateFileIntake, validateFileIntakeConsumers, type FileIntakeDeclaration } from "../kernel/file-intake";
 import { isEncoded } from "../lib/source-files";
 import type {
   CapsuleFiles,
@@ -88,8 +89,16 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     }
     const SQL = await this.loadSql();
     const schemaSource = files["schema.sql"] ?? "";
+    let intakeDeclaration: FileIntakeDeclaration | undefined;
+    if (files["file-intake.json"] !== undefined) {
+      try {
+        intakeDeclaration = validateFileIntake(JSON.parse(files["file-intake.json"]));
+      } catch (error) {
+        return failure({ stage: "actions", message: describe(error), detail: "Declare version 1 sources and consumers in file-intake.json, then name a declared mutation action." }, ["sources"]);
+      }
+    }
     const filesCall = sourcesUseFiles(Object.values(files));
-    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files) };
+    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files), "file-intake": files["file-intake.json"] !== undefined };
     for (const module of moduleCheckOrder) {
       if (!used[module as keyof typeof used]) continue;
       const state = modules?.[module];
@@ -97,7 +106,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
     const actionsState = modules?.actions;
-    for (const module of ["http", "calls"] as const) {
+    for (const module of ["http", "calls", "file-intake"] as const) {
       const state = modules?.[module];
       if (state?.on === true) {
         const required = checkModuleChange({ rule: "requires", module, required: "actions", requiredState: actionsState });
@@ -187,6 +196,13 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       }
 
       if (program) errors.push(...checkActions(fresh, program, "actions"));
+      if (program && intakeDeclaration) {
+        try {
+          validateFileIntakeConsumers(intakeDeclaration, program.actions);
+        } catch (error) {
+          errors.push({ stage: "actions", message: describe(error), detail: "Name an existing mutation action and provide only its declared input fields." });
+        }
+      }
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
       if (release && ownerFixes(release.code)) warnings.push({ stage: "actions", message: release.message, detail: RELEASE_OWNER, owner: true, code: release.code, hint: release.hint });
       else if (release) errors.push({ stage: "actions", message: release.message, detail: RELEASE_AUTHOR, code: release.code, hint: release.hint });

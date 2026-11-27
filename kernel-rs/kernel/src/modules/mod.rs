@@ -29,12 +29,14 @@ struct ModuleData {
 #[serde(rename_all = "kebab-case")]
 enum BlobInventoryProvider {
     FileIndex,
+    IntakeVersions,
 }
 
 impl BlobInventoryProvider {
     fn as_str(self) -> &'static str {
         match self {
             Self::FileIndex => "file-index",
+            Self::IntakeVersions => "intake-versions",
         }
     }
 }
@@ -126,6 +128,7 @@ pub fn blob_references_in_data_dir(directory: &std::path::Path) -> Result<Vec<Bl
         data_registry().iter().filter_map(|(module, data)| data.objects.map(|provider| (module.as_str(), provider))),
         |provider| match provider {
             BlobInventoryProvider::FileIndex => crate::file_store::file_index_references_in(&directory.join("files")),
+            BlobInventoryProvider::IntakeVersions => crate::file_intake::blob_references(&directory.join("database.sqlite")),
         },
     )
 }
@@ -188,6 +191,14 @@ const DURABLE_WORK: &[DurableWork] = &[
         prepare_transfer: crate::notify::prepare_transfer,
         pause_export: Some(crate::notify::pause_exported_intents),
         resume_import: Some(crate::notify::resume_imported_intents),
+    },
+    DurableWork {
+        resource: crate::execution::WorkResource::FileIntake,
+        start: crate::file_intake::spawn_worker,
+        check_pending: Some(crate::file_intake::check_pending),
+        prepare_transfer: crate::file_intake::prepare_transfer,
+        pause_export: Some(crate::file_intake::pause_export),
+        resume_import: Some(crate::file_intake::resume_import),
     },
 ];
 
@@ -972,7 +983,7 @@ mod tests {
     #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "files", "functions", "http", "seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "file-intake", "files", "functions", "http", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);

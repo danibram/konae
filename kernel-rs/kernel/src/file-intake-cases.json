@@ -1,0 +1,9 @@
+[
+  {"case":"one source","value":{"version":1,"sources":[{"id":"camera","version":1,"replay":"delivery-key-or-current-path-sha256"}],"consumers":[]},"valid":true},
+  {"case":"empty sources","value":{"version":1,"sources":[],"consumers":[]},"valid":false},
+  {"case":"unsupported declaration version","value":{"version":2,"sources":[{"id":"camera","version":1}],"consumers":[]},"valid":false},
+  {"case":"duplicate source ID","value":{"version":1,"sources":[{"id":"camera","version":1},{"id":"camera","version":1}],"consumers":[]},"valid":false},
+  {"case":"unsupported replay rule","value":{"version":1,"sources":[{"id":"camera","version":1,"replay":"content-only"}],"consumers":[]},"valid":false},
+  {"case":"consumer names unknown source","value":{"version":1,"sources":[{"id":"camera","version":1}],"consumers":[{"id":"index","source":"scanner","action":"files.record","input":{}}]},"valid":false},
+  {"case":"duplicate consumer ID","value":{"version":1,"sources":[{"id":"camera","version":1}],"consumers":[{"id":"index","source":"camera","action":"files.record","input":{}},{"id":"index","source":"camera","action":"files.record","input":{}}]},"valid":false}
+]

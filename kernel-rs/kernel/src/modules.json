@@ -133,6 +133,22 @@
         "objects": "file-index"
       }
     },
+    "file-intake": {
+      "summary": "Accepts immutable file versions from declared sources and queues declared app consumers.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": ["actions"],
+      "uses": ["file-intake.json"],
+      "data": {
+        "version": 1,
+        "components": ["database", "files"],
+        "reserved": ["__konae_intake_versions", "__konae_intake_deliveries", "__konae_intake_current", "__konae_intake_jobs", "__konae_intake_effects"],
+        "migrations": ["file-intake-v1"],
+        "objects": "intake-versions"
+      }
+    },
     "calls": {
       "summary": "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
       "switch": true,
