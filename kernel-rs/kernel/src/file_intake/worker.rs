@@ -66,10 +66,11 @@ pub(crate) fn spawn_worker(state: AppState) {
 }
 
 pub(super) async fn run_one(state: &AppState, deployment: &Deployment) -> Result<bool> {
+    let _operation = state.copies.operations.read().await;
+    let _write = crate::database_lock(state, &deployment.id).await;
     if crate::maintenance::pause(&state.data_root, &deployment.id).is_some() {
         return Ok(false);
     }
-    let _write = crate::database_lock(state, &deployment.id).await;
     let state = state.clone();
     let deployment = deployment.clone();
     tokio::task::spawn_blocking(move || run_one_blocking(&state, &deployment)).await?

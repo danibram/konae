@@ -695,6 +695,7 @@ pub(crate) fn spawn_worker(state: crate::AppState) {
 async fn run_one(state: &crate::AppState, app: &str) -> Result<bool> {
     let database = crate::layout::database(&state.data_root, app);
     let job = {
+        let _operation = state.copies.operations.read().await;
         let _lock = crate::database_lock(state, app).await;
         if !database.is_file()
             || crate::maintenance::pause(&state.data_root, app).is_some()
@@ -729,6 +730,7 @@ async fn run_one(state: &crate::AppState, app: &str) -> Result<bool> {
     let pdf = directory.join("document.pdf");
     let rendered = render(input, &pdf, &directory).await;
     let result = async {
+        let _operation = state.copies.operations.read().await;
         let _lock = crate::database_lock(state, app).await;
         if !database.is_file() || crate::maintenance::pause(&state.data_root, app).is_some() {
             return Ok(false);
