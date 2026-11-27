@@ -12,6 +12,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - The `konae:actions` helper types each function's named Server Actions from its allowlist and Action Contract. Both runners support request-scoped timers and Web Crypto, and the builders include a documented subset of Node.js modules.
 - Function timing includes individual Server Actions. `konae events` shows local function traces, and operators can send sampled traces to an OTLP/HTTP collector.
 - App exports carry pending Calls and notice intents alongside their database rows. The destination can resume them after import. [Export and import](./docs/reference/export-and-import.md)
+- Usage shows daily Function calls and successful Server Actions by name. Function counts start after the Kernel update and survive pruning of the latency samples. [Usage and Signals](./docs/reference/usage-and-signals.md)
 
 ### Changed
 

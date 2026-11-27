@@ -89,12 +89,38 @@ impl Operation {
 }
 
 enum Message {
-    Count { folder: PathBuf, at: u64, kind: &'static str, name: String },
-    Signal { folder: PathBuf, at: u64, name: String, properties: String, committed: Option<tokio::sync::oneshot::Sender<bool>> },
-    Execution { folder: PathBuf, at: u64, name: String, origin: String, outcome: String },
-    Account { folder: PathBuf, at: u64, account: String, kind: AccountKind },
+    Count {
+        folder: PathBuf,
+        at: u64,
+        kind: &'static str,
+        name: String,
+    },
+    Signal {
+        folder: PathBuf,
+        at: u64,
+        name: String,
+        properties: String,
+        committed: Option<tokio::sync::oneshot::Sender<bool>>,
+    },
+    Execution {
+        folder: PathBuf,
+        at: u64,
+        name: String,
+        origin: String,
+        outcome: String,
+    },
+    Account {
+        folder: PathBuf,
+        at: u64,
+        account: String,
+        kind: AccountKind,
+    },
     #[cfg(test)]
-    FunctionLatency { folder: PathBuf, at: u64, timing: FunctionTiming },
+    FunctionLatency {
+        folder: PathBuf,
+        at: u64,
+        timing: FunctionTiming,
+    },
     FunctionActionLatencies {
         folder: PathBuf,
         at: u64,
@@ -386,9 +412,8 @@ fn truncate(text: &str, bytes: usize) -> &str {
     &text[..end]
 }
 
-/// Waits until every message queued before this call is written, or five
-/// seconds pass. `usage_summary` and `signals_read` call it so the owner sees what
-/// happened up to the moment they asked.
+/// Asks the writer to finish queued writes. Each wait has a five-second limit:
+/// one to enqueue the flush request and one to receive confirmation.
 pub fn flush() {
     let _ = flush_status();
 }
@@ -426,6 +451,25 @@ struct Batch {
     function_timings: Vec<(u64, FunctionTiming)>,
     function_action_timings: Vec<(u64, FunctionActionTiming)>,
     function_traces: Vec<(u64, Value)>,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct ExecutionKey {
+    day: u64,
+    name: String,
+    origin: String,
+    outcome: String,
+}
+
+impl Batch {
+    fn count(&mut self, at: u64, kind: &'static str, name: String) {
+        *self.counts.entry((at / DAY_MS, kind, name)).or_default() += 1;
+    }
+
+    fn record_function(&mut self, at: u64, timing: FunctionTiming) {
+        self.count(at, "function", timing.name.clone());
+        self.function_timings.push((at, timing));
+    }
 }
 
 struct PendingFunctionTrace {
@@ -476,7 +520,12 @@ fn writer(receiver: Receiver<Message>) {
         let mut taken = 0;
         while let Some(message) = next.take() {
             match message {
-                Message::Count { folder, at, kind, name } => {
+                Message::Count {
+                    folder,
+                    at,
+                    kind,
+                    name,
+                } => {
                     batches.entry(folder).or_default().count(at, kind, name);
                 }
                 Message::Signal {
@@ -491,9 +540,25 @@ fn writer(receiver: Receiver<Message>) {
                     batch.commits.extend(committed);
                     signal_waiting = true;
                 }
-                Message::Execution { folder, at, name, origin, outcome } => {
-                    let key = ExecutionKey { day: at / DAY_MS, name, origin, outcome };
-                    let (count, last_at) = batches.entry(folder).or_default().executions.entry(key).or_default();
+                Message::Execution {
+                    folder,
+                    at,
+                    name,
+                    origin,
+                    outcome,
+                } => {
+                    let key = ExecutionKey {
+                        day: at / DAY_MS,
+                        name,
+                        origin,
+                        outcome,
+                    };
+                    let (count, last_at) = batches
+                        .entry(folder)
+                        .or_default()
+                        .executions
+                        .entry(key)
+                        .or_default();
                     *count += 1;
                     *last_at = (*last_at).max(at);
                 }
@@ -514,7 +579,10 @@ fn writer(receiver: Receiver<Message>) {
                 }
                 #[cfg(test)]
                 Message::FunctionLatency { folder, at, timing } => {
-                    batches.entry(folder).or_default().record_function(at, timing);
+                    batches
+                        .entry(folder)
+                        .or_default()
+                        .record_function(at, timing);
                 }
                 Message::FunctionActionLatencies {
                     folder,
@@ -823,13 +891,23 @@ fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
     let transaction = connection.transaction()?;
     function_latency::clear_legacy_details(&transaction)?;
     for ((utc_day, kind, name), count) in &batch.counts {
-        transaction.prepare_cached(
-            "INSERT INTO usage_daily(day, kind, name, count) VALUES(?1, ?2, ?3, ?4)
+        transaction
+            .prepare_cached(
+                "INSERT INTO usage_daily(day, kind, name, count) VALUES(?1, ?2, ?3, ?4)
              ON CONFLICT(day, kind, name) DO UPDATE SET count = count + excluded.count",
-        )?.execute(params![day(utc_day * DAY_MS), kind, name, count])?;
+            )?
+            .execute(params![day(utc_day * DAY_MS), kind, name, count])?;
     }
     for (key, (count, last_at)) in &batch.executions {
-        metric(&transaction, *last_at, "execution", &key.name, &key.origin, &key.outcome, *count)?;
+        metric(
+            &transaction,
+            *last_at,
+            "execution",
+            &key.name,
+            &key.origin,
+            &key.outcome,
+            *count,
+        )?;
     }
     if !batch.function_timings.is_empty() {
         function_latency::initialize(&transaction)?;
@@ -909,12 +987,29 @@ fn write_function_traces(data_folder: &Path, traces: &[(u64, Value)], now: u64) 
     Ok(())
 }
 
-fn metric(db: &Connection, at: u64, feature: &str, name: &str, origin: &str, outcome: &str, count: i64) -> Result<()> {
+fn metric(
+    db: &Connection,
+    at: u64,
+    feature: &str,
+    name: &str,
+    origin: &str,
+    outcome: &str,
+    count: i64,
+) -> Result<()> {
     db.prepare_cached(
         "INSERT INTO metric_daily VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(day, feature, name, origin, outcome) DO UPDATE SET
            count = count + excluded.count, last_at = max(last_at, excluded.last_at)",
-    )?.execute(params![day(at), feature, name, origin, outcome, count, at as i64])?;
+    )?
+    .execute(params![
+        day(at),
+        feature,
+        name,
+        origin,
+        outcome,
+        count,
+        at as i64
+    ])?;
     Ok(())
 }
 
@@ -1845,7 +1940,6 @@ mod tests {
         let today = day(super::super::now_ms());
         let usage = read_usage(&path, &today, &today).unwrap();
         let totals = usage["totals"].as_array().unwrap();
-        assert!(totals.contains(&json!({"kind": "action", "name": "orders.place", "count": 3})), "{usage}");
         assert!(usage["days"].as_array().unwrap().contains(&json!({
             "day": today, "kind": "action", "name": "orders.place", "count": 3,
         })));
@@ -1855,7 +1949,14 @@ mod tests {
             [&today], |row| row.get::<_, i64>(0),
         ).unwrap(), 3);
         drop(db);
-        assert!(totals.contains(&json!({"kind": "route", "name": "POST /hooks/orders", "count": 1})));
+
+        assert!(
+            totals.contains(&json!({"kind": "action", "name": "orders.place", "count": 3})),
+            "{usage}"
+        );
+        assert!(
+            totals.contains(&json!({"kind": "route", "name": "POST /hooks/orders", "count": 1}))
+        );
         assert!(totals.contains(&json!({"kind": "login", "name": "", "count": 1})));
         let signals = read_signals(&path, Some("order.placed"), None).unwrap();
         let recorded = &signals["signals"][0]["properties"];

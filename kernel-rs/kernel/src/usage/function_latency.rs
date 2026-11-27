@@ -244,22 +244,22 @@ pub(super) fn write(db: &Connection, at: u64, sample: &FunctionTiming) -> Result
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
     )?
     .execute(params![
-            at as i64,
-            sample.name,
-            sample.version,
-            sample.budget.as_micros() as i64,
-            sample.total.as_micros() as i64,
-            sample.queue.as_micros() as i64,
-            sample.initialization.as_micros() as i64,
-            sample.execution.as_micros() as i64,
-            sample.cold,
-            sample.timed_out,
-            sample.outcome.name(),
-            sample
-                .error_code
-                .as_deref()
-                .map(|value| super::truncate(value, 64)),
-            None::<&str>
+        at as i64,
+        sample.name,
+        sample.version,
+        sample.budget.as_micros() as i64,
+        sample.total.as_micros() as i64,
+        sample.queue.as_micros() as i64,
+        sample.initialization.as_micros() as i64,
+        sample.execution.as_micros() as i64,
+        sample.cold,
+        sample.timed_out,
+        sample.outcome.name(),
+        sample
+            .error_code
+            .as_deref()
+            .map(|value| super::truncate(value, 64)),
+        None::<&str>
     ])?;
     Ok(())
 }

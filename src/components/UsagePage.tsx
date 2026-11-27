@@ -161,8 +161,8 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
     {(kindTotal(summary, "function") > 0 || kindTotal(summary, "action") > 0) && <section aria-labelledby="usage-calls-heading">
       <h2 id="usage-calls-heading">Calls</h2>
       <div className="usage-charts">
-        <DailyChart title="Function calls per day" unit="calls" points={dailyUsage(summary, "function")} empty="No function calls recorded in this period." />
-        <DailyChart title="Successful action calls per day" unit="calls" points={dailyUsage(summary, "action")} empty="No successful action calls recorded in this period." />
+        <DailyChart title="Function calls per day" unit="calls" showSinglePart points={dailyUsage(summary, "function")} empty="No function calls recorded in this period." />
+        <DailyChart title="Successful action calls per day" unit="calls" showSinglePart points={dailyUsage(summary, "action")} empty="No successful action calls recorded in this period." />
       </div>
     </section>}
     <FunctionLatency summary={summary.functionLatency} />

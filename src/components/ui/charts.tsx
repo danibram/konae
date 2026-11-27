@@ -29,12 +29,13 @@ type BarChartProps = {
   points: ChartPoint[];
   partLabel?: (part: string) => string;
   stacked?: boolean;
+  showSinglePart?: boolean;
   partColor?: (part: string) => string | undefined;
   empty: string;
   keyHeading?: string;
 };
 
-export function BarChart({ title, unit, points, partLabel = (part) => part, stacked = false, partColor, empty, keyHeading = "Day" }: BarChartProps) {
+export function BarChart({ title, unit, points, partLabel = (part) => part, stacked = false, showSinglePart = false, partColor, empty, keyHeading = "Day" }: BarChartProps) {
   const [active, setActive] = useState<number | null>(null);
   const total = points.reduce((sum, point) => sum + point.value, 0);
   const max = niceMax(Math.max(0, ...points.map((point) => point.value)));
@@ -60,7 +61,7 @@ export function BarChart({ title, unit, points, partLabel = (part) => part, stac
           {shown && <div className="ui-chart-tooltip" role="status" style={{ left: `${(active! + 0.5) / points.length * 100}%` }} data-edge={active! < points.length / 4 ? "start" : active! > points.length * 3 / 4 ? "end" : undefined}>
             <strong>{formatNumber(shown.value)}</strong> <span>{unit}</span>
             <small>{shown.label}</small>
-            {shown.parts && Object.keys(shown.parts).length > 1 && <ul>{Object.entries(shown.parts).sort(([, a], [, b]) => b - a).map(([part, count]) => <li key={part}>{stacked && <i style={{ background: colorOf(part, partOrder.indexOf(part)) }} />}<strong>{formatNumber(count)}</strong> <span>{partLabel(part)}</span></li>)}</ul>}
+            {shown.parts && Object.keys(shown.parts).length >= (showSinglePart ? 1 : 2) && <ul>{Object.entries(shown.parts).sort(([, a], [, b]) => b - a).map(([part, count]) => <li key={part}>{stacked && <i style={{ background: colorOf(part, partOrder.indexOf(part)) }} />}<strong>{formatNumber(count)}</strong> <span>{partLabel(part)}</span></li>)}</ul>}
           </div>}
         </div>
         <div className="ui-chart-x" aria-hidden="true"><span>{points[0].label}</span><span>{points[points.length - 1].label}</span></div>

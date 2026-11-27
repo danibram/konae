@@ -151,6 +151,8 @@ Either way the Kernel checks the folder as Konae checks a release, prints `Servi
 
 ## Documentation
 
+Open **Usage** from a published app's project menu to see daily Function calls and successful Server Actions by name. [Usage and Signals](./docs/reference/usage-and-signals.md) describes what the Kernel counts.
+
 The documentation is markdown under [`docs/`](./docs/README.md). The docs site is itself a Konae app, [`examples/site`](./examples/site/README.md), which publishes those files under `/docs/` beside the home.
 
 | To | Read |
