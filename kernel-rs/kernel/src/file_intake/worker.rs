@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -126,9 +126,7 @@ fn run_one_blocking(state: &AppState, deployment: &Deployment) -> Result<bool> {
     object.insert("size".into(), json!(details.2));
     let action: crate::actions::ActionDefinition = serde_json::from_str(&saved_action)
         .context("The accepted file intake action cannot be read.")?;
-    if action.kind != "mutation" {
-        bail!("File intake consumer {consumer_id} action {action_name} is not a mutation.");
-    }
+    super::accept::validate_consumer_action(&consumer_id, &action_name, &action)?;
     let accepted = action
         .bindings
         .iter()

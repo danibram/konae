@@ -476,6 +476,11 @@ pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
         if mutation.access == "scheduled" {
             return Err(refuse("call.then-scheduled", format!("Action {name} names {target} as its then, but that action runs only inside a scheduled Function.")));
         }
+        if mutation.issue.is_some() {
+            return Err(refuse("call.then-issues-document", format!(
+                "Action {name} names {target} as its then, which issues a document. A then mutation runs with no caller."
+            )));
+        }
         if mutation.http.is_some() {
             return Err(refuse("call.then-routed", format!(
                 "Action {name} names {target} as its then, which answers on an HTTP route. A then mutation runs only after its call."

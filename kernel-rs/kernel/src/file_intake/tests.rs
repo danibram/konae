@@ -19,6 +19,21 @@ fn declaration_cases_match_shared_file() {
 }
 
 #[test]
+fn consumer_actions_refuse_effects_the_worker_does_not_run() {
+    let declaration = super::validate_declaration(
+        r#"{"version":1,"sources":[{"id":"camera","version":1}],"consumers":[{"id":"index","source":"camera","action":"files.record"}]}"#,
+    ).unwrap();
+    let program = crate::action_shape::read(
+        r#"{"version":1,"actions":{"files.record":{"kind":"mutation","access":"anonymous","statement":"DELETE FROM received WHERE id = ?1","bindings":[{"source":"input","key":"versionId","type":"string"}],"guard":"No file received."}}}"#,
+    ).unwrap();
+    let error = super::validate_consumers(&declaration, &program).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "File intake consumer index action cannot declare guard, issue, notify or signal."
+    );
+}
+
+#[test]
 fn path_normalization_refuses_escape_and_empty_parts() {
     for path in ["/absolute", "../up", "a/../b", "a//b", "a\\b", "a/./b"] {
         assert!(

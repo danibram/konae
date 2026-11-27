@@ -27,7 +27,7 @@ Add `file-intake.json` to the app folder and turn on the `file-intake` module in
 }
 ```
 
-Each consumer names an existing Actions mutation. Its fixed `input` object may set only fields that the action declares. At run time, the Kernel adds `versionId`, `sourceId`, `path`, `sha256` and `size` to those inputs. The action cannot read the blob or the host filesystem. It can update app rows through its declared SQL statement.
+Each consumer names an existing Actions mutation that runs only SQL. The Gate and Kernel refuse a consumer action with `guard`, `issue`, `notify` or `signal`. Its fixed `input` object may set only fields that the action declares. At run time, the Kernel adds `versionId`, `sourceId`, `path`, `sha256` and `size` to those inputs. The action cannot read the blob or the host filesystem. It can update app rows through its declared SQL statement.
 
 Source and consumer IDs use ASCII letters, digits, `_` and `-`. Source version 1 is the only supported declaration version. Each source supports the `delivery-key-or-current-path-sha256` replay rule.
 

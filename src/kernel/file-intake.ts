@@ -1,3 +1,5 @@
+import type { ServerActionDefinition } from "./actions";
+
 export type FileIntakeConsumer = { id: string; source: string; action: string; input?: Record<string, unknown> };
 export type FileIntakeDeclaration = { version: number; sources: Array<{ id: string; version: number; replay?: string }>; consumers: FileIntakeConsumer[] };
 
@@ -30,11 +32,14 @@ export function validateFileIntake(value: unknown): FileIntakeDeclaration {
   return declaration as FileIntakeDeclaration;
 }
 
-export function validateFileIntakeConsumers(declaration: FileIntakeDeclaration, actions: Record<string, { kind?: string; bindings?: Array<{ source: string; key?: string; nullable?: boolean }> }>): void {
+export function validateFileIntakeConsumers(declaration: FileIntakeDeclaration, actions: Record<string, ServerActionDefinition>): void {
   for (const consumer of declaration.consumers) {
     const action = actions[consumer.action];
     if (!action) throw new Error(`File intake consumer ${consumer.id} names missing action ${consumer.action}.`);
     if (action.kind !== "mutation") throw new Error(`File intake consumer ${consumer.id} action ${consumer.action} must be a mutation.`);
+    if (action.guard || action.issue || action.notify || action.signal) {
+      throw new Error(`File intake consumer ${consumer.id} action cannot declare guard, issue, notify or signal.`);
+    }
     if ((action.bindings ?? []).some((binding) => binding.source === "actor")) throw new Error(`File intake consumer ${consumer.id} action cannot bind a human actor.`);
     const allowed = new Set((action.bindings ?? []).filter((binding) => binding.source === "input").map((binding) => binding.key));
     if (Object.keys(consumer.input ?? {}).some((key) => ["versionId", "sourceId", "path", "sha256", "size"].includes(key))) throw new Error(`File intake consumer ${consumer.id} input uses a reserved version field.`);

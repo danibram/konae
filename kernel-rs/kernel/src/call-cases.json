@@ -2787,6 +2787,28 @@
   "code": "call.then-not-mutation"
  },
  {
+  "case": "a then naming a Documents issue",
+  "actions": {
+   "inbox.tell": {
+    "kind": "call", "access": "anonymous", "method": "POST",
+    "url": "https://inbox.example.org/hooks/events",
+    "bindings": [{"source": "input", "key": "id", "type": "string"}],
+    "then": {"action": "invoices.issue", "inputs": {"id": "/input/id"}}
+   },
+   "invoices.issue": {
+    "kind": "mutation", "access": "authenticated", "statement": "UPDATE invoices SET issued = 1 WHERE id = ?1",
+    "bindings": [{"source": "input", "key": "id", "type": "string"}],
+    "issue": {"key": "id", "download": "invoices.read", "snapshot": ["id"], "template": "#text(issue.id)"}
+   },
+   "invoices.read": {
+    "kind": "query", "access": "authenticated", "statement": "SELECT id FROM invoices WHERE id = ?1 AND owner_id = ?2 LIMIT 1",
+    "bindings": [{"source": "input", "key": "issueKey", "type": "string"}, {"source": "actor", "field": "id"}]
+   }
+  },
+  "error": "Action inbox.tell names invoices.issue as its then, which issues a document. A then mutation runs with no caller.",
+  "code": "call.then-issues-document"
+ },
+ {
   "case": "a then naming a routed mutation",
   "actions": {
    "inbox.tell": {

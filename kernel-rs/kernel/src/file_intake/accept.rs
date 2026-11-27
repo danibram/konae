@@ -121,6 +121,32 @@ pub fn validate_declaration(raw: &str) -> Result<Declaration> {
     Ok(declaration)
 }
 
+pub(super) fn validate_consumer_action(
+    consumer: &str,
+    name: &str,
+    action: &crate::actions::ActionDefinition,
+) -> Result<()> {
+    ensure!(
+        action.kind == "mutation",
+        "File intake consumer {consumer} action {name} must be a mutation."
+    );
+    ensure!(
+        action.guard.is_none()
+            && action.issue.is_none()
+            && action.notify.is_none()
+            && action.signal.is_none(),
+        "File intake consumer {consumer} action cannot declare guard, issue, notify or signal."
+    );
+    ensure!(
+        !action
+            .bindings
+            .iter()
+            .any(|binding| binding.source == "actor"),
+        "File intake consumer {consumer} action cannot bind a human actor."
+    );
+    Ok(())
+}
+
 pub fn validate_consumers(
     declaration: &Declaration,
     program: &crate::actions::ActionProgram,
@@ -132,20 +158,7 @@ pub fn validate_consumers(
                 consumer.id, consumer.action
             )
         })?;
-        ensure!(
-            action.kind == "mutation",
-            "File intake consumer {} action {} must be a mutation.",
-            consumer.id,
-            consumer.action
-        );
-        ensure!(
-            !action
-                .bindings
-                .iter()
-                .any(|binding| binding.source == "actor"),
-            "File intake consumer {} action cannot bind a human actor.",
-            consumer.id
-        );
+        validate_consumer_action(&consumer.id, &consumer.action, action)?;
         let allowed = action
             .bindings
             .iter()
@@ -358,12 +371,10 @@ pub async fn accept_staged(
                     consumer.id, consumer.action
                 )
             })?;
-        ensure!(
-            action.get("kind").and_then(Value::as_str) == Some("mutation"),
-            "File intake consumer {} must name a mutation action.",
-            consumer.id
-        );
-        jobs.push((consumer, input, serde_json::to_string(action)?));
+        let action_json = serde_json::to_string(action)?;
+        let parsed = serde_json::from_str(&action_json)?;
+        validate_consumer_action(&consumer.id, &consumer.action, &parsed)?;
+        jobs.push((consumer, input, action_json));
     }
     let version_id = uuid::Uuid::new_v4().to_string();
     let store = &state.files.store;
