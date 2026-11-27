@@ -28,3 +28,4 @@ pub use sql::{
 };
 pub use validation::{validate_action, validate_declarations};
 pub use http::{invoke_action};
+pub(crate) use http::invoke_action_pinned;

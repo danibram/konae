@@ -25,8 +25,28 @@ The Validation Gate and Kernel accept only `mcp` declarations on authenticated q
 
 Turn on the app's `mcp` module after `actions` and `auth`. The deployment keeps one MCP endpoint at `/_konae/mcp`. On a path address, include the app base path, such as `/p/<app-id>/_konae/mcp`. A generated hostname or custom domain uses `https://<app-host>/_konae/mcp`.
 
-## Connect
+## Connect an external client
 
-The endpoint currently accepts an existing app session cookie. A signed-in app user can call `initialize`, then `tools/list`, then `tools/call` with the published tool name and its input object. The Kernel checks the session on every request, so ending the app session ends MCP access.
+The endpoint is `https://<app-host>/_konae/mcp`. A path deployment includes its mount, for example `https://apps.example.com/p/<app-id>/_konae/mcp`. The same endpoint works through a generated app host or a verified custom domain. Use the app's canonical address for discovery and OAuth throughout one connection.
 
-App-scoped OAuth discovery, consent, authorization-code exchange and dynamic client registration are not implemented in this slice. The Owner OAuth endpoints grant Owner authority and must not be used for an app MCP client. External clients need the app-scoped OAuth flow before this endpoint is ready for general connection.
+The operator registers public OAuth clients in `mcp-app-clients.json` in the Kernel data directory. Register a client for each app ID and list exact callback URLs. Konae accepts HTTPS callbacks and loopback HTTP callbacks for local clients. This v1 flow does not use dynamic client registration or a client secret.
+
+```json
+{
+  "version": 1,
+  "clients": [
+    {
+      "clientId": "desktop-notes",
+      "appId": "notes-app",
+      "name": "Notes desktop client",
+      "redirectUris": ["http://127.0.0.1:8765/callback"]
+    }
+  ]
+}
+```
+
+The client discovers the protected resource at `/.well-known/oauth-protected-resource/_konae/mcp`. It then opens the advertised authorization endpoint with `response_type=code`, its registered `client_id` and `redirect_uri`, a random `state`, a PKCE S256 challenge, the exact `resource` URL, and the names of the requested tools as space-separated scopes. The app asks the user to sign in with their app account, then shows a consent page naming each requested tool. The client exchanges the returned code using its verifier and the same redirect URI and resource. The code lasts ten minutes and can be used once. Access tokens last one hour.
+
+Use the returned bearer token at the MCP endpoint. OAuth clients see only their granted app tools, and the Kernel checks the app, canonical resource, current release catalog, client registration, token revocation and active app account on each request. Each tool call runs its published authenticated query as that app user. The Owner OAuth flow and browser SDK credentials do not grant app-user MCP access.
+
+The operator file and token store belong to the installation, not the app folder. Export and import preserve the app's MCP Action declarations. An imported app needs a client registration for its new app ID, and each user must grant access again. Removing a client registration, disabling the `mcp` module, suspending the user or revoking the token stops its access. A client can revoke a token at the discovered revocation endpoint with its `client_id`.

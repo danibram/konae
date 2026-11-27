@@ -1326,13 +1326,13 @@ mod tests {
         };
         let mut payload = crate::functions::tests::release(id, bundle);
         payload["initialModules"] =
-            json!({"functions":{"on":true},"auth":{"on":true},"actions":{"on":true}});
+            json!({"functions":{"on":true},"auth":{"on":true},"actions":{"on":true},"mcp":{"on":true}});
         payload["initialSignupPolicy"] = json!({"mode":"open","allowlist":[]});
         payload["project"]["files"]["schema.sql"] = json!(
             "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL, body TEXT NOT NULL, touches INTEGER NOT NULL DEFAULT 0);"
         );
         let actions = json!({"version":1,"actions":{
-            "notes.list":{"kind":"query","access":"authenticated","statement":"SELECT body,touches FROM notes WHERE owner_id=?1 LIMIT 10","bindings":[{"source":"actor","field":"id"}]},
+            "notes.list":{"kind":"query","access":"authenticated","statement":"SELECT body,touches FROM notes WHERE owner_id=?1 LIMIT 10","bindings":[{"source":"actor","field":"id"}],"mcp":{"description":"List the signed-in member's notes."}},
             "notes.touch":{"kind":"mutation","access":"authenticated","statement":"UPDATE notes SET touches=touches+1 WHERE owner_id=?1","bindings":[{"source":"actor","field":"id"}]}
         }});
         payload["project"]["files"]["actions.json"] = json!(actions.to_string());
@@ -1411,6 +1411,8 @@ mod tests {
         let secret = crate::http::secrets_store(&a_root, id).unwrap();
         secret.execute("INSERT INTO secrets(name,value,updated_at,use) VALUES ('private','never-export-this',0,'call')", []).unwrap();
         drop(secret);
+        std::fs::write(a_root.join("mcp-app-clients.json"), "installation-only oauth client registration").unwrap();
+        std::fs::write(a_root.join("mcp-app-oauth.sqlite"), "installation-only oauth grants").unwrap();
         for path in [
             "server/orders.mjs",
             "server/manifest.json",
@@ -1468,7 +1470,7 @@ mod tests {
         assert!(
             !names
                 .iter()
-                .any(|name| name.contains("secrets") || name.starts_with(".konae/"))
+                .any(|name| name.contains("secrets") || name.starts_with(".konae/") || name.contains("mcp-app-oauth") || name.contains("mcp-app-clients"))
         );
         let incoming_artifact = crate::functions::read_artifact(&unpacked.join("server"))
             .unwrap()
@@ -1523,8 +1525,11 @@ mod tests {
         assert_eq!(imported.server, deployed.server);
         assert_eq!(crate::functions::cron::declarations(&imported).unwrap()["cleanup"].cron.text(), "0 8 * * 1-5");
         assert_eq!(imported.actions, deployed.actions);
+        assert!(imported.actions.contains("\"mcp\":{\"description\":\"List the signed-in member's notes.\"}"));
         assert_eq!(imported.signup_policy, deployed.signup_policy);
         assert_eq!(imported.modules, deployed.modules);
+        assert!(!b_root.join("mcp-app-clients.json").exists());
+        assert!(!b_root.join("mcp-app-oauth.sqlite").exists());
         assert!(!crate::layout::secrets(&b_root, id).exists());
         let db = Connection::open(crate::layout::database(&b_root, id)).unwrap();
         assert_eq!(db.query_row("SELECT payload_json FROM __konae_notify_intents WHERE id='intent-portable' AND state='pending'", [], |row| row.get::<_, String>(0)).unwrap(),

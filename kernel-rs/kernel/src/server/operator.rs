@@ -422,6 +422,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                 words.rest().is_empty() && ["on", "off"].contains(&value.as_str()),
                 "kernel module <name> on|off"
             );
+            let _release_guard = crate::named_lock(state, &format!("publish:{}", deployment.id), true).await;
             let result = crate::modules::set(
                 &state.data_root,
                 &deployment.id,

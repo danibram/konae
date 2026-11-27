@@ -636,6 +636,7 @@ fn set_suspended(auth: &AuthService, user_id: &str, suspend: bool, root: &std::p
     let mut pending = None;
     let state = if suspend {
         pending = Some(crate::copies::Pending::begin(root, &format!("{app}/{user_id}"), "suspending the app account and recording its revocation")?);
+        crate::server::app_oauth::revoke_user_tokens_at(root, app, user_id)?;
         auth.suspend(&email)?;
         "suspended".to_owned()
     } else {

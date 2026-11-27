@@ -39,6 +39,7 @@ impl Installation {
                 RootDatabase { file: crate::mail::MAIL_DATABASE, sign_out: &[] },
                 RootDatabase { file: crate::calls::CALLS_DATABASE, sign_out: &[] },
                 RootDatabase { file: crate::transfers::TRANSFERS_DATABASE, sign_out: &["transfers"] },
+                RootDatabase { file: "mcp-app-oauth.sqlite", sign_out: &["app_oauth_codes", "app_oauth_tokens"] },
             ],
             accounts: Vec::new(),
             check_catalog: |_| Ok(()),
