@@ -85,15 +85,6 @@
         ]
       }
     },
-    "mcp": {
-      "summary": "Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.",
-      "switch": true,
-      "options": [],
-      "permission": "publish",
-      "agentRule": "after-owner-confirms",
-      "requires": ["actions", "auth"],
-      "uses": ["actions.json mcp"]
-    },
     "page": {
       "summary": "Values from the page address. The Kernel fills params when a declared page path answers.",
       "switch": false,
@@ -140,22 +131,6 @@
           "files"
         ],
         "objects": "file-index"
-      }
-    },
-    "file-intake": {
-      "summary": "Accepts immutable file versions from declared sources and queues declared app consumers.",
-      "switch": true,
-      "options": [],
-      "permission": "publish",
-      "agentRule": "after-owner-confirms",
-      "requires": ["actions"],
-      "uses": ["file-intake.json"],
-      "data": {
-        "version": 1,
-        "components": ["database", "files"],
-        "reserved": ["__konae_intake_versions", "__konae_intake_deliveries", "__konae_intake_current", "__konae_intake_jobs", "__konae_intake_effects"],
-        "migrations": ["file-intake-v1"],
-        "objects": "intake-versions"
       }
     },
     "calls": {
@@ -258,6 +233,20 @@
         ]
       }
     },
+    "mcp": {
+      "summary": "Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": [
+        "actions",
+        "auth"
+      ],
+      "uses": [
+        "actions.json mcp"
+      ]
+    },
     "documents": {
       "summary": "Issue portable PDFs from mutation snapshots and serve them through an app-owned read rule.",
       "switch": true,
@@ -284,6 +273,37 @@
           "documents-v1"
         ],
         "objects": "documents"
+      }
+    },
+    "file-intake": {
+      "summary": "Accepts immutable file versions from declared sources and queues declared app consumers.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": [
+        "actions"
+      ],
+      "uses": [
+        "file-intake.json"
+      ],
+      "data": {
+        "version": 1,
+        "components": [
+          "database",
+          "files"
+        ],
+        "reserved": [
+          "__konae_intake_versions",
+          "__konae_intake_deliveries",
+          "__konae_intake_current",
+          "__konae_intake_jobs",
+          "__konae_intake_effects"
+        ],
+        "migrations": [
+          "file-intake-v1"
+        ],
+        "objects": "intake-versions"
       }
     },
     "usage": {

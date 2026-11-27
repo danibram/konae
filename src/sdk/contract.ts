@@ -57,7 +57,7 @@ export type KernelModuleData = {
   components: string[];
   reserved?: string[];
   migrations?: string[];
-  objects?: "file-index";
+  objects?: "file-index" | "documents" | "intake-versions";
 };
 
 export type SdkModule = {
@@ -117,6 +117,15 @@ const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }
 const storedShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }, where url is the path files.url returns for the new file";
 
 export const internalKernelModules = {
+  mcp: {
+    summary: "Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.",
+    switch: true,
+    options: [],
+    permission: "publish",
+    agentRule: "after-owner-confirms",
+    requires: ["actions", "auth"],
+    uses: ["actions.json mcp"],
+  },
   documents: {
     summary: "Issue portable PDFs from mutation snapshots and serve them through an app-owned read rule.",
     switch: true,
@@ -131,6 +140,22 @@ export const internalKernelModules = {
       reserved: ["__konae_documents"],
       migrations: ["documents-v1"],
       objects: "documents",
+    },
+  },
+  "file-intake": {
+    summary: "Accepts immutable file versions from declared sources and queues declared app consumers.",
+    switch: true,
+    options: [],
+    permission: "publish",
+    agentRule: "after-owner-confirms",
+    requires: ["actions"],
+    uses: ["file-intake.json"],
+    data: {
+      version: 1,
+      components: ["database", "files"],
+      reserved: ["__konae_intake_versions", "__konae_intake_deliveries", "__konae_intake_current", "__konae_intake_jobs", "__konae_intake_effects"],
+      migrations: ["file-intake-v1"],
+      objects: "intake-versions",
     },
   },
   usage: {

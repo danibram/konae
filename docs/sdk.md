@@ -4,7 +4,7 @@
 
 window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the runtime endpoint, /_konae/mcp under the page's base path, on the host the page loaded from, the Deployment's generated hostname or its custom domain, with that host's app session cookie. The base path is /p/<id-or-name> when the page's address starts with /p/<segment>, and empty otherwise. On a Deployment the page's Content Security Policy refuses inline event handlers, fetches to other origins, WebAssembly, eval and new Function; the editor preview applies no policy.
 
-An authenticated query Action can opt into the runtime MCP catalog with `mcp: { "description": "..." }`. The Kernel derives the tool's input schema from the Action's input bindings. It lists the tool only for a signed-in user, and calls the same Action with that user's authority. See [App MCP tools](mcp-app-tools.md) for the declaration and current connection limits.
+To expose named Actions to an MCP client, see [MCP tools for app users](mcp-app-tools.md).
 
 ```js
 const session = await miniapp.auth.session();                    // { userId, name, role }; role is "anonymous" when signed out

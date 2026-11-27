@@ -170,6 +170,8 @@ export function renderDocs(contract: SdkContract = sdkContract): string {
     "",
     contract.summary,
     "",
+    "To expose named Actions to an MCP client, see [MCP tools for app users](mcp-app-tools.md).",
+    "",
     "```js",
     exampleBlock(contract),
     "```",
