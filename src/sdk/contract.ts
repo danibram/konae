@@ -117,6 +117,22 @@ const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }
 const storedShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }, where url is the path files.url returns for the new file";
 
 export const internalKernelModules = {
+  documents: {
+    summary: "Issue portable PDFs from mutation snapshots and serve them through an app-owned read rule.",
+    switch: true,
+    options: [],
+    permission: "publish",
+    agentRule: "after-owner-confirms",
+    requires: ["actions", "auth"],
+    uses: ["actions.json issue and download declarations"],
+    data: {
+      version: 1,
+      components: ["database", "files"],
+      reserved: ["__konae_documents"],
+      migrations: ["documents-v1"],
+      objects: "documents",
+    },
+  },
   usage: {
     summary: "Per-app usage records.",
     switch: false,

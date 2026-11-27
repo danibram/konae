@@ -23,6 +23,7 @@ pub struct MutationContext {
     pub account: Option<String>,
     pub actor_id: Option<String>,
     pub at: u64,
+    pub documents_rule: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -193,7 +194,7 @@ pub(crate) async fn handle_intent(state: &AppState, deployment: &Deployment, id:
     let action = ActionDefinition {
         kind: "mutation".into(), access: "anonymous".into(), statement: String::new(), bindings,
         http: None, page: None, signal: None, guard: None, notify: Some(payload.declaration),
-        schedule: None, subscribe: None, call: Default::default(), extra: Default::default(),
+        schedule: None, issue: None, subscribe: None, call: Default::default(), extra: Default::default(),
     };
     let Some(queue) = state.accounts.queue.as_ref() else { return };
     let Ok(Some(declared)) = declaration(&payload.action, &action) else { return };

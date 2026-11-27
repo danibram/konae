@@ -137,10 +137,14 @@ async fn invoke_action_inner(
         } else {
             let _guard = action_lock(&state, &deployment.id, &action.kind).await;
             match state.guards.statement_permit(&deployment.id).await {
-                Ok(permit) if action.notify.is_some() => crate::run_action_in_slot_with_notify(db_path, action, params, permit,
+                Ok(permit) if action.notify.is_some() || action.issue.is_some() => crate::run_action_in_slot_with_notify(db_path, action, params, permit,
                     notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.clone(),
                         input: input.clone(), account: actor.as_ref().map(|user| user.user_id.clone()),
-                        actor_id: actor.as_ref().map(|user| user.user_id.clone()), at: now_ms() }).await,
+                        actor_id: actor.as_ref().map(|user| user.user_id.clone()), at: now_ms(),
+                        documents_rule: action.issue.as_ref().and_then(|issue| {
+                            let source = serde_json::from_str::<Value>(&deployment.actions).ok()?;
+                            serde_json::to_string(source["actions"].get(&issue.download)?).ok()
+                        }) }).await,
                 Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
                 Err(wait) => return http::rate_limited(wait),
             }
@@ -196,6 +200,9 @@ async fn invoke_action_inner(
                             );
                         }
                         if let Some(id) = ran.notify_intent.as_deref() { notify::record_intent(&state, &deployment, id).await; }
+                        if action.issue.is_some() && ran.answer["changes"].as_u64().unwrap_or_default() > 0 {
+                            crate::documents::record_issue(&state, &deployment).await;
+                        }
                     }
                     Json(json!({"result": ran.answer})).into_response()
                 }

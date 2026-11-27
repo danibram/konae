@@ -30,6 +30,7 @@ struct ModuleData {
 enum BlobInventoryProvider {
     FileIndex,
     IntakeVersions,
+    Documents,
 }
 
 impl BlobInventoryProvider {
@@ -37,6 +38,7 @@ impl BlobInventoryProvider {
         match self {
             Self::FileIndex => "file-index",
             Self::IntakeVersions => "intake-versions",
+            Self::Documents => "documents",
         }
     }
 }
@@ -129,6 +131,7 @@ pub fn blob_references_in_data_dir(directory: &std::path::Path) -> Result<Vec<Bl
         |provider| match provider {
             BlobInventoryProvider::FileIndex => crate::file_store::file_index_references_in(&directory.join("files")),
             BlobInventoryProvider::IntakeVersions => crate::file_intake::blob_references(&directory.join("database.sqlite")),
+            BlobInventoryProvider::Documents => crate::documents::blob_references_in(directory),
         },
     )
 }
@@ -199,6 +202,14 @@ const DURABLE_WORK: &[DurableWork] = &[
         prepare_transfer: crate::file_intake::prepare_transfer,
         pause_export: Some(crate::file_intake::pause_export),
         resume_import: Some(crate::file_intake::resume_import),
+    },
+    DurableWork {
+        resource: crate::execution::WorkResource::Documents,
+        start: crate::documents::spawn_worker,
+        check_pending: Some(crate::documents::check_pending_on_connection),
+        prepare_transfer: crate::documents::prepare_transfer,
+        pause_export: Some(crate::documents::pause_export),
+        resume_import: Some(crate::documents::resume_import),
     },
 ];
 
@@ -314,6 +325,12 @@ pub fn sources_use_http<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>
 pub fn sources_use_calls<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
     files.into_iter().filter(|(name, _)| *name == "actions.json").any(|(_, bytes)| {
         serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(|action| action["kind"] == "call"))).unwrap_or(false)
+    })
+}
+
+pub fn sources_use_documents<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
+    files.into_iter().filter(|(name, _)| *name == "actions.json").any(|(_, bytes)| {
+        serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(|action| !action["issue"].is_null()))).unwrap_or(false)
     })
 }
 
@@ -698,6 +715,7 @@ fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, sta
         "http" => uses_http(root, id),
         "calls" => uses_calls(root, id),
         "mcp" => released_action_use(root, id, |action| action["mcp"].is_object()),
+        "documents" => uses_documents(root, id),
         _ => false,
     }
 }
@@ -801,6 +819,10 @@ pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
     let actions = std::fs::read(sources.join("actions.json")).unwrap_or_default();
     let schema = std::fs::read(sources.join("schema.sql")).unwrap_or_default();
     named_sources_use_actions([("actions.json", actions.as_slice()), ("schema.sql", schema.as_slice())])
+}
+
+pub fn uses_documents(root: &std::path::Path, id: &str) -> bool {
+    released_action_use_or_false_when_source_is_missing(root, id, |action| action["issue"].is_object())
 }
 
 fn database_has_tables(path: &std::path::Path) -> bool {
@@ -984,7 +1006,7 @@ mod tests {
     #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "file-intake", "files", "functions", "http", "mcp", "seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "documents", "file-intake", "files", "functions", "http", "mcp", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);

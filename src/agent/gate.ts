@@ -8,7 +8,7 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange, moduleCheckOrder } from "../lib/module-state";
-import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp, sourcesUseMcp } from "../lib/module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseDocuments, sourcesUseFiles, sourcesUseHttp, sourcesUseMcp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { validateFileIntake, validateFileIntakeConsumers, type FileIntakeDeclaration } from "../kernel/file-intake";
@@ -104,6 +104,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       http: sourcesUseHttp(files),
       calls: sourcesUseCalls(files),
       mcp: sourcesUseMcp(files),
+      documents: sourcesUseDocuments(files),
       "file-intake": intakeDeclaration !== undefined,
     };
     for (const module of moduleCheckOrder) {
@@ -113,7 +114,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
     const actionsState = modules?.actions;
-    for (const module of ["http", "calls", "mcp", "file-intake"] as const) {
+    for (const module of ["http", "calls", "mcp", "documents", "file-intake"] as const) {
       const state = modules?.[module];
       if (state?.on === true) {
         const required = checkModuleChange({ rule: "requires", module, required: "actions", requiredState: actionsState });
@@ -130,9 +131,11 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       const required = checkModuleChange({ rule: "requires", module: "files", required: "auth", requiredState: authState });
       if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
     }
-    if (modules?.mcp?.on === true && authState && authState.on !== true) {
-      const required = checkModuleChange({ rule: "requires", module: "mcp", required: "auth", requiredState: authState });
-      if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
+    for (const module of ["mcp", "documents"] as const) {
+      if (modules?.[module]?.on === true && authState && authState.on !== true) {
+        const required = checkModuleChange({ rule: "requires", module, required: "auth", requiredState: authState });
+        if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
+      }
     }
     const authOff = authState ? checkModuleChange({ rule: "on", module: "auth", state: authState }) : null;
     if (sourcesUseAuth(Object.values(files)) && authOff) {
@@ -354,6 +357,8 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
 
     const refused = notifyColumnsRefusal(db, action);
     if (refused) errors.push({ stage, message: refused.message, detail: refused.message, code: refused.code, hint: hintOf(refused.code) });
+    const documentRefused = documentsSnapshotRefusal(db, action);
+    if (documentRefused) errors.push({ stage, message: documentRefused.message, detail: documentRefused.message, code: documentRefused.code, hint: hintOf(documentRefused.code) });
 
     if (stage !== "actions") continue;
 
@@ -387,6 +392,20 @@ export function notifyColumnsRefusal(db: Database, action: ServerActionDefinitio
     // Falls through to the refusal.
   }
   return notifyColumnRefusal(action.name);
+}
+
+export function documentsSnapshotRefusal(db: Database, action: ServerActionDefinition) {
+  const columns = action.issue?.snapshot ?? [];
+  if (!columns.length) return undefined;
+  try {
+    const statement = db.prepare(notifyReturningStatement(action.statement, columns));
+    const returned = statement.getColumnNames().length;
+    statement.free();
+    if (returned === columns.length) return undefined;
+  } catch {
+    // The shared refusal tells the author which declaration to correct.
+  }
+  return { code: "documents.snapshot-column-unknown", message: `Action ${action.name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation.` };
 }
 
 function divergence(fresh: Database, clone: Database): string[] {

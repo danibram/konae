@@ -76,6 +76,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let uses_http = crate::modules::sources_use_http(action_files.iter().copied());
     let uses_calls = crate::modules::sources_use_calls(action_files.iter().copied());
     let intake_source = input.project.files.get(crate::file_intake::DECLARATION_FILE);
+    let uses_documents = crate::modules::sources_use_documents(action_files.iter().copied());
     crate::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
     crate::calls::check_connects(&input.project.manifest)?;
     let artifact = crate::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
@@ -104,7 +105,6 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         && initial_modules.is_none_or(|modules| !modules.contains_key("actions")) && uses_actions {
         candidate_modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
     }
-    if intake_source.is_some() { crate::modules::require_on(&candidate_modules, "file-intake").map_err(anyhow::Error::new)?; }
     if first_release
         && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
         && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {
@@ -113,16 +113,27 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     if let Some(manifest) = functions.as_ref().filter(|manifest| !manifest.crons.is_empty()) {
         manifest.check_modules(&candidate_modules)?;
     }
-    for module in crate::modules::release_use_order() {
-        let used = match module.as_str() { "files" => uses_files, "actions" => uses_actions, "http" => uses_http, "calls" => uses_calls, _ => false };
-        if used { crate::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
-    }
-    let program = crate::action_shape::read(actions_source)?;
-    let uses_mcp = program.actions.values().any(|action| action.extra.get("mcp").is_some_and(|value| !value.is_null()));
+    let uses_mcp = serde_json::from_str::<Value>(actions_source)
+        .ok()
+        .and_then(|program| program["actions"].as_object().map(|actions| actions.values().any(|action| !action["mcp"].is_null())))
+        .unwrap_or(false);
     if first_release && initial_modules.is_none_or(|modules| !modules.contains_key("mcp")) && uses_mcp {
         candidate_modules.get_mut("mcp").expect("mcp is switchable")["on"] = json!(true);
     }
-    if uses_mcp { crate::modules::require_on(&candidate_modules, "mcp").map_err(anyhow::Error::new)?; }
+    for module in crate::modules::release_use_order() {
+        let used = match module.as_str() {
+            "files" => uses_files,
+            "actions" => uses_actions,
+            "http" => uses_http,
+            "calls" => uses_calls,
+            "mcp" => uses_mcp,
+            "documents" => uses_documents,
+            "file-intake" => intake_source.is_some(),
+            _ => false,
+        };
+        if used { crate::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
+    }
+    let program = crate::action_shape::read(actions_source)?;
     if let Some(raw) = intake_source {
         let declaration = crate::file_intake::validate_declaration(raw)?;
         crate::file_intake::validate_consumers(&declaration, &program)?;

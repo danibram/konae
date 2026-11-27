@@ -11,6 +11,7 @@ pub enum WorkResource {
     Calls,
     Notices,
     FileIntake,
+    Documents,
 }
 
 #[derive(Default)]

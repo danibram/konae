@@ -42,6 +42,10 @@ export function sourcesUseMcp(sources: Iterable<string> | Record<string, string>
   return actionEntries(sources).some((action) => action && typeof action === "object" && !Array.isArray(action) && (action as { mcp?: unknown }).mcp != null);
 }
 
+export function sourcesUseDocuments(sources: Iterable<string> | Record<string, string>): boolean {
+  return actionEntries(sources).some((action) => action && typeof action === "object" && "issue" in action && action.issue != null);
+}
+
 export function sdkRequired(modules: Record<string, { on?: boolean }> | undefined, sources: Iterable<string> | Record<string, string>, visibility?: string): boolean {
   const sourceFiles = Symbol.iterator in Object(sources) ? undefined : sources as Record<string, string>;
   const files = sourceFiles ? Object.values(sourceFiles) : Array.from(sources as Iterable<string>);

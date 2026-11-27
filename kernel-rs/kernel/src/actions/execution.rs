@@ -142,11 +142,10 @@ pub fn run_mutation_on_connection(
     params: Vec<SqlValue>,
 ) -> Result<Ran> {
     let sqlite_started = std::time::Instant::now();
-    let columns = action
-        .notify
-        .as_ref()
-        .map(|_| notify::returning("", action))
-        .unwrap_or_default();
+    let mut columns = action.notify.as_ref().map(|_| notify::returning("", action)).unwrap_or_default();
+    if let Some(issue) = &action.issue {
+        for column in &issue.snapshot { if !columns.contains(column) { columns.push(column.clone()); } }
+    }
     let mut rows = Vec::new();
     let mut budget = ResultBudget::default();
     let changes = if columns.is_empty() {
@@ -202,14 +201,26 @@ pub(crate) fn run_mutation_effects_on_connection(
     notify_context: Option<notify::MutationContext>,
 ) -> Result<Ran> {
     let mut ran = run_mutation_on_connection(connection, action, params)?;
+    let context = notify_context;
     if action.notify.is_some() && ran.answer["changes"].as_u64().unwrap_or(0) > 0 {
-        let context = notify_context.ok_or_else(|| anyhow::anyhow!("A notify mutation requires its app execution context."))?;
+        let context = context.clone().ok_or_else(|| anyhow::anyhow!("A notify mutation requires its app execution context."))?;
         let id = uuid::Uuid::new_v4().to_string();
         let effect = notify::IntentEffect::new(id.clone(), action, context, &ran)?;
         crate::app_data::with_kernel_effect_access(internal_access, || {
             crate::execution::TransactionEffect::prepare(&effect, connection)
         })?;
         ran.notify_intent = Some(id);
+    }
+    if action.issue.is_some() && ran.answer["changes"].as_u64().unwrap_or(0) > 0 {
+        let context = context.ok_or_else(|| anyhow::anyhow!("A Documents issue requires its app execution context."))?;
+        if let Some(effect) = crate::documents::IssueEffect::from_mutation(action, crate::documents::MutationContext {
+            app: context.app, release: context.release, action: context.action, input: context.input,
+            at: context.at, read_rule: context.documents_rule.ok_or_else(|| anyhow::anyhow!("The Documents download rule is unavailable."))?,
+        }, &ran)? {
+            crate::app_data::with_kernel_effect_access(internal_access, || {
+                crate::execution::TransactionEffect::prepare(&effect, connection)
+            })?;
+        }
     }
     Ok(ran)
 }

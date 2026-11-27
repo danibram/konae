@@ -80,6 +80,9 @@ pub async fn start_locked(
     tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
+    if state.deployments.read().await.values().any(|deployment| crate::modules::is_on(&deployment.modules, "documents")) {
+        crate::documents::require_renderer().await?;
+    }
     let deployments = state.deployments.read().await.values()
         .filter(|deployment| deployment.server.as_ref().is_some_and(|server| !server.manifest.functions.is_empty()))
         .cloned().collect::<Vec<_>>();

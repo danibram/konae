@@ -53,10 +53,12 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
   notify?: NotifyDeclaration;
   schedule?: ScheduleDeclaration;
   mcp?: { description: string };
+  issue?: IssueDeclaration;
   call?: CallDeclaration;
 };
 
 export type ScheduleDeclaration = { every: string } | { daily: string };
+export type IssueDeclaration = { key: string; download: string; snapshot: string[]; template: string; resources?: Record<string, string>; typstVersion?: string };
 
 export type ServerActionProgram = {
   version: 1;
@@ -86,6 +88,15 @@ export function parseServerActionSource(source: string): ServerActionProgram {
   assertDistinctRoutes(actions);
   assertPageLists(actions);
   assertCallTargets(actions);
+  for (const [name, action] of Object.entries(actions)) {
+    if (!action.issue) continue;
+    const rule = actions[action.issue.download];
+    if (!rule || rule.kind !== "query" || rule.access !== "authenticated"
+      || !rule.bindings.some((binding) => binding.source === "actor" && binding.field === "id")
+      || !rule.bindings.some((binding) => binding.source === "input" && binding.key === "issueKey" && binding.type === "string")) {
+      throw refusal("documents.download-rule-invalid", `Action ${name} issue.download must name an authenticated query with an actor binding and the issue key input.`);
+    }
+  }
   return { version: 1, actions };
 }
 
@@ -123,7 +134,7 @@ export function resolveServerAction(
 
 const ACTION_KEYS: Record<ServerActionDefinition["kind"], readonly string[]> = {
   query: ["kind", "access", "statement", "bindings", "http", "page", "mcp"],
-  mutation: ["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule"],
+  mutation: ["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule", "issue"],
   signal: ["kind", "access", "statement", "bindings", "signal", "page"],
   call: ["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then", "page"],
 };
@@ -158,7 +169,7 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   }
   if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw refusal("action.invalid", `Invalid server action: ${name}`);
   if (access === "scheduled" && (kind !== "query" && kind !== "mutation"
-    || ["http", "page", "notify", "signal", "schedule", "subscribe"].some((key) => candidate[key] != null)
+    || ["http", "page", "notify", "signal", "schedule", "subscribe", "issue"].some((key) => candidate[key] != null)
     || bindings.some((binding) => binding.source === "actor"))) {
     throw refusal("action.scheduled-shape", `Action ${name} with access scheduled must be a query or mutation without an actor binding, route or external effect.`);
   }
@@ -195,10 +206,11 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   assertNoSubscribe(name, candidate);
   const schedule = parseSchedule(name, kind, bindings, candidate.schedule);
   const notify = parseNotify(name, kind, bindings, candidate.notify);
+  const issue = parseIssue(name, kind, access, bindings, candidate.issue);
   return {
     name, kind, access, statement: statement.trim(), bindings,
     ...(candidate.mcp ? { mcp: candidate.mcp as { description: string } } : {}),
-    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(page ? { page } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}), ...(schedule ? { schedule } : {}),
+    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(page ? { page } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}), ...(schedule ? { schedule } : {}), ...(issue ? { issue } : {}),
   };
 }
 
@@ -207,6 +219,38 @@ function validMcpDeclaration(value: unknown): value is { description: string } {
   const record = value as Record<string, unknown>;
   return typeof record.description === "string" && record.description.length > 0 && record.description.length <= 1000
     && Object.keys(record).every((key) => key === "description");
+}
+
+function parseIssue(name: string, kind: string, access: RuntimeActionAccess, bindings: ActionBinding[], value: unknown): IssueDeclaration | undefined {
+  if (value === undefined) return undefined;
+  if (kind !== "mutation" || access !== "authenticated") throw refusal("documents.issue-key-invalid", `Action ${name} issue.key must name a string input binding on an authenticated mutation.`);
+  const invalid = `Action ${name} has an invalid Documents issue declaration.`;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw refusal("documents.issue-key-invalid", invalid);
+  const issue = value as Record<string, unknown>;
+  if (Object.keys(issue).some((key) => !["key", "download", "snapshot", "template", "resources", "typstVersion"].includes(key))) throw refusal("documents.issue-key-invalid", invalid);
+  if (typeof issue.key !== "string" || !bindings.some((binding) => binding.source === "input" && binding.key === issue.key && binding.type === "string")) {
+    throw refusal("documents.issue-key-invalid", `Action ${name} issue.key must name a string input binding on an authenticated mutation.`);
+  }
+  if (typeof issue.download !== "string" || !/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(issue.download)) throw refusal("documents.download-rule-invalid", `Action ${name} issue.download must name an authenticated query with an actor binding and the issue key input.`);
+  if (!Array.isArray(issue.snapshot) || issue.snapshot.length < 1 || issue.snapshot.length > 32 || issue.snapshot.some((column) => typeof column !== "string" || !/^[A-Za-z0-9_]{1,64}$/.test(column))) {
+    throw refusal("documents.snapshot-invalid", `Action ${name} issue.snapshot must name 1 to 32 returned columns.`);
+  }
+  const version = issue.typstVersion ?? "0.14.2";
+  if (typeof issue.template !== "string" || issue.template.length < 1 || new TextEncoder().encode(issue.template).length > 64 * 1024 || version !== "0.14.2") {
+    throw refusal("documents.template-invalid", `Action ${name} issue must include a template of at most 64 KiB and Typst version 0.14.2.`);
+  }
+  const resources = issue.resources ?? {};
+  if (!resources || typeof resources !== "object" || Array.isArray(resources) || Object.entries(resources).some(([path, content]) =>
+    !path || path.length > 200 || path.startsWith("/") || path.split(/[\\/]/).some((part) => part === "" || part === "." || part === "..") || typeof content !== "string"
+    || (content.startsWith("base64:") ? !validDocumentBase64(content.slice(7)) : new TextEncoder().encode(content).length > 256 * 1024))) {
+    throw refusal("documents.resources-invalid", `Action ${name} issue.resources must use relative paths and values up to 256 KiB.`);
+  }
+  return { key: issue.key, download: issue.download, snapshot: issue.snapshot as string[], template: issue.template, resources: resources as Record<string, string>, typstVersion: version };
+}
+
+function validDocumentBase64(encoded: string): boolean {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) return false;
+  return Math.floor(encoded.length * 3 / 4) - (encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0) <= 256 * 1024;
 }
 
 function parsePageBinding(name: string, kind: string, access: string, value: unknown, bindings: ActionBinding[], http?: HttpBinding, statement?: string): PageBinding {

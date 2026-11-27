@@ -1,0 +1,70 @@
+[
+  {
+    "case": "an issue pins a snapshot and an authenticated named read rule",
+    "schema": "CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0);",
+    "actions": {
+      "documents.issue": {"kind":"mutation","access":"authenticated","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"id","download":"documents.read","snapshot":["id","total"],"template":"#text(issue.id)","resources":{"fonts/notice.txt":"font note"},"typstVersion":"0.14.2"}},
+      "documents.read": {"kind":"query","access":"authenticated","statement":"SELECT id FROM invoices WHERE id=? AND owner_id=? LIMIT 1","bindings":[{"source":"input","key":"issueKey","type":"string"},{"source":"actor","field":"id"}]}
+    },
+    "error": null
+  },
+  {
+    "case": "an issue key must name a string input binding",
+    "schema": "CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0);",
+    "actions": {
+      "documents.issue": {"kind":"mutation","access":"authenticated","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"missing","download":"documents.read","snapshot":["id"],"template":"#text(issue.id)"}},
+      "documents.read": {"kind":"query","access":"authenticated","statement":"SELECT id FROM invoices WHERE id=? AND owner_id=? LIMIT 1","bindings":[{"source":"input","key":"issueKey","type":"string"},{"source":"actor","field":"id"}]}
+    },
+    "code":"documents.issue-key-invalid",
+    "error":"Action documents.issue issue.key must name a string input binding on an authenticated mutation."
+  },
+  {
+    "case": "the download name must resolve to an authenticated query",
+    "schema": "CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0);",
+    "actions": {
+      "documents.issue": {"kind":"mutation","access":"authenticated","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"id","download":"documents.missing","snapshot":["id"],"template":"#text(issue.id)"}}
+    },
+    "code":"documents.download-rule-invalid",
+    "error":"Action documents.issue issue.download must name an authenticated query with an actor binding and the issue key input."
+  },
+  {
+    "case": "the download query must bind the current actor",
+    "schema": "CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0);",
+    "actions": {
+      "documents.issue": {"kind":"mutation","access":"authenticated","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"id","download":"documents.read","snapshot":["id"],"template":"#text(issue.id)"}},
+      "documents.read": {"kind":"query","access":"authenticated","statement":"SELECT id FROM invoices WHERE id=? LIMIT 1","bindings":[{"source":"input","key":"issueKey","type":"string"}]}
+    },
+    "code":"documents.download-rule-invalid",
+    "error":"Action documents.issue issue.download must name an authenticated query with an actor binding and the issue key input."
+  },
+  {
+    "case": "the issue snapshot must name returned columns",
+    "schema": "CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0);",
+    "actions": {
+      "documents.issue": {"kind":"mutation","access":"authenticated","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"id","download":"documents.read","snapshot":["bad-name"],"template":"#text(issue.id)"}},
+      "documents.read": {"kind":"query","access":"authenticated","statement":"SELECT id FROM invoices WHERE id=? AND owner_id=? LIMIT 1","bindings":[{"source":"input","key":"issueKey","type":"string"},{"source":"actor","field":"id"}]}
+    },
+    "code":"documents.snapshot-invalid",
+    "error":"Action documents.issue issue.snapshot must name 1 to 32 returned columns."
+  },
+  {
+    "case": "an issue mutation must require an app account",
+    "schema": "CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0);",
+    "actions": {
+      "documents.issue": {"kind":"mutation","access":"anonymous","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"id","download":"documents.read","snapshot":["id"],"template":"#text(issue.id)"}},
+      "documents.read": {"kind":"query","access":"authenticated","statement":"SELECT id FROM invoices WHERE id=? AND owner_id=? LIMIT 1","bindings":[{"source":"input","key":"issueKey","type":"string"},{"source":"actor","field":"id"}]}
+    },
+    "code":"documents.issue-key-invalid",
+    "error":"Action documents.issue issue.key must name a string input binding on an authenticated mutation."
+  },
+  {
+    "case": "an issue must pin the supported Typst version",
+    "schema": "CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0);",
+    "actions": {
+      "documents.issue": {"kind":"mutation","access":"authenticated","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"id","download":"documents.read","snapshot":["id"],"template":"#text(issue.id)","typstVersion":"0.1"}},
+      "documents.read": {"kind":"query","access":"authenticated","statement":"SELECT id FROM invoices WHERE id=? AND owner_id=? LIMIT 1","bindings":[{"source":"input","key":"issueKey","type":"string"},{"source":"actor","field":"id"}]}
+    },
+    "code":"documents.template-invalid",
+    "error":"Action documents.issue issue must include a template of at most 64 KiB and Typst version 0.14.2."
+  }
+]

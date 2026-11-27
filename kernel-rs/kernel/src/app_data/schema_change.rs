@@ -224,8 +224,13 @@ pub fn apply_with_transforms(
     anyhow::ensure!(final_fingerprint == super::schema_transform::fingerprint_schema(schema).map_err(anyhow::Error::new)?, "schema transformation chain did not produce schema.sql");
     transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)?;
     for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
-        let statement = transaction.prepare(&action.statement).map_err(|error| anyhow::anyhow!("action {name} does not match the deployed schema: {error}"))?;
-        if action.kind == "mutation" && statement.column_count() > 0 {
+        let columns = action.issue.as_ref().map(|issue| issue.snapshot.clone()).unwrap_or_default();
+        let statement_text = if columns.is_empty() { action.statement.clone() } else { crate::notify::with_returning(&action.statement, &columns) };
+        let statement = transaction.prepare(&statement_text).map_err(|error| anyhow::anyhow!("action {name} does not match the deployed schema: {error}"))?;
+        if !columns.is_empty() && statement.column_count() != columns.len() {
+            anyhow::bail!(crate::refusal::refuse("documents.snapshot-column-unknown", format!("Action {name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation.")));
+        }
+        if action.kind == "mutation" && action.issue.is_none() && statement.column_count() > 0 {
             anyhow::bail!("Action {name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.");
         }
         drop(statement);
@@ -675,10 +680,13 @@ mod tests {
         assert!(reserved.iter().any(|name| name == "__konae_function_receipts"));
         assert!(reserved.iter().any(|name| name == "__konae_notify_intents"));
         assert!(reserved.iter().any(|name| name == "__konae_calls"));
+        assert!(reserved.iter().any(|name| name == "__konae_documents"));
         assert_eq!(crate::modules::data_version("functions"), Some(1));
         assert!(crate::modules::has_migration("actions", "schema-transforms"));
         assert!(crate::modules::has_migration("functions", "function-receipts"));
         assert!(crate::modules::has_migration("actions", "notify-intents"));
+        assert_eq!(crate::modules::data_version("documents"), Some(1));
+        assert!(crate::modules::has_migration("documents", "documents-v1"));
         assert_eq!(crate::modules::data_version("calls"), Some(1));
         assert!(crate::modules::has_migration("calls", "calls-app-outbox"));
         let components = crate::package::component_names();
