@@ -1178,6 +1178,15 @@ pub(crate) fn runtime_session(
     AuthService::open_in(path, scope, verification)?.authenticate(Some(token))
 }
 
+pub(crate) fn active_user(path: &Path, user_id: &str) -> Result<Option<AuthUser>, AuthError> {
+    let connection = crate::app_db::identity_reader(path).map_err(AuthError::Storage)?;
+    connection.query_row(
+        "SELECT id, email FROM app_users WHERE id = ?1 AND state = 'active'",
+        [user_id],
+        |row| Ok(AuthUser { user_id: row.get(0)?, name: row.get(1)?, entered_by: None }),
+    ).optional().map_err(AuthError::Storage)
+}
+
 fn current_session(
     path: &Path,
     verification: Verification,

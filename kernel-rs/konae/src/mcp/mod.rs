@@ -1459,6 +1459,7 @@ async fn admin_call(
             let registry: Value = serde_json::from_str(include_str!("../../../kernel/src/modules.json"))?;
             let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::Error::new(kernel::refusal::refuse("module.unknown", format!("Unknown module {module}."))))?;
             let deployment = owned_deployment(state, owner, id, scope).await?;
+            let _release_guard = kernel::named_lock(state, &format!("publish:{}", deployment.id), true).await;
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             if module == "auth" {
                 if let Some(methods) = a.get("options").and_then(|options| options.get("signInMethods")) {

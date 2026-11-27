@@ -18,6 +18,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_konae/mcp", post(runtime))
         .route("/_konae/transfers/{id}", axum::routing::put(put_transfer))
+        .merge(crate::server::app_oauth::routes())
 }
 
 /// The largest JSON-RPC call an MCP door reads, except an owner's
@@ -94,8 +95,8 @@ pub fn answer(id: Value, result: Result<Value>) -> Response {
 pub fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
     let mut response = error(StatusCode::UNAUTHORIZED, "Sign in to use Konae MCP.");
     let metadata = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
-        origin(state, headers)
+        "Bearer resource_metadata=\"{}\"",
+        crate::server::app_oauth::protected_resource_url(state, headers)
     );
     response.headers_mut().insert(
         header::WWW_AUTHENTICATE,
@@ -111,9 +112,12 @@ struct RuntimeCaller {
     anonymous: bool,
     account_only: bool,
     app_tools: Vec<Value>,
+    actor: Option<crate::auth::AuthUser>,
+    _identity_guard: Option<crate::NamedLockGuard>,
+    _release_guard: crate::NamedLockGuard,
 }
 
-fn published_mcp_tools(deployment: &Deployment) -> Vec<Value> {
+pub(crate) fn published_mcp_tools(deployment: &Deployment) -> Vec<Value> {
     if !crate::modules::is_on(&deployment.modules, "mcp") || !crate::modules::is_on(&deployment.modules, "actions") {
         return Vec::new();
     }
@@ -149,7 +153,11 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
             "Cross-origin or unrecognized-host MCP request rejected.",
         ));
     }
-    let Some(deployment) = deployment_for(state, headers).await else {
+    let Some(observed) = deployment_for(state, headers).await else {
+        return Err(error(StatusCode::NOT_FOUND, "Deployment not found."));
+    };
+    let release_guard = crate::named_lock(state, &format!("publish:{}", observed.id), false).await;
+    let Some(deployment) = crate::deployment_by_id(state, &observed.id).await else {
         return Err(error(StatusCode::NOT_FOUND, "Deployment not found."));
     };
     if crate::path::foreign_referer(state, headers, &deployment.id) {
@@ -159,15 +167,33 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
         return Err(error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME));
     }
     let visitor = || format!("runtime:{}:anon:{}", deployment.id, limits::client_key(state.guards.client_ip(peer, headers)));
-    let (principal, mut tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers).await {
-        Ok(Some(user)) => (format!("runtime:{}:{}", deployment.id, user.user_id), runtime_tools(), false, false),
-        Ok(None) if !is_private(&deployment) => (visitor(), anonymous_runtime_tools(), true, false),
-        Ok(None) => (visitor(), account_tools(), true, true),
+    let has_app_oauth_bearer = bearer(headers).is_some_and(crate::server::app_oauth::is_app_token);
+    let session_user = if has_app_oauth_bearer { None } else { match authenticate_deployment(state, &deployment, headers).await {
+        Ok(user) => user,
         Err(_) => return Err(unauthorized(state, headers)),
+    }};
+    let full_app_tools = published_mcp_tools(&deployment);
+    let oauth = if session_user.is_none() {
+        match crate::server::app_oauth::authenticate(state, &deployment, headers, &full_app_tools).await {
+            Ok(value) => value,
+            Err(()) => return Err(unauthorized(state, headers)),
+        }
+    } else { None };
+    let (actor, oauth_scopes, identity_guard) = match oauth {
+        Some(grant) => (Some(grant.actor), Some(grant.scopes), Some(grant.identity_guard)),
+        None => (session_user, None, None),
     };
-    let app_tools = if anonymous { Vec::new() } else { published_mcp_tools(&deployment) };
+    let anonymous = actor.is_none();
+    let principal = actor.as_ref().map(|user| format!("runtime:{}:{}", deployment.id, user.user_id))
+        .unwrap_or_else(visitor);
+    let mut tools = if oauth_scopes.is_some() { Vec::new() } else if actor.is_some() { runtime_tools() }
+        else if !is_private(&deployment) { anonymous_runtime_tools() } else { account_tools() };
+    let app_tools = if anonymous { Vec::new() } else {
+        full_app_tools.into_iter().filter(|tool| oauth_scopes.as_ref().is_none_or(|scopes| scopes.contains(tool["name"].as_str().unwrap_or("")))).collect()
+    };
     tools.extend(app_tools.clone());
-    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools })
+    let account_only = actor.is_none() && is_private(&deployment);
+    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools, actor, _identity_guard: identity_guard, _release_guard: release_guard })
 }
 
 fn peer_of(request: &Request) -> Option<std::net::SocketAddr> {
@@ -197,7 +223,7 @@ async fn put_transfer(State(state): State<AppState>, AxumPath(id): AxumPath<Stri
 pub async fn runtime(State(state): State<AppState>, request: Request) -> Response {
     let headers = request.headers().clone();
     let peer = peer_of(&request);
-    let RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools } = match runtime_caller(&state, &headers, peer).await {
+    let RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools, actor, _identity_guard, _release_guard } = match runtime_caller(&state, &headers, peer).await {
         Ok(caller) => caller,
         Err(response) => return response,
     };
@@ -273,7 +299,10 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                     Err(e) => Err(e),
                 }
             } else if published_action_tool {
-                runtime_call(&state, &headers, &principal, Some(&app), "actions_invoke", json!({"name":name,"input":arguments})).await
+                match actor.clone() {
+                    Some(actor) => response_value(crate::actions::invoke_action_pinned(state.clone(), deployment.clone(), actor, name.to_owned(), headers.clone(), arguments.clone()).await).await,
+                    None => Err(anyhow::anyhow!("authentication-required")),
+                }
             } else {
                 runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
             };

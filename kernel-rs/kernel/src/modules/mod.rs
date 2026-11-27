@@ -701,6 +701,9 @@ pub async fn set(
             settings.sign_in_methods = serde_json::from_value(methods.clone())?;
         }
     }
+    if module == "mcp" && on == Some(false) {
+        crate::server::app_oauth::revoke_app_tokens_at(root, id)?;
+    }
     settings.modules.insert(module.to_owned(), current.clone());
     settings.write(root).await?;
     Ok(json!({"projectId":id,"module":module,"state":current}))
