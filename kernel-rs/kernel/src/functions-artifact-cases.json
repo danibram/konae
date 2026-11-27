@@ -635,7 +635,7 @@
       }
     },
     "code": "function.access-invalid",
-    "message": "Function orders access must be authenticated or anonymous."
+    "message": "Function orders access must be authenticated, anonymous or scheduled."
   },
   {
     "name": "malformed actions",

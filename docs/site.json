@@ -55,6 +55,6 @@
     { "section": "Examples", "pages": ["examples.md"] }
   ],
   "include": ["adr"],
-  "unlisted": ["mcp-guide.md"],
+  "unlisted": ["mcp-guide.md", "architecture/product-direction.md", "architecture/review-findings.md"],
   "routes": { "reference/README.md": "reference", "mcp-guide.md": "mcp-guide" }
 }

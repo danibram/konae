@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use rusqlite::{Connection, hooks::{AuthAction, AuthContext, Authorization}};
 
-use crate::app_data::schema_transform;
+use crate::app_data::schema_change;
 
 /// The longest LIKE or GLOB pattern an action may compare.
 pub const MAX_LIKE_PATTERN_BYTES: i32 = 500;
@@ -39,7 +39,15 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     configure_database_limits(db)?;
     arm_deadline(db)?;
-    install_database_authorizer(db, None)?;
+    install_database_authorizer(db, None, None)?;
+    Ok(())
+}
+
+pub(crate) fn restrict_app_database(db: &Connection, kernel_effects: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
+    db.busy_timeout(std::time::Duration::from_secs(5))?;
+    configure_database_limits(db)?;
+    arm_deadline(db)?;
+    install_database_authorizer(db, None, Some(kernel_effects))?;
     Ok(())
 }
 
@@ -47,7 +55,7 @@ pub(crate) fn restrict_function_database(db: &Connection, receipts: Arc<std::syn
     db.busy_timeout(std::time::Duration::ZERO)?;
     db.pragma_update(None, "foreign_keys", true)?;
     configure_database_limits(db)?;
-    install_database_authorizer(db, Some(receipts))
+    install_database_authorizer(db, Some(receipts), None)
 }
 
 fn configure_database_limits(db: &Connection) -> rusqlite::Result<()> {
@@ -65,13 +73,16 @@ fn configure_database_limits(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn install_database_authorizer(db: &Connection, receipts: Option<Arc<std::sync::atomic::AtomicBool>>) -> rusqlite::Result<()> {
+fn install_database_authorizer(db: &Connection, receipts: Option<Arc<std::sync::atomic::AtomicBool>>, kernel_effects: Option<Arc<std::sync::atomic::AtomicBool>>) -> rusqlite::Result<()> {
     let function_connection = receipts.is_some();
     let reserved = move |name: &str, accessor: Option<&str>| {
-        schema_transform::is_internal_table(name)
+        schema_change::is_internal_table(name)
             && !(name.eq_ignore_ascii_case("__konae_function_receipts")
                 && accessor.is_none()
                 && receipts.as_ref().is_some_and(|allowed| allowed.load(std::sync::atomic::Ordering::SeqCst)))
+            && !(matches!(name.to_ascii_lowercase().as_str(), "__konae_notify_intents" | "__konae_calls")
+                && accessor.is_none()
+                && kernel_effects.as_ref().is_some_and(|allowed| allowed.load(std::sync::atomic::Ordering::SeqCst)))
     };
     db.authorizer(Some(move |context: AuthContext<'_>| {
         if function_connection && context.accessor.is_some() { return Authorization::Deny; }

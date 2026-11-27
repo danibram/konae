@@ -57,7 +57,12 @@ pub(crate) async fn serve_key_with_routes(
     path: String,
     routes: Option<Arc<http::RouteTable>>,
 ) -> Response {
-    let deployment = match deployment_for(&state, &headers).await {
+    let selected = match deployment_for(&state, &headers).await {
+        Some(value) => value,
+        None => return error(StatusCode::NOT_FOUND, "Konae deployment not found."),
+    };
+    let release = crate::named_lock(&state, &selected.id, false).await;
+    let deployment = match crate::deployment_by_id(&state, &selected.id).await {
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Konae deployment not found."),
     };
@@ -113,6 +118,7 @@ pub(crate) async fn serve_key_with_routes(
         }
     }
 
+    drop(release);
     if let Some(routes) = routes.as_ref() {
         let page_path = format!("/{}", path.trim_start_matches('/'));
         if let Some(response) = http::serve_page_path(&state, &deployment, routes, &page_path, &headers).await {

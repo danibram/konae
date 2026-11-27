@@ -97,7 +97,8 @@ pub async fn start_locked(
                 mailbox.display()
             );
         }
-        mail::spawn_worker(queue, state.copies.clone());
+        mail::spawn_worker(queue, state.copies.clone(), state.clone());
+        crate::notify::spawn_worker(state.clone());
     }
     calls::spawn_worker(state.clone());
     Ok(Running { state, _lock: lock, copy_config })
@@ -155,6 +156,7 @@ pub async fn state_from_env(
         )?)),
         accounts: account_settings,
         functions: Arc::new(functions::runtime::Runtime::from_env()?),
+        dispatcher: Arc::new(execution::Dispatcher::default()),
         audit,
         installation: Arc::new(installation),
     };

@@ -7,6 +7,7 @@ import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
 import { ProjectSources, SaveSupersededError } from "../src/lib/project-sources";
 import { createWorkspaceProject } from "../src/lib/workspace";
 import { publishProject } from "../src/deployments/release";
+import { parseFunctionSources, type ServerArtifact } from "../src/kernel/functions";
 import { provideLocalAppDependencies } from "./local-app-deps";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -236,7 +237,11 @@ describe("authenticated MCP", () => {
   test("saved sources persist per owner and reject stale writes", async () => {
     const id = "project_sources_proof";
     await alice.call("project_create", { projectId: id, name: "Sources" });
-    const project = { id, name: "Sources", slug: "sources", files: { "index.html": "first" }, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+    const files = {
+      "index.html": "first",
+      "crons.json": JSON.stringify({ version: 1, crons: { cleanup: { cron: "0 8 * * 1-5", function: "cleanup" } } }),
+    };
+    const project = { id, name: "Sources", slug: "sources", files, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(project)), id);
     expect(await alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 })).toEqual({ revision: 1 });
     await expect(alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 })).rejects.toThrow("revision conflict");
@@ -271,6 +276,42 @@ describe("authenticated MCP", () => {
     const reader = new McpClient(`${url}/mcp`, { token: readGrant.token });
     await expect(reader.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 3 })).rejects.toThrow("Unknown tool");
 
+  });
+
+  test("the first publication carries cron declarations and enables their capabilities", async () => {
+    const id = "cron_first_publication";
+    const project = { id, name: "Cron", slug: "cron", manifest: { version: 1, visibility: "public" } };
+    const functions = JSON.stringify({ version: 1, functions: {
+      cleanup: { access: "scheduled", entry: "functions/cleanup.js", actions: ["items.expire"] },
+    } });
+    const crons = JSON.stringify({ version: 1, crons: { cleanup: { cron: "0 8 29 2 *", function: "cleanup" } } });
+    const manifest = parseFunctionSources(functions, crons);
+    if (!manifest) throw new Error("Missing cron manifest");
+    const bundle = 'export async function handle(_request, context) { await context.actions.call("items.expire", {}); return new Response(null, { status: 204 }); }';
+    const serverArtifact: ServerArtifact = { version: 1, abi: "konae-functions/1", manifest, bundles: { cleanup: bundle } };
+    const files = {
+      "index.html": "<main>Cron</main>",
+      "functions.json": functions,
+      "crons.json": crons,
+      "functions/cleanup.js": bundle,
+      "schema.sql": "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);",
+      "actions.json": JSON.stringify({ version: 1, actions: {
+        "items.expire": { kind: "mutation", access: "scheduled", statement: "DELETE FROM items", bindings: [] },
+      } }),
+    };
+    const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": files["index.html"] }, serverArtifact };
+    const { plan } = await publishProject(alice, project, () => ({
+      project: { ...project, files },
+      visibility: "public",
+      artifact,
+      initialModules: { functions: { on: false }, actions: { on: false }, auth: { on: false } },
+    }), async () => true, undefined, undefined, 0);
+    expect(plan.firstRelease).toBe(true);
+    expect(await alice.call("modules_read", { projectId: id })).toMatchObject({ modules: {
+      functions: { state: { on: true }, current: { functions: ["cleanup"], crons: ["cleanup"] } },
+      actions: { state: { on: true } },
+      auth: { state: { on: false } },
+    } });
   });
 
   test("a source read request can cancel an allocated or not-yet-started download", async () => {

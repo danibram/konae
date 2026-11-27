@@ -111,7 +111,7 @@
     "bindings": []
    }
   },
-  "error": "Action orders.list has an invalid access. Use \"anonymous\" or \"authenticated\".",
+  "error": "Action orders.list has an invalid access. Use \"anonymous\", \"authenticated\" or \"scheduled\".",
   "code": "action.access-invalid"
  },
  {
@@ -2085,7 +2085,7 @@
     "bindings": []
    }
   },
-  "error": "Action aa.list has an invalid access. Use \"anonymous\" or \"authenticated\".",
+  "error": "Action aa.list has an invalid access. Use \"anonymous\", \"authenticated\" or \"scheduled\".",
   "code": "action.access-invalid"
  },
  {
@@ -2403,7 +2403,7 @@
     "bindings": []
    }
   },
-  "error": "Action a.b has an invalid access. Use \"anonymous\" or \"authenticated\".",
+  "error": "Action a.b has an invalid access. Use \"anonymous\", \"authenticated\" or \"scheduled\".",
   "code": "action.access-invalid"
  },
  {
@@ -2558,5 +2558,23 @@
   },
   "error": "Invalid server action names: clients.open_total, clients.set_phase",
   "code": "action.name-invalid"
- }
+ },
+{
+  "case": "scheduled action cannot bind an actor",
+  "actions": {
+    "sessions.expire": {
+      "kind": "mutation",
+      "access": "scheduled",
+      "statement": "DELETE FROM sessions WHERE user_id=?1",
+      "bindings": [
+        {
+          "source": "actor",
+          "field": "id"
+        }
+      ]
+    }
+  },
+  "code": "action.scheduled-shape",
+  "error": "Action sessions.expire with access scheduled must be a query or mutation without an actor binding, route or external effect."
+}
 ]

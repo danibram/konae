@@ -21,9 +21,7 @@ pub const USAGE_DATABASE: &str = "usage.sqlite";
 pub const MAX_USAGE_DATABASE_BYTES: u64 = 128 * 1024 * 1024;
 /// Days of totals kept. Older days are dropped as new ones arrive.
 pub const USAGE_DAYS: i64 = 400;
-/// Rows of totals kept, oldest days dropped first. A Deployment has at most
-/// 100 actions and 100 routes, so a day holds at most about 205 rows plus one
-/// `page_view` row per HTML file the artifact serves.
+/// Rows of totals kept, oldest days dropped first.
 pub const MAX_USAGE_ROWS: i64 = 100_000;
 /// Signals kept, oldest dropped first.
 pub const MAX_SIGNALS: i64 = 50_000;
@@ -41,6 +39,7 @@ const SIGNALS_PAGE: i64 = 100;
 const QUEUE: usize = 16_384;
 const BATCH: usize = 1_024;
 const BATCH_WINDOW: Duration = Duration::from_millis(2);
+const DAY_MS: u64 = 86_400_000;
 
 /// An operation of the runtime endpoint that the Kernel authorized.
 pub enum Operation {
@@ -78,7 +77,7 @@ impl Operation {
 enum Message {
     Count { folder: PathBuf, at: u64, kind: &'static str, name: String },
     Signal { folder: PathBuf, at: u64, name: String, properties: String, committed: Option<tokio::sync::oneshot::Sender<bool>> },
-    Metric { folder: PathBuf, at: u64, feature: String, name: String, origin: String, outcome: String },
+    Execution { folder: PathBuf, at: u64, name: String, origin: String, outcome: String },
     Account { folder: PathBuf, at: u64, account: String, kind: AccountKind },
     FunctionLatency { folder: PathBuf, at: u64, timing: FunctionTiming },
     Flush(SyncSender<()>),
@@ -120,13 +119,8 @@ fn sender() -> &'static SyncSender<Message> {
 }
 
 fn enqueue(message: Message) {
-    match sender().try_send(message) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
-            if DROPPED.fetch_add(1, Ordering::Relaxed) % 1_000 == 0 {
-                eprintln!("Usage queue is full; dropping entries rather than delaying responses.");
-            }
-        }
+    if sender().try_send(message).is_err() {
+        DROPPED.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -200,17 +194,20 @@ pub fn count_account(data_root: &Path, deployment_id: &str, account: &str, kind:
 
 /// Records one completed execution without retaining its inputs or error text.
 pub fn execution(data_root: &Path, deployment_id: &str, name: &str, origin: &str, outcome: &str) {
-    enqueue(Message::Metric { folder: folder(data_root, deployment_id), at: super::now_ms(),
-        feature: "execution".into(), name: name.into(), origin: origin.into(), outcome: outcome.into() });
+    enqueue(Message::Execution { folder: folder(data_root, deployment_id), at: super::now_ms(),
+        name: name.into(), origin: origin.into(), outcome: outcome.into() });
 }
 
-/// Records host timings without retaining request inputs, accounts or cookies.
-pub fn function_latency(data_root: &Path, deployment_id: &str, timing: FunctionTiming) {
+/// Counts a completed Function call and records its host timings with one queue entry.
+pub(crate) fn function_invocation(data_root: &Path, deployment_id: &str, timing: FunctionTiming) {
+    let folder = folder(data_root, deployment_id);
+    let at = super::now_ms();
     if !timing.valid() {
         DROPPED.fetch_add(1, Ordering::Relaxed);
+        enqueue(Message::Count { folder, at, kind: "function", name: timing.name });
         return;
     }
-    enqueue(Message::FunctionLatency { folder: folder(data_root, deployment_id), at: super::now_ms(), timing });
+    enqueue(Message::FunctionLatency { folder, at, timing });
 }
 
 fn truncate(text: &str, bytes: usize) -> &str {
@@ -256,15 +253,30 @@ fn send_waiting(message: Message) -> std::result::Result<(), ()> {
 
 #[derive(Default)]
 struct Batch {
-    counts: HashMap<(String, &'static str, String), i64>,
+    counts: HashMap<(u64, &'static str, String), i64>,
     signals: Vec<(u64, String, String)>,
     commits: Vec<tokio::sync::oneshot::Sender<bool>>,
-    metrics: Vec<(u64, String, String, String, String)>,
+    executions: HashMap<ExecutionKey, (i64, u64)>,
     accounts: HashMap<(String, String, AccountKind), (i64, u64)>,
     function_timings: Vec<(u64, FunctionTiming)>,
 }
 
+#[derive(PartialEq, Eq, Hash)]
+struct ExecutionKey {
+    day: u64,
+    name: String,
+    origin: String,
+    outcome: String,
+}
+
+impl Batch {
+    fn count(&mut self, at: u64, kind: &'static str, name: String) {
+        *self.counts.entry((at / DAY_MS, kind, name)).or_default() += 1;
+    }
+}
+
 fn writer(receiver: Receiver<Message>) {
+    let mut reported_drops = 0;
     while let Ok(first) = receiver.recv() {
         let mut batches: HashMap<PathBuf, Batch> = HashMap::new();
         let mut flush = None;
@@ -275,7 +287,7 @@ fn writer(receiver: Receiver<Message>) {
         while let Some(message) = next.take() {
             match message {
                 Message::Count { folder, at, kind, name } => {
-                    *batches.entry(folder).or_default().counts.entry((day(at), kind, name)).or_insert(0) += 1;
+                    batches.entry(folder).or_default().count(at, kind, name);
                 }
                 Message::Signal { folder, at, name, properties, committed } => {
                     let batch = batches.entry(folder).or_default();
@@ -283,8 +295,11 @@ fn writer(receiver: Receiver<Message>) {
                     batch.commits.extend(committed);
                     signal_waiting = true;
                 }
-                Message::Metric { folder, at, feature, name, origin, outcome } => {
-                    batches.entry(folder).or_default().metrics.push((at, feature, name, origin, outcome));
+                Message::Execution { folder, at, name, origin, outcome } => {
+                    let key = ExecutionKey { day: at / DAY_MS, name, origin, outcome };
+                    let (count, last_at) = batches.entry(folder).or_default().executions.entry(key).or_default();
+                    *count += 1;
+                    *last_at = (*last_at).max(at);
                 }
                 Message::Account { folder, at, account, kind } => {
                     let entry = batches.entry(folder).or_default().accounts.entry((day(at), account, kind)).or_insert((0, 0));
@@ -292,7 +307,9 @@ fn writer(receiver: Receiver<Message>) {
                     entry.1 = entry.1.max(at);
                 }
                 Message::FunctionLatency { folder, at, timing } => {
-                    batches.entry(folder).or_default().function_timings.push((at, timing));
+                    let batch = batches.entry(folder).or_default();
+                    batch.count(at, "function", timing.name.clone());
+                    batch.function_timings.push((at, timing));
                 }
                 Message::Flush(done) => {
                     flush = Some(done);
@@ -317,6 +334,11 @@ fn writer(receiver: Receiver<Message>) {
                 WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
                 eprintln!("Usage write failed for {}: {error}", folder.display());
             }
+        }
+        let dropped = DROPPED.load(Ordering::Relaxed);
+        if dropped > reported_drops && (reported_drops == 0 || dropped - reported_drops >= 1_000) {
+            eprintln!("Usage dropped {dropped} entries since restart.");
+            reported_drops = dropped;
         }
         if let Some(done) = flush {
             let _ = done.try_send(());
@@ -443,6 +465,24 @@ pub fn schedule_baseline(folder: &Path, action: &str, schedule: &str, slot: i64)
 /// its slot done, in one transaction. A failed run leaves the slot open, so
 /// the next tick tries again.
 pub fn record_run(folder: &Path, run: &Run) -> Result<()> {
+    record_scheduled_run(folder, run, false)
+}
+
+pub(crate) fn claim_cron(folder: &Path, name: &str, slot: i64) -> Result<bool> {
+    let db = open(&folder.join(USAGE_DATABASE))?;
+    Ok(db.execute(
+        "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, 'cron', ?2)
+         ON CONFLICT(action) DO UPDATE SET slot = excluded.slot
+         WHERE schedule_state.slot < excluded.slot",
+        params![name, slot],
+    )? == 1)
+}
+
+pub(crate) fn record_cron(folder: &Path, run: &Run) -> Result<()> {
+    record_scheduled_run(folder, run, true)
+}
+
+fn record_scheduled_run(folder: &Path, run: &Run, is_cron: bool) -> Result<()> {
     let mut db = open(&folder.join(USAGE_DATABASE))?;
     let transaction = db.transaction()?;
     let outcome = if run.changes.is_some() { "ok" } else { "failed" };
@@ -456,8 +496,8 @@ pub fn record_run(folder: &Path, run: &Run) -> Result<()> {
         params![day(run.at), run.action],
     )?;
     metric(&transaction, run.at, "execution", run.action, "schedule",
-        if run.changes == Some(0) { "unchanged" } else { outcome }, 1)?;
-    if run.changes.is_some() {
+        if !is_cron && run.changes == Some(0) { "unchanged" } else { outcome }, 1)?;
+    if !is_cron && run.changes.is_some() {
         transaction.execute(
             "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, ?2, ?3)
              ON CONFLICT(action) DO UPDATE SET schedule = excluded.schedule, slot = excluded.slot",
@@ -475,15 +515,14 @@ fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
     }
     let mut connection = open(&folder.join(USAGE_DATABASE))?;
     let transaction = connection.transaction()?;
-    for ((day, kind, name), count) in &batch.counts {
-        transaction.execute(
+    for ((utc_day, kind, name), count) in &batch.counts {
+        transaction.prepare_cached(
             "INSERT INTO usage_daily(day, kind, name, count) VALUES(?1, ?2, ?3, ?4)
              ON CONFLICT(day, kind, name) DO UPDATE SET count = count + excluded.count",
-            params![day, kind, name, count],
-        )?;
+        )?.execute(params![day(utc_day * DAY_MS), kind, name, count])?;
     }
-    for (at, feature, name, origin, outcome) in &batch.metrics {
-        metric(&transaction, *at, feature, name, origin, outcome, 1)?;
+    for (key, (count, last_at)) in &batch.executions {
+        metric(&transaction, *last_at, "execution", &key.name, &key.origin, &key.outcome, *count)?;
     }
     if !batch.function_timings.is_empty() {
         function_latency::initialize(&transaction)?;
@@ -511,12 +550,11 @@ fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
 }
 
 fn metric(db: &Connection, at: u64, feature: &str, name: &str, origin: &str, outcome: &str, count: i64) -> Result<()> {
-    db.execute(
+    db.prepare_cached(
         "INSERT INTO metric_daily VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(day, feature, name, origin, outcome) DO UPDATE SET
            count = count + excluded.count, last_at = max(last_at, excluded.last_at)",
-        params![day(at), feature, name, origin, outcome, count, at as i64],
-    )?;
+    )?.execute(params![day(at), feature, name, origin, outcome, count, at as i64])?;
     Ok(())
 }
 
@@ -550,7 +588,7 @@ fn prune_daily(db: &Connection, table: &str, limit: i64, cutoff: &str) -> Result
 
 /// The UTC calendar day of a time in milliseconds, written `YYYY-MM-DD`.
 pub fn day(ms: u64) -> String {
-    let (year, month, date) = civil((ms / 86_400_000) as i64);
+    let (year, month, date) = civil((ms / DAY_MS) as i64);
     format!("{year:04}-{month:02}-{date:02}")
 }
 
@@ -713,8 +751,11 @@ pub fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
             )?;
             let rows = query.query_map(params![start * 86_400_000, (end + 1) * 86_400_000, SCHEDULED_PAGE], |row| {
                 let error: Option<String> = row.get(4)?;
-                let mut run = json!({"action": row.get::<_, String>(0)?, "at": row.get::<_, i64>(1)?,
-                    "outcome": row.get::<_, String>(2)?, "changes": row.get::<_, i64>(3)?});
+                let action: String = row.get(0)?;
+                let mut run = json!({"action": action, "at": row.get::<_, i64>(1)?, "outcome": row.get::<_, String>(2)?});
+                if !action.starts_with("cron:") {
+                    run["changes"] = json!(row.get::<_, i64>(3)?);
+                }
                 if let Some(error) = error {
                     run["error"] = Value::String(error);
                 }
@@ -774,7 +815,7 @@ pub fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &
         "functionLatency": function_latency::read(&path, start, end)?,
         "accounts": read_accounts(&path, &crate::layout::identity(data_root, &deployment.id), from, to)?,
         "storage": storage(data_root, &deployment.id),
-        "calls": retained_states(&data_root.join("calls.sqlite"), "calls", "deployment", &deployment.id, start, end)?,
+        "calls": retained_states(&crate::layout::database(data_root, &deployment.id), "__konae_calls", "deployment", &deployment.id, start, end)?,
         "mail": retained_states(&data_root.join("mail.sqlite"), "jobs", "scope", &format!("deployment:{}", deployment.id), start, end)?,
         "coverage": {"startedAt": started_at, "earliestMetricDay": earliest_day, "prunedThrough": pruned_through, "retentionDays": USAGE_DAYS,
             "approximate": true, "previewIncluded": false, "queueFlushed": flushed,
@@ -895,7 +936,7 @@ fn retained_states(path: &Path, table: &str, column: &str, scope: &str, from: i6
     let Some(db) = read_only(path)? else { return Ok(json!({"states": [], "retainedOnly": true})); };
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1)", [table], |r| r.get(0))?;
     if !exists { return Ok(json!({"states": [], "retainedOnly": true})); }
-    let sql = format!("SELECT state, COUNT(*) FROM {table} WHERE {column} = ?1 AND created_at >= ?2 AND created_at < ?3{} GROUP BY state", if table == "jobs" { " AND purpose = 'notify'" } else { "" });
+    let sql = format!("SELECT state, COUNT(*) FROM {table} WHERE {column} = ?1 AND created_at >= ?2 AND created_at < ?3{} GROUP BY state ORDER BY state", if table == "jobs" { " AND purpose = 'notify'" } else { "" });
     let mut q = db.prepare(&sql)?;
     let states = q.query_map(params![scope, from, to], |r| Ok(json!({"state": r.get::<_, String>(0)?, "count": r.get::<_, i64>(1)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(json!({"states": states, "retainedOnly": true}))
@@ -1027,6 +1068,23 @@ mod tests {
     }
 
     #[test]
+    fn events_read_call_states_from_the_apps_portable_database() {
+        let root = scratch("calls-portable-events");
+        let app_id = "deployment-events";
+        let database = crate::layout::database(&root, app_id);
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let db = Connection::open(&database).unwrap();
+        db.execute_batch("CREATE TABLE __konae_calls (deployment TEXT, state TEXT, created_at INTEGER);").unwrap();
+        let today = super::super::now_ms() as i64;
+        db.execute("INSERT INTO __konae_calls VALUES (?1, 'pending', ?2)", params![app_id, today]).unwrap();
+        db.execute("INSERT INTO __konae_calls VALUES (?1, 'delivered', ?2)", params![app_id, today]).unwrap();
+        drop(db);
+        let states = retained_states(&database, "__konae_calls", "deployment", app_id, today - 1, today + 1).unwrap();
+        assert_eq!(states["states"], json!([{"state":"delivered","count":1},{"state":"pending","count":1}]));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn days_are_utc_calendar_dates() {
         assert_eq!(day(0), "1970-01-01");
         assert_eq!(day(1_762_430_000_000), "2025-11-06");
@@ -1072,6 +1130,7 @@ mod tests {
         let action = &program.actions["orders.place"];
         for _ in 0..3 {
             count(&root, id, Operation::Action("orders.place".into()));
+            execution(&root, id, "orders.place", "runtime", "ok");
         }
         count(&root, id, Operation::Route("POST".into(), "/hooks/orders".into()));
         count(&root, id, Operation::Login);
@@ -1084,6 +1143,15 @@ mod tests {
         let usage = read_usage(&path, &today, &today).unwrap();
         let totals = usage["totals"].as_array().unwrap();
         assert!(totals.contains(&json!({"kind": "action", "name": "orders.place", "count": 3})), "{usage}");
+        assert!(usage["days"].as_array().unwrap().contains(&json!({
+            "day": today, "kind": "action", "name": "orders.place", "count": 3,
+        })));
+        let db = Connection::open(&path).unwrap();
+        assert_eq!(db.query_row(
+            "SELECT count FROM metric_daily WHERE day=?1 AND feature='execution' AND name='orders.place' AND origin='runtime' AND outcome='ok'",
+            [&today], |row| row.get::<_, i64>(0),
+        ).unwrap(), 3);
+        drop(db);
         assert!(totals.contains(&json!({"kind": "route", "name": "POST /hooks/orders", "count": 1})));
         assert!(totals.contains(&json!({"kind": "login", "name": "", "count": 1})));
         let signals = read_signals(&path, Some("order.placed"), None).unwrap();

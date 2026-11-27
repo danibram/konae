@@ -232,6 +232,7 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
             if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("http")) && uses_http { modules.get_mut("http").expect("http is switchable")["on"] = json!(true); }
             if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("calls")) && uses_calls { modules.get_mut("calls").expect("calls is switchable")["on"] = json!(true); }
             modules::complete(&mut modules);
+            functions::enable_cron_modules(&mut modules, server.as_ref().map(|server| &server.manifest));
             modules
         },
         contact_email: input.contact_email.clone(),
@@ -317,7 +318,15 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
 
     let database_guard = database_lock(&state, &id).await;
     let staged_database = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}.sqlite"));
-    let staged = if actions_enabled { stage_database(&db_path, &staged_database, &schema, &program, input.project.files.get("schema-transforms.json").map(String::as_str), input.schema_confirmation.as_deref()) } else { Ok(schema_change::Change::default()) }
+    let candidate_transforms = input.project.files.get("schema-transforms.json").map(String::as_str);
+    let saved_transforms = std::fs::read_to_string(layout::sources(&state.data_root, &id).join("schema-transforms.json")).ok();
+    let schema_unchanged = actions_enabled && existing.is_some() && db_path.exists()
+        && existing.as_ref().is_some_and(|current| current.released_schema == schema)
+        && candidate_transforms == saved_transforms.as_deref();
+    let staged = if schema_unchanged {
+        Ok(schema_change::Change::default())
+    } else if actions_enabled { stage_database(&db_path, &staged_database, &schema, &program, candidate_transforms, input.schema_confirmation.as_deref())
+    } else { Ok(schema_change::Change::default()) }
         .and_then(|change| release_step(&id, "schema_change").map(|()| change));
     let change = match staged {
         Ok(change) => change,

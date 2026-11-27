@@ -133,6 +133,11 @@ export async function runConformance(contract: ActionContract, target: Conforman
   for (const action of contract.actions) {
     const name = action.name;
     const valid = minimal(action);
+    if (action.access === "scheduled") {
+      await expectRefusal(action, "runs only inside a scheduled Function", [`Action ${name} runs only inside a scheduled Function.`, "Sign in to use Konae MCP."],
+        () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
+      continue;
+    }
     if (action.thenOf) {
       await expectRefusal(action, "runs only after its call", [`Action ${name} runs only after the call ${action.thenOf} answers.`, "Sign in to use Konae MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));

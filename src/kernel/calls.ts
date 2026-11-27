@@ -217,7 +217,7 @@ function parseThen(name: string, value: unknown, inputs: string[]): CallThen | u
   return { action: record.action, inputs: Object.fromEntries(entries) as Record<string, string> };
 }
 
-type ProgramAction = { kind: Kind; http?: unknown; bindings: Binding[]; call?: CallDeclaration };
+type ProgramAction = { kind: Kind; access?: string; http?: unknown; bindings: Binding[]; call?: CallDeclaration };
 
 export function assertCallTargets(actions: Record<string, ProgramAction>) {
   for (const name of Object.keys(actions).sort()) {
@@ -227,6 +227,7 @@ export function assertCallTargets(actions: Record<string, ProgramAction>) {
     const mutation = Object.hasOwn(actions, target) ? actions[target] : undefined;
     if (!mutation) throw refusal("call.then-undeclared", `Action ${name} names ${target} as its then, which is not declared.`);
     if (mutation.kind !== "mutation") throw refusal("call.then-not-mutation", `Action ${name} names ${target} as its then, which is not a mutation.`);
+    if (mutation.access === "scheduled") throw refusal("call.then-scheduled", `Action ${name} names ${target} as its then, but that action runs only inside a scheduled Function.`);
     if (mutation.http) throw refusal("call.then-routed", `Action ${name} names ${target} as its then, which answers on an HTTP route. A then mutation runs only after its call.`);
     if (mutation.bindings.some((binding) => binding.source === "actor")) {
       throw refusal("call.then-binds-actor", `Action ${name} names ${target} as its then, which binds the actor. A then mutation runs with no caller.`);

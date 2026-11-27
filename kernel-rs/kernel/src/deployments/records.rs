@@ -43,6 +43,7 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
     settings.signup_policy = deployment.signup_policy.clone();
     settings.sign_in_methods = deployment.sign_in_methods.clone();
     settings.contact_email = deployment.contact_email.clone();
+    crate::functions::enable_cron_modules(&mut settings.modules, deployment.server.as_ref().map(|server| &server.manifest));
     settings.manifest = crate::sources::manifest_without_runtime(&settings.manifest);
     let mut released = released_settings(deployment);
     if released.schema_sql.trim().is_empty() { released.schema_sql = recovered.schema_sql; }
@@ -61,6 +62,7 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
 pub async fn persist_release(state: &AppState, deployment: &Deployment, artifact_digest: &str, directories: &[String], schema_transforms: Option<&str>, initial_modules: Option<&std::collections::BTreeMap<String, Value>>) -> Result<()> {
     let mut settings = Settings::of(deployment);
     modules::preserve_release_state(&mut settings, Settings::read(&state.data_root, &deployment.id).ok(), initial_modules);
+    crate::functions::enable_cron_modules(&mut settings.modules, deployment.server.as_ref().map(|server| &server.manifest));
     settings.directories = directories.to_vec();
     let mut released = settings.released.clone().expect("Settings::of records released settings");
     released.artifact_digest = Some(artifact_digest.to_owned());

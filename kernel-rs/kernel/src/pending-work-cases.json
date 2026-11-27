@@ -1,0 +1,9 @@
+{
+  "cases": [
+    {
+      "case": "pending Calls continuation blocks an incompatible schema change",
+      "error": "The schema change would break pending Calls continuation call-17. Keep its required tables and columns, or finish that job before publishing.",
+      "code": "schema.pending-work"
+    }
+  ]
+}

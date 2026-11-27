@@ -43,6 +43,39 @@ La app usa TypeScript y APIs documentadas del entorno. Los paquetes compatibles 
 
 Los snapshots y caches compilados, si se incorporan, los genera la instalación a partir de fuente validada y los liga a la versión del motor. No son el artefacto portable de la app ni se aceptan como estado nativo confiable procedente de una exportación.
 
+#### Adaptadores y conformidad
+
+La independencia del motor es un requisito de Functions. Esta decisión define lo que debe cumplir cada adaptador; no certifica que los runners experimentales ya sean intercambiables. La app depende de una versión del contrato Konae, con sus APIs y comportamiento documentados. Cambiar de motor no debe exigir cambios en sus handlers, dependencias, cuentas, datos o reglas. La instalación puede reconstruir los artefactos específicos del motor a partir de los archivos portables de la app.
+
+El contrato público, el protocolo privado de workers y el formato de los artefactos preparados tienen versiones distintas. Un cambio del transporte o del compilador no cambia por sí solo el contrato de la app. La instalación selecciona el runner y comprueba su compatibilidad antes de activar una versión. Una carencia del runner no se presenta como un error del código de la app. No se cambia de motor a mitad de una invocación ni se repite una mutación para intentar ocultar un fallo.
+
+| Responsabilidad | Lugar |
+| --- | --- |
+| Firma del handler, tipos de entrada y salida, APIs permitidas, códigos de rechazo y semántica de petición | Contrato compartido de Functions |
+| Transformación TypeScript, resolución de paquetes y adaptaciones JavaScript independientes del motor | Build compartido por editor y CLI |
+| Preparación, snapshots, componentes Wasm, compilación nativa y claves de caché del motor | Adaptador de preparación del runner |
+| Web APIs, promesas, streams, reloj, aleatoriedad, errores nativos y traducción de llamadas al host | Adaptador de ejecución del runner |
+| Creación y descarte del estado, cancelación y aplicación de presupuestos del motor | Adaptador de ejecución, bajo la supervisión del executor |
+| Actor, autorización de cada operación, transacciones, recibos, admisión y reglas de filas | Kernel, compartido por todos los runners |
+| Tiempos de admisión, cola y Server Actions, y resultado de la petición | Instrumentación común del Kernel y executor |
+| Diagnóstico de GC, JIT y operaciones internas | Instrumentación específica del adaptador |
+
+Los tipos de V8, deno_core, SpiderMonkey o Wasmtime quedan dentro de sus adaptadores. El Kernel puede conocer la identidad del runner y gestionar artefactos preparados sin importar objetos del motor ni repartir reglas de negocio según el motor. El executor y su protocolo existentes son el punto de integración; una interfaz nueva requiere una necesidad que ese límite no cubra.
+
+Cuando una API del contrato falta o difiere en un motor, su adaptador debe proporcionar el comportamiento acordado. Las adaptaciones puramente JavaScript que sirven a todos los runners se comparten en el build. Una adaptación que necesita datos, archivos o red llama a las capacidades autorizadas del Kernel. No sustituye una operación por un no-op, no devuelve éxito ficticio y no abre acceso directo al sistema para que un paquete cargue. Mientras falte esa adaptación, el runner no cumple esa versión del contrato. Una capacidad fuera del contrato requiere primero una decisión común, sus rechazos y sus pruebas; no se admite solo porque un motor la incluya.
+
+La conformidad se comprueba con los mismos casos y resultados esperados en cada runner. Los casos viven fuera del adaptador que verifican y las exclusiones cuentan como pendientes. Las diferencias internas de heap, memoria lineal o JIT no obligan a igual consumo o latencia, pero cada runner debe imponer sus presupuestos declarados y conservar el comportamiento observable acordado.
+
+Antes de declarar intercambiables dos runners, la comprobación incluye:
+
+- El mismo código de app y dependencias fijadas, construidos por editor y CLI, con las mismas respuestas y rechazos conocidos.
+- Streams y bytes binarios, límites, errores de handler y llamadas asíncronas, con comparación de estado persistido además de códigos HTTP.
+- Dos actores sucesivos y peticiones concurrentes, sin transferencia de estado de petición, permisos, timers o tareas pendientes. Reutilizar un proceso no autoriza reutilizar estado JavaScript entre peticiones.
+- Cancelación, bucles, agotamiento de memoria, recuperación y publicación de una versión nueva, sin llamadas tardías con capacidades vencidas.
+- Reloj y aleatoriedad de petición que no hereden valores congelados durante la preparación.
+- Exportación desde una instalación con un runner e importación en otra con el otro runner y caché vacía. La prueba usa la cuenta trasladada, una lectura autorizada, una mutación y una lectura de su efecto, y se repite en ambas direcciones.
+- Una incompatibilidad de contrato detectada antes de activar la versión, conservando la versión publicada y sus datos.
+
 La comparación original comparte proceso para medir el coste de integración. La implementación posterior ejecuta JavaScript en un hijo separado y conserva autenticación y SQLite en el padre. Un fallo del hijo no debe terminar el Kernel. El supervisor limita el protocolo y revoca capacidades. Si JavaScript sigue bloqueado tras la cancelación, el runner termina su isolate desde otro hilo. El supervisor mata y recoge al hijo si este no responde.
 
 La política estricta usa un subgrupo cgroup v2 delegado por el operador en Linux. Al arrancar, el Kernel crea y retira un grupo temporal para comprobar que puede escribir los controles requeridos. Cada worker configura memoria, swap y tareas antes de inicializar V8 y rechaza la invocación cuando no puede imponerlos. `memory.max` es un límite del sistema operativo que puede superarse temporalmente; no promete un máximo exacto de RSS en cada instante. La [documentación de cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html) define esa semántica. El modo de desarrollo de macOS usa límite de heap y observación de RSS y no ofrece la misma contención.

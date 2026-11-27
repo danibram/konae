@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use crate::functions::cron;
 
 /// The shortest period a declaration may name, in minutes.
 pub const MIN_MINUTES: u64 = 5;
@@ -153,12 +154,25 @@ pub fn spawn(state: AppState, clock: Clock) {
         println!("Scheduled work runs every {seconds} seconds ({TEST_CLOCK}).");
     }
     let running: Arc<Mutex<HashSet<String>>> = Arc::default();
+    let running_crons: Arc<Mutex<HashSet<String>>> = Arc::default();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(clock.tick());
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut test_ticker = clock.test_seconds.map(|_| {
+            let mut ticker = tokio::time::interval(clock.tick());
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker
+        });
+        let mut last_cron_slot = None;
         loop {
-            ticker.tick().await;
-            tick(&state, clock, &running).await;
+            if let Some(ticker) = &mut test_ticker { ticker.tick().await; }
+            let at = super::now_ms();
+            let slot = cron::slot(at);
+            let check_crons = last_cron_slot.is_none_or(|last| last < slot);
+            if check_crons { last_cron_slot = Some(slot); }
+            tick(&state, clock, &running, &running_crons, check_crons.then_some(at)).await;
+            if test_ticker.is_none() {
+                let delay = cron::MINUTE_MS - super::now_ms() % cron::MINUTE_MS;
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
         }
     });
 }
@@ -169,6 +183,11 @@ pub fn paused_schedules(deployment: &super::Deployment) -> Vec<Value> {
     let mut schedules = program.actions.into_iter().filter_map(|(name, action)| {
         declaration(&name, &action).ok().flatten().map(|schedule| json!({"action": name, "schedule": schedule.key(), "paused": true}))
     }).collect::<Vec<_>>();
+    if let Some(crons) = cron::declarations(deployment) {
+        schedules.extend(crons.iter().map(|(id, cron)| {
+            json!({"action": crate::functions::cron::run_name(id), "cron": id, "function": cron.function, "schedule": cron.cron.text(), "paused": true})
+        }));
+    }
     schedules.sort_by(|left, right| left["action"].as_str().cmp(&right["action"].as_str()));
     schedules
 }
@@ -176,15 +195,27 @@ pub fn paused_schedules(deployment: &super::Deployment) -> Vec<Value> {
 /// Runs one declared schedule on demand from an operator command.
 pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name: &str) -> anyhow::Result<Value> {
     anyhow::ensure!(state.execution_mode.is_test(), "Manual schedule runs are available only in local test mode.");
+    if let Some(id) = name.strip_prefix("cron:") {
+        return cron::run(state, deployment, id, super::now_ms(), true).await;
+    }
     let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
     let action = program.actions.get(name).ok_or_else(|| anyhow::anyhow!("Action {name} does not exist."))?;
     let schedule = declaration(name, action)?.ok_or_else(|| anyhow::anyhow!("Action {name} does not declare a schedule."))?;
+    let execution = crate::execution::Context::new(deployment.id.clone(), deployment.artifact_version.clone(), crate::execution::Actor::Job {
+        id: format!("schedule:{name}"),
+        authority: crate::execution::JobAuthority::ScheduledAction,
+    }, [name.to_owned()]);
+    execution.authorize_action(name, &action.access).map_err(|code| anyhow::anyhow!("Scheduled action {name} is not authorized: {code}."))?;
     let folder = crate::layout::data(&state.data_root, &deployment.id);
     anyhow::ensure!(folder.is_dir(), "App data for {} does not exist.", deployment.id);
     let _lock = super::action_lock(state, &deployment.id, &action.kind).await;
     anyhow::ensure!(super::maintenance::pause(&state.data_root, &deployment.id).is_none(), "App {} is in maintenance.", deployment.id);
     let at = super::now_ms();
-    let outcome = super::run_action(folder.join("database.sqlite"), action, parameters(action, at)).await;
+    let permit = state.guards.statement_permit(&deployment.id).await.map_err(|_| anyhow::anyhow!("Scheduled operation could not acquire an app and installation SQL slot."))?;
+    let outcome = if action.notify.is_some() {
+        super::run_action_in_slot_with_notify(folder.join("database.sqlite"), action, parameters(action, at), permit,
+            super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.to_owned(), input: json!({}), account: None, actor_id: None, at }).await
+    } else { super::run_action_in_slot(folder.join("database.sqlite"), action, parameters(action, at), permit).await };
     let key_value = format!("{} (manual test)", schedule.key());
     let slot = at as i64;
     match outcome {
@@ -197,8 +228,7 @@ pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name
             })).await?;
             if changes > 0 {
                 usage::signal(&state.data_root, &deployment.id, name, action, &json!({}), None);
-                super::notify::record(state, deployment, name, action, &json!({}),
-                    super::notify::Caller { account: None, actor_id: None }, ran.changed(at)).await;
+                if let Some(id) = ran.notify_intent.as_deref() { super::notify::record_intent(state, deployment, id).await; }
             }
             Ok(json!({"ran": true, "action": name, "schedule": schedule.key(), "changes": changes, "at": at}))
         }
@@ -215,9 +245,19 @@ pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name
     }
 }
 
-async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String>>>) {
+async fn tick(
+    state: &AppState,
+    clock: Clock,
+    running: &Arc<Mutex<HashSet<String>>>,
+    running_crons: &Arc<Mutex<HashSet<String>>>,
+    cron_at: Option<u64>,
+) {
+    let cron_time = cron_at.and_then(|at| time::OffsetDateTime::from_unix_timestamp((at / 1_000) as i64).ok().map(|time| (at, time)));
     let deployments = state.deployments.read().await.values().cloned().collect::<Vec<_>>();
     for deployment in deployments {
+        if let Some((at, time)) = cron_time {
+            cron::tick(state, &deployment, running_crons, at, time);
+        }
         let Ok(program) = serde_json::from_str::<ActionProgram>(&deployment.actions) else { continue };
         let mut work = program
             .actions
@@ -259,6 +299,14 @@ async fn run_due(
     }
     let done = blocking(&folder, usage::schedule_slots).await?;
     for (name, action, schedule) in work {
+        let execution = crate::execution::Context::new(id.clone(), deployment.artifact_version.clone(), crate::execution::Actor::Job {
+            id: format!("schedule:{name}"),
+            authority: crate::execution::JobAuthority::ScheduledAction,
+        }, [name.clone()]);
+        if execution.authorize_action(name, &action.access).is_err() {
+            eprintln!("Scheduled action {name} on deployment {id} failed its execution authorization.");
+            continue;
+        }
         let (slot, key) = clock.place(schedule, now());
         match done.get(name) {
             Some((ran_under, ran_slot)) if *ran_under == key && *ran_slot >= slot => continue,
@@ -275,7 +323,14 @@ async fn run_due(
         }
         let at = now();
         let pending = crate::copies::Pending::begin(&state.data_root, &format!("{id}/{name} slot {slot}"), "committing a scheduled action and its run")?;
-        let outcome = super::run_action(folder.join("database.sqlite"), action, parameters(action, at)).await;
+        let permit = match state.guards.statement_permit(id).await {
+            Ok(permit) => permit,
+            Err(_) => { eprintln!("Scheduled run of {name} on deployment {id} could not acquire an app and installation SQL slot."); drop(pending); continue; }
+        };
+        let outcome = if action.notify.is_some() {
+            super::run_action_in_slot_with_notify(folder.join("database.sqlite"), action, parameters(action, at), permit,
+                super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.clone(), input: json!({}), account: None, actor_id: None, at }).await
+        } else { super::run_action_in_slot(folder.join("database.sqlite"), action, parameters(action, at), permit).await };
         let (ran, error) = match outcome {
             Ok(ran) => (Some(ran), None),
             Err(error) => {
@@ -293,11 +348,7 @@ async fn run_due(
             usage::confirmed_signals(async {
                 usage::signal(&state.data_root, id, name, action, &json!({}), None);
             }).await?;
-            super::notify::record(
-                state, deployment, name, action, &json!({}),
-                super::notify::Caller { account: None, actor_id: None },
-                ran.changed(at),
-            ).await;
+            if let Some(id) = ran.notify_intent.as_deref() { super::notify::record_intent(state, deployment, id).await; }
         }
         pending.finish()?;
     }
@@ -461,6 +512,7 @@ mod tests {
     fn release(schedule: Value) -> Value {
         json!({"holds.release": {"kind": "mutation", "access": "authenticated", "schedule": schedule,
             "guard": "Nothing to release.", "signal": {"name": "holds.released", "properties": ["actor"]},
+            "notify": {"to": "owner", "subject": "Holds released", "body": "The scheduled mutation committed."},
             "statement": "UPDATE holds SET released_at = ?1 WHERE released_at IS NULL AND until < ?1 AND ?2 IS NULL",
             "bindings": [{"source": "kernel", "field": "now"}, {"source": "actor", "field": "id"}]}})
     }
@@ -480,6 +532,8 @@ mod tests {
         rig.run(&actions, real).await;
         assert_eq!(rig.released(), 2);
         assert_eq!(rig.runs(), vec![("holds.release".into(), "ok".into(), 2)]);
+        let db = rusqlite::Connection::open(crate::layout::database(&rig.root, &rig.id)).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM __konae_notify_intents WHERE state='pending'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
 
         rig.at("2026-11-07T10:29:59");
         rig.run(&actions, real).await;

@@ -36,6 +36,9 @@ pub async fn invoke_action(
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Server action not declared."),
     };
+    if action.access == "scheduled" {
+        return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only inside a scheduled Function."));
+    }
     // An action whose route does not answer anyone answers only there.
     if let Some(route) = http::route_only(&name, action, is_private(&deployment)) {
         return error(StatusCode::FORBIDDEN, &format!("Action {name} answers only on its HTTP route, {route}."));
@@ -56,6 +59,20 @@ pub async fn invoke_action(
     };
     if action.access == "granted" {
         return error(StatusCode::FORBIDDEN, "action-grant-required");
+    }
+
+    let execution = crate::execution::Context::new(
+        deployment.id.clone(),
+        deployment.artifact_version.clone(),
+        actor.as_ref().map(|user| crate::execution::Actor::Human(user.user_id.clone())).unwrap_or(crate::execution::Actor::Anonymous),
+        [name.clone()],
+    );
+    if let Err(code) = execution.authorize_action(&name, &action.access) {
+        return if code == crate::execution::AuthorizationError::AuthenticationRequired {
+            error(StatusCode::UNAUTHORIZED, "authentication-required")
+        } else {
+            error(StatusCode::FORBIDDEN, "action-actor-not-allowed")
+        };
     }
 
     if (action.access != "anonymous" || is_private(&deployment)) && actor.is_none() {
@@ -85,10 +102,14 @@ pub async fn invoke_action(
 
     copies::operation::action(&state, &deployment.id, &name, action, async {
         let result = if action.kind == "signal" {
-            Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
+            Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new(), notify_intent: None })
         } else {
             let _guard = action_lock(&state, &deployment.id, &action.kind).await;
             match state.guards.statement_permit(&deployment.id).await {
+                Ok(permit) if action.notify.is_some() => crate::run_action_in_slot_with_notify(db_path, action, params, permit,
+                    notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.clone(),
+                        input: input.clone(), account: actor.as_ref().map(|user| user.user_id.clone()),
+                        actor_id: actor.as_ref().map(|user| user.user_id.clone()), at: now_ms() }).await,
                 Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
                 Err(wait) => return http::rate_limited(wait),
             }
@@ -117,8 +138,7 @@ pub async fn invoke_action(
                         if counted {
                             usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
                         }
-                        let caller = notify::Caller { account: actor_id, actor_id };
-                        notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
+                        if let Some(id) = ran.notify_intent.as_deref() { notify::record_intent(&state, &deployment, id).await; }
                     }
                     Json(json!({"result": ran.answer})).into_response()
                 }

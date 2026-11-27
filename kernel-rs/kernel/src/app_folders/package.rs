@@ -12,7 +12,11 @@ use crate::*;
 pub const PACKAGE_FORMAT: &str = "konae-package";
 pub const PACKAGE_VERSION: u64 = 1;
 /// `usage` travels when the Deployment has a Usage store, ADR-0010.
-pub const COMPONENT_NAMES: [&str; 4] = ["database", "identity", "files", "usage"];
+pub fn component_names() -> Vec<String> { crate::modules::export_components() }
+fn registered_component(name: &'static str) -> Result<&'static str> {
+    ensure!(component_names().iter().any(|component| component == name), "Module data inventory does not register package component {name}.");
+    Ok(name)
+}
 const FOLDER_DOWNLOAD: &str = "folder";
 const MIB: u64 = 1024 * 1024;
 /// The largest component a transfer may carry, a database at its quota.
@@ -47,6 +51,8 @@ pub struct Manifest {
     pub visibility: String,
     #[serde(default)]
     pub modules: std::collections::BTreeMap<String, Value>,
+    #[serde(default)]
+    pub data_versions: std::collections::BTreeMap<String, u64>,
     #[serde(default)]
     pub signup_policy: Option<SignupPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,6 +92,7 @@ pub struct InitialPackage {
 
 /// The size an upload for this component may declare.
 pub fn component_limit(name: &str, files: &file_store::FileLimits) -> Result<u64> {
+    ensure!(component_names().iter().any(|component| component == name), "Unknown package component {name}.");
     match name {
         "database" => Ok(MAX_APP_DATABASE_BYTES),
         "identity" => Ok(auth::MAX_IDENTITY_DATABASE_BYTES),
@@ -107,6 +114,7 @@ pub fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Re
         "Package version {} is not supported. This Kernel reads version {PACKAGE_VERSION}.",
         manifest.version
     );
+    crate::modules::check_data_versions(&manifest.data_versions)?;
     ensure!(
         ["public", "private"].contains(&manifest.visibility.as_str()),
         "The package manifest has no valid visibility."
@@ -208,15 +216,17 @@ pub async fn export(
     revisions: impl FnOnce(&Deployment) -> Result<Revisions>,
 ) -> Result<Value> {
     let id = deployment.id.clone();
+    let _transfer_hold = crate::notify::TransferHold::begin(&state.data_root, &id)?;
     let held: usize = crate::transfers::store(state)?.query_row(
         "SELECT COUNT(*) FROM transfers WHERE principal=?1 AND expires>?2",
         params![principal, now_ms()],
         |r| r.get(0),
     )?;
+    let component_names = component_names();
     ensure!(
-        held + COMPONENT_NAMES.len() + 1 <= MAX_ADMIN_PRINCIPAL_TRANSFERS,
+        held + component_names.len() < MAX_ADMIN_PRINCIPAL_TRANSFERS,
         "An export needs {} free transfers. Cancel completed transfers first.",
-        COMPONENT_NAMES.len() + 1
+        component_names.len() + 1
     );
     let folder = crate::layout::data(&state.data_root, &deployment.id);
     let scratch = state
@@ -239,6 +249,7 @@ pub async fn export(
             sources: sources_revision,
         } = revisions(&deployment)?;
         let _data = database_lock(state, &deployment.id).await;
+        crate::notify::prepare_transfer(state, &id)?;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
         if crate::modules::is_on(&deployment.modules, "auth") {
             open_auth(state, &deployment)?;
@@ -316,6 +327,7 @@ pub async fn export(
         }
         .into(),
         modules: deployment.modules.clone(),
+        data_versions: crate::modules::data_versions_for_components(components.iter().map(|(name, _, _, _)| name.as_str())),
         signup_policy: Some(deployment.signup_policy.clone()),
         sign_in_methods: Some(deployment.sign_in_methods.clone()),
         released: published_snapshot,
@@ -433,22 +445,26 @@ pub fn snapshot(
     if crate::modules::is_on(modules, "actions") || folder.join("database.sqlite").is_file() {
         let database = target.join("database.sqlite");
         copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
-        components.push(("database", database));
+        crate::notify::pause_exported_intents(&database).context("pending notices")?;
+        components.push((registered_component("database")?, database));
     }
-    if crate::modules::is_on(modules, "auth") {
+    if folder.join("identity.sqlite").is_file() {
         let identity = target.join("identity.sqlite");
         copies::vacuum_into(&folder.join("identity.sqlite"), &identity).context("accounts")?;
-        components.push(("identity", identity));
+        components.push((registered_component("identity")?, identity));
     }
-    if crate::modules::is_on(modules, "files") {
+    let references = crate::modules::blob_references_in_data_dir(folder)?;
+    if folder.join("files").is_dir() || !references.is_empty() {
         let files = target.join("files.tar");
-        write_files_tar(&folder.join("files"), &files, |id| blobs.open(id)).context("files")?;
-        components.push(("files", files));
+        write_files_tar_with_references(&folder.join("files"), &files, &references, |id| blobs.open(id)).context("files")?;
+        if folder.join("files/index.json").is_file() || !references.is_empty() {
+            components.push((registered_component("files")?, files));
+        }
     }
     if folder.join(usage::USAGE_DATABASE).is_file() {
         let usage = target.join(usage::USAGE_DATABASE);
         copies::vacuum_into(&folder.join(usage::USAGE_DATABASE), &usage).context("usage")?;
-        components.push(("usage", usage));
+        components.push((registered_component("usage")?, usage));
     }
     Ok(components)
 }
@@ -479,33 +495,62 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
     Ok(removed)
 }
 
+#[cfg(test)]
 fn write_files_tar<R: Read>(
     directory: &Path,
     target: &Path,
     open: impl Fn(&str) -> Result<Option<(u64, R)>>,
 ) -> Result<()> {
-    let index: Vec<Value> = match std::fs::read(directory.join("index.json")) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    let references = crate::modules::blob_references_in_files_dir(directory)?;
+    write_files_tar_with_references(directory, target, &references, open)
+}
+
+fn write_files_tar_with_references<R: Read>(
+    directory: &Path,
+    target: &Path,
+    references: &[crate::modules::BlobReference],
+    open: impl Fn(&str) -> Result<Option<(u64, R)>>,
+) -> Result<()> {
+    let index_bytes = match std::fs::read(directory.join("index.json")) {
+        Ok(bytes) => bytes,
+        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {
+            if directory.is_dir() {
+                for entry in std::fs::read_dir(directory)? {
+                    let entry = entry?;
+                    ensure!(!entry.file_name().to_string_lossy().ends_with(".blob"), "The Files directory has blobs but no readable index. Export stopped.");
+                }
+            }
+            b"[]".to_vec()
+        },
         Err(error_value) => return Err(error_value.into()),
     };
+    let index: Vec<Value> = serde_json::from_slice(&index_bytes)?;
+    let mut live_files = Vec::with_capacity(references.len());
+    for file in &index {
+        let id = file["id"].as_str().context("A stored file has an invalid id.")?;
+        if let Some(reference) = references.iter().find(|reference| reference.id == id) {
+            live_files.push((reference.id.clone(), reference.size));
+        } else {
+            anyhow::bail!("The Files module does not register blob {id} in its inventory.");
+        }
+    }
+    let listed = live_files.iter().map(|(id, _)| id.as_str()).collect::<HashSet<_>>();
+    let mut additional = references.iter().filter(|reference| !listed.contains(reference.id.as_str())).collect::<Vec<_>>();
+    additional.sort_by(|left, right| left.id.cmp(&right.id));
+    live_files.extend(additional.into_iter().map(|reference| (reference.id.clone(), reference.size)));
     let mut output = std::io::BufWriter::new(std::fs::File::create(target)?);
     let index_bytes = serde_json::to_vec(&index)?;
     output.write_all(&tar_header("index.json", index_bytes.len() as u64))?;
     output.write_all(&index_bytes)?;
     output.write_all(&vec![0; tar_padding(index_bytes.len() as u64)])?;
-    for file in &index {
-        let id = file["id"]
-            .as_str()
-            .filter(|id| files::valid_file_id(id))
-            .context("A stored file has an invalid id.")?;
+    for (id, expected_size) in live_files {
         let name = format!("{id}.blob");
         let (size, mut blob) =
-            open(id)?.with_context(|| format!("Stored file {id} has no data."))?;
+            open(&id)?.with_context(|| format!("Stored file {id} has no data."))?;
         output.write_all(&tar_header(&name, size))?;
         let copied = std::io::copy(&mut blob, &mut output)?;
         ensure!(
-            copied == size,
+            copied == size && size == expected_size,
             "Stored file {id} changed during the capture."
         );
         output.write_all(&vec![0; tar_padding(size)])?;
@@ -521,7 +566,16 @@ fn write_files_tar<R: Read>(
 /// Writes the files component of an app folder's `data/files/`, where each
 /// file's bytes sit beside the index as `<id>.blob`.
 pub fn folder_files_tar(directory: &Path, target: &Path) -> Result<()> {
-    write_files_tar(directory, target, |id| {
+    let references = crate::modules::blob_references_in_files_dir(directory)?;
+    folder_files_tar_with_references(directory, target, &references)
+}
+
+pub(crate) fn folder_files_tar_with_references(
+    directory: &Path,
+    target: &Path,
+    references: &[crate::modules::BlobReference],
+) -> Result<()> {
+    write_files_tar_with_references(directory, target, references, |id| {
         let path = directory.join(format!("{id}.blob"));
         match std::fs::File::open(&path) {
             Ok(file) => Ok(Some((file.metadata()?.len(), file))),
@@ -661,6 +715,32 @@ fn read_tar_header(input: &mut impl Read) -> Result<Option<(String, u64)>> {
     Ok(Some((name, parse_octal(&header[124..136])?)))
 }
 
+pub(crate) fn files_index_from_archive(archive: &Path) -> Result<Vec<u8>> {
+    let mut input = std::io::BufReader::new(std::fs::File::open(archive)?);
+    let (name, size) = read_tar_header(&mut input)?.context("The files component is empty.")?;
+    ensure!(name == "index.json", "The files component must start with index.json.");
+    ensure!(size <= MAX_FILE_INDEX_BYTES, "The file index exceeds {} MiB.", MAX_FILE_INDEX_BYTES / MIB);
+    let mut bytes = Vec::with_capacity(size as usize);
+    (&mut input).take(size).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 == size, "The files component ends early.");
+    serde_json::from_slice::<Vec<Value>>(&bytes).context("The file index is not valid JSON.")?;
+    Ok(bytes)
+}
+
+pub(crate) fn references_for_archive(archive: &Path, database: Option<&Path>, scratch_root: &Path) -> Result<Vec<crate::modules::BlobReference>> {
+    let scratch = scratch_root.join(format!(".package-inventory-{}", Uuid::new_v4()));
+    let result = (|| {
+        std::fs::create_dir_all(scratch.join("files"))?;
+        if let Some(database) = database.filter(|path| path.is_file()) {
+            std::fs::copy(database, scratch.join("database.sqlite"))?;
+        }
+        std::fs::write(scratch.join("files/index.json"), files_index_from_archive(archive)?)?;
+        crate::modules::blob_references_in_data_dir(&scratch)
+    })();
+    let _ = std::fs::remove_dir_all(scratch);
+    result
+}
+
 fn parse_octal(field: &[u8]) -> Result<u64> {
     let text = std::str::from_utf8(field)?.trim_matches(|c: char| c == '\0' || c == ' ');
     u64::from_str_radix(text, 8).context("The files component has a damaged header.")
@@ -671,6 +751,16 @@ pub(crate) fn unpack_files(
     accounts: Option<&Connection>,
     destination: Option<(&Path, &file_store::BlockingFiles)>,
     limits: &file_store::FileLimits,
+) -> Result<usize> {
+    unpack_files_with_references(archive, accounts, destination, limits, &[])
+}
+
+pub(crate) fn unpack_files_with_references(
+    archive: &Path,
+    accounts: Option<&Connection>,
+    destination: Option<(&Path, &file_store::BlockingFiles)>,
+    limits: &file_store::FileLimits,
+    references: &[crate::modules::BlobReference],
 ) -> Result<usize> {
     let mut input = std::io::BufReader::new(std::fs::File::open(archive)?);
     let (name, size) = read_tar_header(&mut input)?.context("The files component is empty.")?;
@@ -748,6 +838,15 @@ pub(crate) fn unpack_files(
         }
         normalized.push(restored);
     }
+    let mut additional = HashMap::<String, u64>::new();
+    for reference in references {
+        ensure!(files::valid_file_id(&reference.id), "Blob reference {} has an invalid ID.", reference.id);
+        if !expected.contains_key(&reference.id) {
+            ensure!(additional.insert(reference.id.clone(), reference.size).is_none(), "The blob inventory lists {} twice.", reference.id);
+        }
+    }
+    let mut additional_order = additional.keys().cloned().collect::<Vec<_>>();
+    additional_order.sort();
     if let Some((directory, _)) = destination {
         std::fs::create_dir_all(directory)?;
     }
@@ -756,20 +855,22 @@ pub(crate) fn unpack_files(
         let id = name
             .strip_suffix(".blob")
             .context("The files component holds an unexpected entry.")?;
-        let declared = expected.remove(id).with_context(|| {
-            format!("The files component holds data for {id}, which the index does not list.")
-        })?;
-        ensure!(
-            order.get(seen).is_some_and(|next| next == id),
-            "The files component is out of index order."
-        );
+        let declared = if seen < order.len() {
+            let declared = expected.remove(id).with_context(|| format!("The files component holds data for {id}, which the index does not list."))?;
+            ensure!(order.get(seen).is_some_and(|next| next == id), "The files component is out of index order.");
+            declared
+        } else {
+            let expected = additional.remove(id).with_context(|| format!("The files component holds data for {id}, which the index or any module inventory does not list."))?;
+            ensure!(additional_order.get(seen - order.len()).is_some_and(|next| next == id), "The files component is out of module inventory order.");
+            expected
+        };
         ensure!(
             size == declared,
             "The data of file {id} does not match its indexed size."
         );
         let mut body = (&mut input).take(size);
         let verify_digest = |digest: &str| -> Result<()> {
-            if let Some(expected) = index[seen].get("sha256") {
+            if let Some(expected) = index.get(seen).and_then(|file| file.get("sha256")) {
                 ensure!(
                     expected.as_str() == Some(digest),
                     "File {id} does not match its indexed SHA-256."
@@ -785,7 +886,7 @@ pub(crate) fn unpack_files(
                     ensure!(copied == size, "The files component ends early.");
                     let (_, digest) = copies::checksum_file(&temp)?;
                     verify_digest(&digest)?;
-                    normalized[seen]["sha256"] = json!(digest);
+                    if seen < normalized.len() { normalized[seen]["sha256"] = json!(digest); }
                     blobs.put(id, &temp)?;
                     Ok(copied)
                 })();
@@ -805,9 +906,9 @@ pub(crate) fn unpack_files(
         seen += 1;
     }
     ensure!(
-        expected.is_empty(),
-        "The files component is missing the data of {} indexed files.",
-        expected.len()
+        expected.is_empty() && additional.is_empty(),
+        "The files component is missing {} indexed or module-owned blobs.",
+        expected.len() + additional.len()
     );
     if let Some((directory, _)) = destination {
         let bytes = serde_json::to_vec_pretty(&normalized)?;
@@ -828,7 +929,10 @@ pub fn unpack_into(
     blobs: &file_store::BlockingFiles,
     limits: &file_store::FileLimits,
 ) -> Result<usize> {
-    unpack_files(archive, Some(accounts), Some((directory, blobs)), limits)
+    let data = directory.parent().context("The files directory has no app data folder.")?;
+    let database = data.join("database.sqlite");
+    let references = references_for_archive(archive, Some(&database), data)?;
+    unpack_files_with_references(archive, Some(accounts), Some((directory, blobs)), limits, &references)
 }
 
 fn skip(input: &mut impl Read, bytes: u64) -> Result<()> {
@@ -1103,11 +1207,13 @@ pub async fn install(state: &AppState, package: &InitialPackage, id: &str) -> Re
                 "The files component does not match the SHA-256 in the manifest."
             );
             let accounts = crate::app_db::read_optional(&identity)?;
-            unpack_files(
+            let references = references_for_archive(source, Some(&directory.join("database.sqlite")), &directory)?;
+            unpack_files_with_references(
                 source,
                 accounts.as_ref(),
                 Some((&directory.join("files"), &blobs)),
                 &file_limits,
+                &references,
             )?;
         }
         if let Some((content, source)) = find("usage") {
@@ -1218,6 +1324,17 @@ mod tests {
             json!(["notes.list", "notes.touch"]);
         payload["project"]["files"]["functions.json"] =
             json!(payload["serverArtifact"]["manifest"].to_string());
+        let cleanup = "export function handle() { return new Response(null, {status: 204}); }";
+        let cron_source = json!({"version":1,"crons":{"cleanup":{"cron":"0 8 * * 1-5","function":"cleanup"}}});
+        payload["project"]["files"]["crons.json"] = json!(cron_source.to_string());
+        payload["project"]["files"]["functions/cleanup.ts"] = json!(cleanup);
+        payload["serverArtifact"]["bundles"]["cleanup"] = json!(cleanup);
+        let scheduled = json!({"entry":"functions/cleanup.ts","access":"scheduled","mount":"/","methods":["POST"],"actions":[]});
+        payload["serverArtifact"]["manifest"]["functions"]["cleanup"] = scheduled.clone();
+        payload["serverArtifact"]["manifest"]["crons"] = cron_source["crons"].clone();
+        let mut function_source: Value = serde_json::from_str(payload["project"]["files"]["functions.json"].as_str().unwrap()).unwrap();
+        function_source["functions"]["cleanup"] = scheduled;
+        payload["project"]["files"]["functions.json"] = json!(function_source.to_string());
         let deployed = crate::functions::tests::publish(&a, &payload).await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1247,6 +1364,10 @@ mod tests {
         let user_id = response["result"]["user"]["userId"].as_str().unwrap();
         Connection::open(crate::layout::database(&a_root, id)).unwrap()
             .execute("INSERT INTO notes(owner_id,body) VALUES (?1,'portable row'), ('other-owner','private decoy')", [user_id]).unwrap();
+        Connection::open(crate::layout::database(&a_root, id)).unwrap().execute_batch(
+            "CREATE TABLE __konae_notify_intents (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending','handed_off')), created_at INTEGER NOT NULL) WITHOUT ROWID;
+             INSERT INTO __konae_notify_intents VALUES ('intent-portable', '{\"app\":\"portable_functions\",\"release\":\"r1\",\"action\":\"orders.notify\"}', 'pending', 17);",
+        ).unwrap();
         let mut original_rows = None;
         if worker.is_some() {
             let response = client
@@ -1287,6 +1408,13 @@ mod tests {
             assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND, "{path}");
             assert!(!response.text().await.unwrap().contains("no evaluation"));
         }
+        let public_crons = client
+            .get(format!("http://{address}/crons.json"))
+            .header("host", &deployed.hostname)
+            .send()
+            .await
+            .unwrap();
+        assert!(!public_crons.text().await.unwrap().contains("0 8 * * 1-5"));
         let exported = export(&a, deployed.clone(), "owner:test", |_| {
             Ok(Revisions {
                 published: 1,
@@ -1318,6 +1446,7 @@ mod tests {
             names.push(name);
         }
         assert!(names.contains(&"server/orders.mjs".to_owned()));
+        assert!(names.contains(&"app/crons.json".to_owned()));
         assert!(
             !names
                 .iter()
@@ -1374,11 +1503,14 @@ mod tests {
         payload["serverArtifact"] = serde_json::to_value(incoming_artifact).unwrap();
         let imported = crate::functions::tests::publish(&b, &payload).await;
         assert_eq!(imported.server, deployed.server);
+        assert_eq!(crate::functions::cron::declarations(&imported).unwrap()["cleanup"].cron.text(), "0 8 * * 1-5");
         assert_eq!(imported.actions, deployed.actions);
         assert_eq!(imported.signup_policy, deployed.signup_policy);
         assert_eq!(imported.modules, deployed.modules);
         assert!(!crate::layout::secrets(&b_root, id).exists());
         let db = Connection::open(crate::layout::database(&b_root, id)).unwrap();
+        assert_eq!(db.query_row("SELECT payload_json FROM __konae_notify_intents WHERE id='intent-portable' AND state='pending'", [], |row| row.get::<_, String>(0)).unwrap(),
+            r#"{"app":"portable_functions","release":"r1","action":"orders.notify"}"#);
         assert_eq!(
             db.query_row("SELECT COUNT(*) FROM notes", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
@@ -1441,7 +1573,16 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert!(rows.to_string().contains("portable row"), "{rows}");
+        let permission_proof = json!({
+            "release": imported.artifact_version,
+            "appActor": user_id,
+            "rowRule": "notes.owner_id = actor.id",
+            "result": rows,
+        });
+        let result = permission_proof["result"].to_string();
+        assert!(!permission_proof["release"].as_str().unwrap_or_default().is_empty());
+        assert!(result.contains("portable row"), "{permission_proof}");
+        assert!(!result.contains("private decoy"), "{permission_proof}");
         if let Some(original_rows) = original_rows {
             let old = client
                 .get(format!("http://{address}/api/orders"))
@@ -1522,6 +1663,126 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[tokio::test]
+    async fn export_pauses_only_unhanded_notice_work_and_import_resumes_that_work() {
+        let root = std::env::temp_dir().join(format!("konae-package-notify-handoff-{}", Uuid::new_v4()));
+        let folder = crate::layout::data(&root, "app");
+        let target = root.join("snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        let source = Connection::open(folder.join("database.sqlite")).unwrap();
+        source.execute_batch(
+            "CREATE TABLE __konae_notify_intents (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','handed_off')), created_at INTEGER NOT NULL);
+             INSERT INTO __konae_notify_intents VALUES ('waiting', '{\"results\":{}}', 'pending', 1);
+             INSERT INTO __konae_notify_intents VALUES ('accepted', '{\"results\":{\"owner@example.test\":\"uncertain\"}}', 'handed_off', 2);",
+        ).unwrap();
+        drop(source);
+        let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
+        let blobs = file_store::BlockingFiles::new(store, "app");
+        let parts = snapshot(&folder, &target, &blobs, &crate::modules::defaults()).unwrap();
+        assert!(parts.iter().any(|(name, _)| *name == "database"));
+        let copied_path = target.join("database.sqlite");
+        let copied = Connection::open(&copied_path).unwrap();
+        let states: Vec<(String, String, Option<String>)> = copied.prepare(
+            "SELECT id, state, transfer_state FROM __konae_notify_intents ORDER BY id",
+        ).unwrap().query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap()
+            .collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(states, vec![
+            ("accepted".into(), "handed_off".into(), None),
+            ("waiting".into(), "pending".into(), Some("paused".into())),
+        ]);
+        let preserved: String = copied.query_row("SELECT payload_json FROM __konae_notify_intents WHERE id='accepted'", [], |row| row.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&preserved).unwrap()["results"]["owner@example.test"], "uncertain");
+        drop(copied);
+        crate::notify::resume_imported_intents(&copied_path).unwrap();
+        let imported = Connection::open(&copied_path).unwrap();
+        let resumed: Option<String> = imported.query_row("SELECT transfer_state FROM __konae_notify_intents WHERE id='waiting'", [], |row| row.get(0)).unwrap();
+        let terminal: String = imported.query_row("SELECT state FROM __konae_notify_intents WHERE id='accepted'", [], |row| row.get(0)).unwrap();
+        assert_eq!(resumed, None);
+        assert_eq!(terminal, "handed_off");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn snapshots_keep_existing_accounts_and_files_when_their_modules_are_off() {
+        let root = std::env::temp_dir().join(format!("konae-package-disabled-state-{}", Uuid::new_v4()));
+        let folder = crate::layout::data(&root, "app");
+        let target = root.join("snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        let identity = Connection::open(folder.join("identity.sqlite")).unwrap();
+        identity.execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('user-1');").unwrap();
+        drop(identity);
+        let files = crate::layout::files(&root, "app");
+        std::fs::create_dir_all(&files).unwrap();
+        let id = "00000000-0000-4000-8000-000000000001";
+        std::fs::write(files.join("index.json"), json!([{"id":id,"name":"kept","size":4,"visibility":"private"}]).to_string()).unwrap();
+        std::fs::write(files.join(format!("{id}.blob")), b"kept").unwrap();
+        let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
+        let blobs = file_store::BlockingFiles::new(store, "app");
+        let mut modules = crate::modules::defaults();
+        modules.get_mut("auth").unwrap()["on"] = json!(false);
+        modules.get_mut("files").unwrap()["on"] = json!(false);
+        let parts = tokio::task::spawn_blocking(move || snapshot(&folder, &target, &blobs, &modules)).await.unwrap().unwrap();
+        assert!(parts.iter().any(|(name, _)| *name == "identity"));
+        assert!(parts.iter().any(|(name, _)| *name == "files"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn files_export_stops_when_blobs_exist_without_their_index() {
+        let root = std::env::temp_dir().join(format!("konae-package-missing-index-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("00000000-0000-4000-8000-000000000001.blob"), b"keep").unwrap();
+        let error = folder_files_tar(&root, &root.join("files.tar")).unwrap_err().to_string();
+        assert!(error.contains("blobs but no readable index. Export stopped."), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn private_inventory_blob_round_trips_outside_the_files_index() {
+        let root = std::env::temp_dir().join(format!("konae-package-private-inventory-{}", Uuid::new_v4()));
+        let data = root.join("app-data");
+        let files = data.join("files");
+        std::fs::create_dir_all(&files).unwrap();
+        let id = "00000000-0000-4000-8000-000000000002".to_owned();
+        let bytes = b"private module bytes".to_vec();
+        let source = root.join("private.blob");
+        std::fs::write(&source, &bytes).unwrap();
+        let inventories = std::collections::BTreeMap::from([
+            ("files".to_owned(), "file-index".to_owned()),
+            ("private-test".to_owned(), "private-test".to_owned()),
+        ]);
+        let references = crate::modules::blob_references_with(&data, "app", &inventories, |provider, _, _| match provider {
+            "file-index" => Ok(Vec::new()),
+            "private-test" => Ok(vec![(id.clone(), bytes.len() as u64)]),
+            _ => unreachable!(),
+        }).unwrap();
+        assert!(!crate::modules::is_on(&crate::modules::defaults(), "files"));
+        let archive = root.join("files.tar");
+        let target_root = root.join("imported");
+        let target_store: std::sync::Arc<dyn file_store::FileStore> = std::sync::Arc::new(file_store::LocalFolder::new(&target_root));
+        let target_store_for_task = target_store.clone();
+        let target_root_for_task = target_root.clone();
+        let references_for_task = references.clone();
+        let source_for_task = source.clone();
+        let archive_for_task = archive.clone();
+        let id_for_task = id.clone();
+        tokio::task::spawn_blocking(move || {
+            write_files_tar_with_references(&files, &archive_for_task, &references_for_task, |requested| {
+                anyhow::ensure!(requested == id_for_task, "Unexpected blob request.");
+                let file = std::fs::File::open(&source_for_task)?;
+                let size = file.metadata()?.len();
+                Ok(Some((size, file)))
+            }).unwrap();
+            let destination = target_root_for_task.join("apps").join("app").join("data").join("files");
+            let store = file_store::BlockingFiles::new(target_store_for_task, "app");
+            unpack_files_with_references(&archive_for_task, None, Some((&destination, &store)), &Default::default(), &references_for_task).unwrap();
+        }).await.unwrap();
+        assert_eq!(target_store.list("app").await.unwrap(), vec![id.clone()]);
+        assert_eq!(std::fs::read(target_root.join("apps/app/data/files/index.json")).unwrap(), b"[]");
+        assert_eq!(std::fs::read(target_root.join(format!("apps/app/data/files/{id}.blob"))).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn manifest() -> Manifest {
         Manifest {
             format: PACKAGE_FORMAT.into(),
@@ -1532,6 +1793,7 @@ mod tests {
             project_id: "app".into(),
             visibility: "private".into(),
             modules: std::collections::BTreeMap::new(),
+            data_versions: crate::modules::data_versions_for_components(["database"]),
             signup_policy: None,
             sign_in_methods: None,
             published_revision: 1,
@@ -1552,18 +1814,20 @@ mod tests {
     #[test]
     fn manifests_name_their_version_components_and_limits() {
         assert!(check_manifest(&manifest(), &Default::default()).is_ok());
+        let mut unknown_data = manifest();
+        unknown_data.data_versions.insert("private-test".into(), 1);
+        assert!(check_manifest(&unknown_data, &Default::default()).unwrap_err().to_string().contains("unknown module data private-test"));
+        let mut incompatible_data = manifest();
+        incompatible_data.data_versions.insert("files".into(), 99);
+        assert!(check_manifest(&incompatible_data, &Default::default()).unwrap_err().to_string().contains("Module files data version 99 is not supported"));
+        let mut legacy_json = serde_json::to_value(manifest()).unwrap();
+        legacy_json.as_object_mut().unwrap().remove("dataVersions");
+        let legacy: Manifest = serde_json::from_value(legacy_json).unwrap();
+        assert!(check_manifest(&legacy, &Default::default()).is_ok());
         let mut next = manifest();
-        next.version = 3;
+        next.version = 2;
         assert!(
             check_manifest(&next, &Default::default())
-                .unwrap_err()
-                .to_string()
-                .contains("Package version 3 is not supported")
-        );
-        let mut second = manifest();
-        second.version = 2;
-        assert!(
-            check_manifest(&second, &Default::default())
                 .unwrap_err()
                 .to_string()
                 .contains("Package version 2 is not supported")

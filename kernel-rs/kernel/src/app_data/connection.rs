@@ -2,6 +2,7 @@
 use rusqlite::Connection;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::{LazyLock, Mutex};
 
 pub(crate) fn read_optional(path: &Path) -> anyhow::Result<Option<Connection>> {
@@ -20,6 +21,7 @@ const STATEMENT_CACHE: usize = 64;
 struct Kept {
     connection: Connection,
     file: FileId,
+    kernel_effects: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Default)]
@@ -59,6 +61,23 @@ pub struct AppConnection {
     connection: Option<Connection>,
     path: PathBuf,
     file: Option<FileId>,
+    kernel_effects: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AppConnection {
+    pub(crate) fn kernel_effect_token(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.kernel_effects.clone()
+    }
+}
+
+pub(crate) fn with_kernel_effect_access<T>(token: &Arc<std::sync::atomic::AtomicBool>, work: impl FnOnce() -> T) -> T {
+    token.store(true, std::sync::atomic::Ordering::SeqCst);
+    struct Reset(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Reset {
+        fn drop(&mut self) { self.0.store(false, std::sync::atomic::Ordering::SeqCst); }
+    }
+    let _reset = Reset(token.clone());
+    work()
 }
 
 impl std::ops::Deref for AppConnection {
@@ -81,48 +100,47 @@ impl Drop for AppConnection {
         if !connection.is_autocommit() {
             return;
         }
-        give_back(&self.path, Kept { connection, file });
+        give_back(&self.path, Kept { connection, file, kernel_effects: self.kernel_effects.clone() });
     }
 }
 
 /// Borrows a kept connection to the Database at `path`, or opens one. Each
 /// borrow starts a fresh 2-second deadline.
 pub fn open(path: &Path) -> anyhow::Result<AppConnection> {
-    let connection = kept_or_open(path, || {
+    let borrowed = kept_or_open(path, || {
         let connection = Connection::open(path)?;
-        crate::app_data::restrict_database(&connection)?;
+        let kernel_effects = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        crate::app_data::restrict_app_database(&connection, kernel_effects.clone())?;
         connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
-        Ok::<_, anyhow::Error>(connection)
+        Ok::<_, anyhow::Error>(Kept { connection, file: file_id(path).unwrap_or_default(), kernel_effects })
     })?;
-    crate::app_data::arm_deadline(&connection)?;
+    crate::app_data::arm_deadline(&borrowed.connection)?;
     // Each mutation starts with a fresh last inserted rowid.
-    unsafe { rusqlite::ffi::sqlite3_set_last_insert_rowid(connection.handle(), 0) };
-    Ok(connection)
+    unsafe { rusqlite::ffi::sqlite3_set_last_insert_rowid(borrowed.connection.handle(), 0) };
+    Ok(AppConnection { connection: Some(borrowed.connection), path: path.to_owned(), file: file_id(path), kernel_effects: borrowed.kernel_effects })
 }
 
 /// Borrows a read-only connection while the caller holds the app's identity lock.
 pub(crate) fn identity_reader(path: &Path) -> rusqlite::Result<AppConnection> {
-    kept_or_open(path, || {
-        let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        Ok(connection)
-    })
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(AppConnection { connection: Some(connection), path: path.to_owned(), file: None, kernel_effects: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
 }
 
 fn kept_or_open<E>(
     path: &Path,
-    open: impl FnOnce() -> Result<Connection, E>,
-) -> Result<AppConnection, E> {
+    open: impl FnOnce() -> Result<Kept, E>,
+) -> Result<Kept, E> {
     let file = file_id(path);
-    let connection = match file.and_then(|file| take(path, file)) {
-        Some(connection) => connection,
+    let mut kept = match file.and_then(|file| take(path, file)) {
+        Some(kept) => kept,
         None => open()?,
     };
-    let file = file.filter(|file| file_id(path) == Some(*file));
-    Ok(AppConnection { connection: Some(connection), path: path.to_owned(), file })
+    if let Some(file) = file.filter(|file| file_id(path) == Some(*file)) { kept.file = file; }
+    Ok(kept)
 }
 
-fn take(path: &Path, file: FileId) -> Option<Connection> {
+fn take(path: &Path, file: FileId) -> Option<Kept> {
     let mut pool = pool();
     let pool = &mut *pool;
     let kept = pool.by_path.get_mut(path)?;
@@ -132,7 +150,7 @@ fn take(path: &Path, file: FileId) -> Option<Connection> {
         pool.order.retain(|other| other != path);
         return None;
     }
-    let connection = kept.pop()?.connection;
+    let connection = kept.pop()?;
     pool.total -= 1;
     Some(connection)
 }

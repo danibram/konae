@@ -89,10 +89,8 @@ pub enum Mode<'a> {
 }
 
 const NEEDS_CONFIRMATION: &str = "schema.confirmation-required";
-const INTERNAL_TABLES: [&str; 3] = ["__konae_schema_state", "__konae_schema_history", "__konae_function_receipts"];
-
 pub(crate) fn is_internal_table(name: &str) -> bool {
-    INTERNAL_TABLES.iter().any(|internal| name.eq_ignore_ascii_case(internal))
+    crate::modules::is_reserved_name(name)
 }
 
 /// Changes the database at `path` to the one `schema` states, in one
@@ -139,6 +137,7 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
         drop(statement);
         notify::check_columns(&transaction, name, action)?;
     }
+    crate::modules::check_pending_work(&transaction)?;
     if let Mode::Apply(confirmation) = mode {
         if let Some(expected) = change.confirmation() {
             if confirmation != Some(expected.as_str()) {
@@ -169,6 +168,7 @@ pub fn apply_with_transforms(
         drop(connection);
         return apply(path, schema, program, mode);
     };
+    anyhow::ensure!(crate::modules::has_migration("actions", "schema-transforms"), "The schema transformation migration is not registered.");
     let definition = super::schema_transform::parse(document).map_err(anyhow::Error::new)?;
     if definition.transitions.is_empty() {
         let connection = Connection::open(path)?;
@@ -189,7 +189,7 @@ pub fn apply_with_transforms(
     let transaction = connection.transaction()?;
     transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline))?;
     let is_fresh = transaction.query_row(
-        "SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts')",
+        &format!("SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ({0}) AND lower(tbl_name) NOT IN ({0})", crate::modules::reserved_sql_names()),
         [], |row| row.get::<_, i64>(0),
     )? == 0 && super::schema_transform::load_history(&transaction).map_err(anyhow::Error::new)?.entries.is_empty();
     let plan = if is_fresh {
@@ -231,6 +231,7 @@ pub fn apply_with_transforms(
         drop(statement);
         notify::check_columns(&transaction, name, action)?;
     }
+    crate::modules::check_pending_work(&transaction)?;
     let violations: i64 = transaction.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get(0))?;
     anyhow::ensure!(violations == 0, "schema transformations leave rows that do not match a foreign key.");
     let integrity: String = transaction.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
@@ -460,7 +461,7 @@ fn schema_connection(schema: &str) -> Result<Connection> {
             .map_err(|error| anyhow::anyhow!("schema.sql is not idempotent: it fails when it is run a second time. {error}"))?;
         connection.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)?;
         let reserved: Option<String> = connection.query_row(
-            "SELECT name FROM sqlite_schema WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY lower(name), name LIMIT 1",
+            &format!("SELECT name FROM sqlite_schema WHERE lower(name) IN ({}) ORDER BY lower(name), name LIMIT 1", crate::modules::reserved_sql_names()),
             [], |row| row.get(0),
         ).optional()?;
         if let Some(name) = reserved {
@@ -499,7 +500,7 @@ impl Schema {
     fn read(connection: &Connection) -> Result<Self> {
         let mut schema = Schema::default();
         let mut statement = connection.prepare(
-            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY rowid",
+            &format!("SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ({0}) AND lower(tbl_name) NOT IN ({0}) ORDER BY rowid", crate::modules::reserved_sql_names()),
         )?;
         let entries = statement
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
@@ -665,6 +666,41 @@ mod tests {
             let error = schema_connection(case["schema"].as_str().unwrap()).unwrap_err();
             crate::refusal::assert_case::<()>(&case, Err(crate::refusal::of(&error).expect("coded schema refusal").clone()));
         }
+    }
+
+    #[test]
+    fn module_registry_owns_reserved_names_and_export_components() {
+        let reserved = crate::modules::reserved_names();
+        assert!(reserved.iter().any(|name| name == "__konae_schema_state"));
+        assert!(reserved.iter().any(|name| name == "__konae_function_receipts"));
+        assert!(reserved.iter().any(|name| name == "__konae_notify_intents"));
+        assert!(reserved.iter().any(|name| name == "__konae_calls"));
+        assert_eq!(crate::modules::data_version("functions"), Some(1));
+        assert!(crate::modules::has_migration("actions", "schema-transforms"));
+        assert!(crate::modules::has_migration("functions", "function-receipts"));
+        assert!(crate::modules::has_migration("actions", "notify-intents"));
+        assert_eq!(crate::modules::data_version("calls"), Some(1));
+        assert!(crate::modules::has_migration("calls", "calls-app-outbox"));
+        let components = crate::package::component_names();
+        for component in ["database", "identity", "files", "usage"] {
+            assert!(components.iter().any(|name| name == component));
+        }
+    }
+
+    #[test]
+    fn schema_publication_keeps_registered_module_tables() {
+        let (root, path) = database();
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(
+            "CREATE TABLE __konae_schema_state(value TEXT); INSERT INTO __konae_schema_state VALUES('schema');\
+             CREATE TABLE __konae_function_receipts(value TEXT); INSERT INTO __konae_function_receipts VALUES('receipt');",
+        ).unwrap();
+        drop(connection);
+        apply(&path, "CREATE TABLE IF NOT EXISTS notes(value TEXT);", &program(&[]), Mode::Apply(None)).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(connection.query_row("SELECT value FROM __konae_schema_state", [], |row| row.get::<_, String>(0)).unwrap(), "schema");
+        assert_eq!(connection.query_row("SELECT value FROM __konae_function_receipts", [], |row| row.get::<_, String>(0)).unwrap(), "receipt");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn program(statements: &[(&str, &str)]) -> ActionProgram {
@@ -858,6 +894,35 @@ mod tests {
         assert!(crate::table_columns(&connection, "tasks").unwrap().iter().all(|column| column["name"] != "note"));
         assert!(super::super::schema_transform::load_history(&connection).unwrap().entries.is_empty());
         assert_eq!(rows(&path, "SELECT title FROM tasks ORDER BY id"), vec![vec![String::from("Text(\"first\")")], vec![String::from("Text(\"second\")")], vec![String::from("Text(\"third\")")]]);
+    }
+
+    #[test]
+    fn pending_work_checks_the_candidate_before_plan_or_apply_can_finish() {
+        let after = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
+        let document = transform_document(TASKS, after, &["ALTER TABLE tasks RENAME COLUMN done TO completed"]);
+        for transforms in [None, Some(document.as_str())] {
+            let (_root, path) = seeded();
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(include_str!("../integrations/calls-app.sql")).unwrap();
+            assert_eq!(super::super::schema_transform::fingerprint(&connection).unwrap(), super::super::schema_transform::fingerprint_schema(TASKS).unwrap());
+            let continuation = serde_json::json!({"action":"tasks.finish", "definition": {
+                "kind":"mutation", "access":"anonymous", "bindings":[],
+                "statement":"UPDATE tasks SET done=1 WHERE id=1"
+            }}).to_string();
+            connection.execute(
+                "INSERT INTO __konae_calls (id,deployment,action,continuation,input,state,next_attempt_at,created_at,updated_at) VALUES ('queued','app','remote',?1,'{}','pending',0,0,0)",
+                [continuation],
+            ).unwrap();
+            for mode in [Mode::Plan, Mode::Apply(None)] {
+                let error = apply_with_transforms(&path, after, &program(&[]), transforms, mode).unwrap_err();
+                assert_eq!(crate::refusal::of(&error).unwrap().code, "schema.pending-work");
+                assert!(crate::table_columns(&connection, "tasks").unwrap().iter().any(|column| column["name"] == "done"));
+                assert_eq!(connection.query_row("SELECT count(*) FROM tasks", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+            }
+            connection.execute("UPDATE __konae_calls SET state='delivered',then_state='done'", []).unwrap();
+            apply_with_transforms(&path, after, &program(&[]), transforms, Mode::Plan).unwrap();
+            assert_eq!(connection.query_row("SELECT count(*) FROM sqlite_schema WHERE type='index' AND tbl_name='__konae_calls' AND sql IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        }
     }
 
     #[test]

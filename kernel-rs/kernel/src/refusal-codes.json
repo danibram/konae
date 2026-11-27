@@ -1,4 +1,14 @@
 {
+  "cron.invalid": { "fix": "capsule", "remedy": "Check crons.json." },
+  "cron.count-over": { "fix": "capsule", "remedy": "Check crons.json." },
+  "cron.id-invalid": { "fix": "capsule", "remedy": "Check crons.json." },
+  "cron.definition-invalid": { "fix": "capsule", "remedy": "Check crons.json." },
+  "cron.expression-invalid": { "fix": "capsule", "remedy": "Check crons.json." },
+  "cron.target-invalid": { "fix": "capsule", "remedy": "Check crons.json and functions.json." },
+  "function.scheduled-route": { "fix": "capsule", "remedy": "Check functions.json." },
+  "function.scheduled-action": { "fix": "capsule", "remedy": "Check the Function action allowlist in functions.json." },
+  "action.scheduled-shape": { "fix": "capsule", "remedy": "Check the scheduled action in actions.json." },
+  "call.then-scheduled": { "fix": "capsule", "remedy": "Choose a then action without scheduled access." },
   "function.manifest-size": { "fix": "capsule", "remedy": "Shorten function entries or action allowlists so server/manifest.json fits in 256 KiB, then rebuild." },
   "function.name-invalid": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.mount-reserved": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
@@ -15,7 +25,7 @@
   "function.bundle-contract": { "fix": "capsule", "remedy": "Rebuild the Server Artifact so each bundle exports handle and has no module imports." },
   "function.artifact-size": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.artifact-missing": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
-  "function.artifact-manifest": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
+  "function.artifact-manifest": { "fix": "capsule", "remedy": "Check functions.json and crons.json, then rebuild the Server Artifact." },
   "function.artifact-bundles": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.artifact-abi": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
   "function.actions-invalid": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },
@@ -156,6 +166,7 @@
   "schedule.too-rare": { "fix": "capsule", "remedy": "Use \"daily\" or a period of 24 hours or less." },
 
   "schema.confirmation-required": { "fix": "owner", "remedy": "Read the losses release_plan lists under schema, then call release_apply with confirmSchema set to that plan's schema.confirmation, or keep the table or column in schema.sql.", "tool": "release_apply" },
+  "schema.pending-work": { "fix": "owner", "remedy": "Keep the schema required by pending Calls continuations, or let those jobs finish before publishing." },
   "schema.statement-refused": { "fix": "capsule", "remedy": "Keep only CREATE TABLE and CREATE INDEX in schema.sql. Rows change through mutations." },
 
   "schema-transform.after-mismatch": { "fix": "capsule", "remedy": "Set the transition after fingerprint to the fingerprint of the SQLite schema its statements produce." },

@@ -213,7 +213,7 @@ Limits:
 - changes names 1 to 8 columns; {changes} lists at most 50 rows per notice
 - one run reads back at most 1,000 changed rows and writes to at most 50 accounts through to: { column }, in account ID order; each account past the 50th counts under notify as recipient-cap
 
-Declared with `schedule` in `actions.json`. "schedule": { "every": "15m" } or { "every": "6h" } or { "daily": "02:00" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner, or to { column } to reach the accounts the changed rows name; to actor records no-account because the timer has no caller. A run queues one notice per recipient, and {changes} lists the rows it changed, so a digest can say what is due. The owner reads each run, with its outcome and changes, under scheduled with usage_summary. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with "Action <name> runs only on its schedule.", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; konae dev and a Deployment do.
+Declared with `schedule` in `actions.json`. "schedule": { "every": "15m" } or { "every": "6h" } or { "daily": "02:00" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner, or to { column } to reach the accounts the changed rows name; to actor records no-account because the timer has no caller. A run queues one notice per recipient, and {changes} lists the rows it changed, so a digest can say what is due. The owner reads each run, with its outcome and changes, under scheduled with usage_summary. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with "Action <name> runs only on its schedule.", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. Deployments run schedules automatically. In konae dev, run a scheduled mutation with konae test schedule <action>.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
@@ -270,6 +270,7 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 | `This app reached its limit of calls in the last minute. Try again in a minute.` | the action is a call and the app queued 20 calls in the last 60 seconds, or the number the installation set | Kernel | Never refuses |
 | `Action <name> runs only after the call <key> answers.` | the action is the then mutation of a call, which only the Kernel runs | Kernel | Same |
 | `Action <name> runs only on its schedule.` | the action is a mutation with a schedule and no http route, which only the Kernel's timer runs | Kernel | Same |
+| `Action <name> runs only inside a scheduled Function.` | the action declares scheduled access | Kernel | Same |
 
 Limits:
 
@@ -628,13 +629,13 @@ Run bundled JavaScript handlers on the Kernel with verified identity and named S
 
 Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
-- Functions start off. Authenticated functions require auth; a nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.
+- A release with cron jobs enables Functions and, when a cron target names Server Actions, Actions. This applies to the first release and to updates. For HTTP Functions in an app without cron jobs, enable Functions in App settings or in the local konae.json. Authenticated functions require auth. A nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.
 - For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Operators configure a paired runner; functions remain experimental. Worker processes start on demand and may stay warm until their idle timeout. Each request evaluates the bundle in a fresh V8 isolate.
 - A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.
 - The action allowlist accepts only queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.
 - The private Kernel-runner protocol is konae-functions-ipc/2; the published bundle ABI remains konae-functions/1. Upgrade the Kernel and runner together and restart the service. Server bundles travel in server/, separate from the public dist/. An optional shutdown(signal) can release resources when the worker retires. The runner calls it in the last completed isolate if one is available.
 
-Declared with `functions` in `functions.json`. Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. Request.signal reports cancellation.
+Declared with `functions` in `functions.json`. Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Use access scheduled for a cron target and omit mount and methods. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. Request.signal reports cancellation.
 
 | Message | When | Source | Editor preview |
 | --- | --- | --- | --- |
@@ -658,3 +659,15 @@ Limits:
 - 100000000 bytes per HTTP request body (100 MB decimal); this limit does not raise worker heap, action, SQL, query, file or response limits
 - 8 MiB of aggregate pending request chunks; the HTTP-to-Hono body stream is bounded and does not spool the complete request
 - 1 MiB per serialized action operation, measured after JSON escaping; 64 action operations per invocation
+
+Declared with `crons` in `crons.json`. Declare { "version": 1, "crons": { "cleanup": { "cron": "0 8 * * 1-5", "function": "cleanup" } } }. The target names a Function with access scheduled in functions.json. The Kernel calls it with an empty POST and no app user. It passes the job ID and scheduled time in milliseconds as cron and scheduledAt query parameters. Use access scheduled on Server Actions reserved for scheduled Functions. Run a job in local test mode with konae test schedule cron:<id>.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Server Artifact manifest does not match crons.json.` | the source and built cron declarations differ | Kernel | Same |
+
+Limits:
+
+- 32 jobs per app
+- Five numeric fields in UTC with minute precision
+- One attempt per job and matching minute

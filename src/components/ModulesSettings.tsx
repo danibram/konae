@@ -146,7 +146,7 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
       </article>)}
     </section>}
     {notice && <p role="status">{notice}</p>}
-    {!projectId && <p>This project is not published yet. Module settings travel with the first release. Publish it to read and change settings here.</p>}
+    {!projectId && <p>Deploy applies the module settings and enables the capabilities declared by cron jobs.</p>}
   </section>;
 }
 
@@ -168,7 +168,19 @@ function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-const statusByModule: Record<string, (current: unknown) => ReactNode> = { seo: (current) => <SeoStatus current={current} /> };
+function FunctionsStatus({ current }: { current: unknown }): ReactNode {
+  if (!isRecord(current) || !Array.isArray(current.crons)) return null;
+  const jobs = current.crons.filter((id): id is string => typeof id === "string");
+  return <section className="module-current" aria-label="Published cron jobs">
+    <h4>Published cron jobs</h4>
+    {jobs.length ? <ul>{jobs.map((id) => <li key={id}><code>{id}</code></li>)}</ul> : <p>No cron jobs in this release.</p>}
+  </section>;
+}
+
+const statusByModule: Record<string, (current: unknown) => ReactNode> = {
+  seo: (current) => <SeoStatus current={current} />,
+  functions: (current) => <FunctionsStatus current={current} />,
+};
 
 function draftOptions(draft: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(draft));

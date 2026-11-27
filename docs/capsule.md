@@ -22,7 +22,7 @@ app/
 
 `konae.json` sits beside `app/` in the app folder. It holds the app's ID, name, visibility, Signup Policy, sign-in methods, contact email, module state and manifest. The manifest sets routing and the origins a page may fetch (`connects`).
 
-Apps that declare server functions also keep `app/functions.json` and source files under `app/functions/`. Their built bundles go to the private `server/` directory, apart from the public `dist/` files. See [Server functions](./functions.md).
+Apps that declare server functions also keep `app/functions.json` and source files under `app/functions/`. Apps with cron jobs declare their timing and targets in `app/crons.json`. The build puts the Function bundles and active cron declarations in the private `server/` directory. See [Server functions](./functions.md).
 
 ## What each file does
 

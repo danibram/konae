@@ -96,7 +96,7 @@ impl Incoming {
 pub fn live_schema(path: &Path) -> Result<String> {
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut statement = connection.prepare(
-        "SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY rowid",
+        &format!("SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ({}) AND lower(tbl_name) NOT IN ({}) ORDER BY rowid", crate::modules::reserved_sql_names(), crate::modules::reserved_sql_names()),
     )?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     let mut schema = String::new();
@@ -170,9 +170,10 @@ pub async fn import_folder(state: &AppState, deployment: &Deployment, folder: &P
     tokio::fs::create_dir_all(&stage).await?;
     let result = async {
         let present = |name: &str| Some(data.join(name)).filter(|path| path.is_file());
-        let files = if data.join("files").is_dir() {
+        let references = crate::modules::blob_references_in_data_dir(&data)?;
+        let files = if data.join("files").is_dir() || !references.is_empty() {
             let archive = stage.join("files.tar");
-            package::folder_files_tar(&data.join("files"), &archive)?;
+            package::folder_files_tar_with_references(&data.join("files"), &archive, &references)?;
             Some(archive)
         } else {
             None
@@ -208,11 +209,13 @@ async fn import_incoming(
     confirmation: Option<&str>,
     sources: bool,
 ) -> Result<Outcome> {
+    let _transfer_hold = crate::notify::TransferHold::begin(&state.data_root, &deployment.id)?;
     let change = plan(state, incoming.database.as_deref(), target)?;
     if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
         return Ok(Outcome::NeedsConfirmation(change));
     }
     let _data = database_lock(state, &deployment.id).await;
+    crate::notify::prepare_transfer(state, &deployment.id)?;
     let mut holds = vec![HOLDS_DATA];
     if sources {
         holds.push(HOLDS_SOURCES);
@@ -388,6 +391,9 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
             (Some(database), Some((target, confirmation))) => schema_change::apply_with_transforms(database, &target.sql, &target.program, target.schema_transforms.as_deref(), Mode::Apply(confirmation))?,
             _ => Change::default(),
         };
+        if let Some(database) = &database {
+            crate::notify::validate_imported_intents(database)?;
+        }
         let identity = match &incoming.identity {
             Some(source) => {
                 let staged = stage.join("identity.sqlite");
@@ -421,13 +427,19 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
                 let accounts = crate::app_db::read_optional(&identity.clone().unwrap_or_else(|| live.join("identity.sqlite")))?;
                 let staged = stage.join("files");
                 let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
-                let (archive, limits, staged_files) = (archive.clone(), state.files.limits, staged.clone());
-                tokio::task::spawn_blocking(move || package::unpack_files(&archive, accounts.as_ref(), Some((&staged_files, &blobs)), &limits)).await??;
+                let live_database = live.join("database.sqlite");
+                let source_database = database.as_ref().unwrap_or(&live_database);
+                let references = package::references_for_archive(archive, Some(source_database), &stage)?;
+                let (archive, limits, staged_files, references) = (archive.clone(), state.files.limits, staged.clone(), references);
+                tokio::task::spawn_blocking(move || package::unpack_files_with_references(&archive, accounts.as_ref(), Some((&staged_files, &blobs)), &limits, &references)).await??;
                 Some(staged.join("index.json"))
             }
             None => None,
         };
-        if let Some(database) = database { replace_database_file(&database, &live.join("database.sqlite"))?; }
+        if let Some(database) = database {
+            replace_database_file(&database, &live.join("database.sqlite"))?;
+            crate::notify::resume_imported_intents(&live.join("database.sqlite"))?;
+        }
         if let Some(staged) = identity {
             replace_database_file(&staged, &live.join("identity.sqlite"))?;
         }
@@ -644,13 +656,16 @@ mod tests {
              CREATE INDEX notes_body ON notes(body);
              create unique index tags_name on tags(name);
              CREATE TABLE __konae_schema_state(format_version INTEGER NOT NULL);
-             CREATE TABLE __konae_schema_history(id TEXT);",
+             CREATE TABLE __konae_schema_history(id TEXT);
+             CREATE TABLE __konae_calls(id TEXT PRIMARY KEY);
+             CREATE INDEX __konae_calls_due ON __konae_calls(id);",
         )
         .unwrap();
         let schema = live_schema(&path).unwrap();
         assert!(schema.starts_with("CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY"), "{schema}");
         assert!(schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS tags_name on tags(name);"), "{schema}");
         assert!(!schema.contains("__konae_schema_"), "internal journal tables belong in the database file, not schema.sql: {schema}");
+        assert!(!schema.contains("__konae_calls"), "indexes owned by reserved module tables stay out of the app schema: {schema}");
         let copy = Connection::open_in_memory().unwrap();
         copy.execute_batch(&schema).unwrap();
         copy.execute_batch(&schema).unwrap();

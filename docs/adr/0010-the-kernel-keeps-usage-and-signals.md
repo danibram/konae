@@ -12,11 +12,11 @@ Each Deployment keeps `usage.sqlite` in its data, next to the database and the i
 
 ### Usage counts what the Kernel allowed and what succeeded
 
-Usage is always on and keeps daily totals by kind and name: `session`, `action`, `route`, `upload`, `file_read`, `signup`, `login`, `refused`, `notify`, `call`, `scheduled` and `page_view`. A refused call, an input the bindings reject, a statement SQLite refuses and a wrong password count nothing.
+Usage is always on and keeps daily totals by kind and name: `session`, `action`, `function`, `route`, `upload`, `file_read`, `signup`, `login`, `refused`, `notify`, `call`, `scheduled` and `page_view`. The tables in the [Usage reference](../reference/usage-and-signals.md#usage-and-signals) define when each kind counts.
 
 - A `page_view` is a browser navigation (`Sec-Fetch-Dest: document`) that the Kernel answers with one of the artifact's `.html` files and 200. Prefetches, assets, HEAD requests, requests without the header and 404s count nothing. The name is the file served, never the address asked for, so a visitor cannot grow the store by inventing paths.
 - A session that an owner entered as one of the app's users (ADR-0001) is not counted as that user.
-- A handler puts each count on a queue of 16,384 entries and returns. One writer thread drains it in one transaction per batch. When the queue is full the entry is dropped and counted, so traffic never waits on this store. The reads wait up to five seconds for the queue to drain first.
+- A handler puts each count on a queue of 16,384 entries and returns. A Function call shares its queue entry with its latency sample. One writer thread groups counts and execution outcomes by UTC day and writes them in one transaction per Deployment and batch. When the queue fills, the Kernel counts dropped entries in `coverage`. The reads wait up to five seconds for the queue to drain first.
 - `usage_summary` adds daily outcomes per action and feature, by origin (runtime, HTTP route, schedule, call), and Signal totals per day. A page view is a load, not a person. The Kernel keeps no per-visitor key and counts no unique visitors.
 - A signed-in app account is the one person Usage counts. The Kernel already holds its ID, so `account_daily` keeps app opens and successful actions per account and day, by that ID only. The summary joins the email from `identity.sqlite` when it is read, so the store never copies an address. An owner who entered as the account counts nothing, the same rule as every other count.
 - `usage_summary` also reports the bytes the app takes now, by part, with backups apart because an export does not carry them.

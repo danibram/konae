@@ -21,7 +21,7 @@ export type FunctionLatencySummary = {
 };
 export type UsageSummary = {
   deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
-  usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[]; scheduled: { action: string; at: number; outcome: string; changes: number; error?: string }[] };
+  usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[]; scheduled: { action: string; at: number; outcome: string; changes?: number; error?: string }[] };
   metrics: Metric[]; actions: PublishedAction[];
   accounts: UsageAccounts;
   storage: UsageStorage;
@@ -125,15 +125,15 @@ export function rangeDays(from: string, to: string) {
 }
 export type DailyPoint = { day: string; value: number; parts: Record<string, number> };
 export function dailyUsage(summary: UsageSummary, kind: string): DailyPoint[] {
-  const byDay = new Map<string, Record<string, number>>();
+  const byDay = new Map<string, Map<string, number>>();
   for (const row of summary.usage.days) {
     if (row.kind !== kind) continue;
-    const parts = byDay.get(row.day) ?? {};
-    parts[row.name] = (parts[row.name] ?? 0) + row.count;
+    const parts = byDay.get(row.day) ?? new Map<string, number>();
+    parts.set(row.name, (parts.get(row.name) ?? 0) + row.count);
     byDay.set(row.day, parts);
   }
   return rangeDays(summary.usage.from, summary.usage.to).map((day) => {
-    const parts = byDay.get(day) ?? {};
+    const parts = Object.fromEntries(byDay.get(day) ?? []);
     return { day, value: Object.values(parts).reduce((sum, n) => sum + n, 0), parts };
   });
 }

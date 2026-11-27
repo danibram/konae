@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 use anyhow::Result;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -9,6 +10,7 @@ use sha2::{Digest, Sha256};
 use oxc_span::SourceType;
 use oxc_syntax::module_record::ExportExportName;
 use crate::refusal::{refuse, Refusal};
+use super::cron::{self, Cron};
 
 pub const ABI: &str = "konae-functions/1";
 pub const MAX_FUNCTIONS: usize = 32;
@@ -19,7 +21,46 @@ type Checked<T> = std::result::Result<T, Refusal>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct Manifest { pub version: u8, pub functions: BTreeMap<String, Function> }
+pub struct Manifest {
+    pub version: u8,
+    pub functions: BTreeMap<String, Function>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub crons: Arc<BTreeMap<String, Cron>>,
+}
+
+impl Manifest {
+    pub fn source_files(&self) -> Result<Vec<(String, String)>> {
+        let mut files = vec![("functions.json".into(), serde_json::to_string(&serde_json::json!({
+            "version": self.version, "functions": self.functions,
+        }))?)];
+        if !self.crons.is_empty() {
+            files.push(("crons.json".into(), serde_json::to_string(&serde_json::json!({
+                "version": 1, "crons": self.crons,
+            }))?));
+        }
+        Ok(files)
+    }
+
+    pub fn check_modules(&self, modules: &BTreeMap<String, Value>) -> Checked<()> {
+        if !self.functions.is_empty() { crate::modules::require_on(modules, "functions")?; }
+        if self.functions.values().any(|function| function.access == "authenticated") {
+            crate::modules::check_requires("functions", "auth", crate::modules::is_on(modules, "auth"))?;
+        }
+        if self.functions.values().any(|function| !function.actions.is_empty()) {
+            crate::modules::check_requires("functions", "actions", crate::modules::is_on(modules, "actions"))?;
+        }
+        Ok(())
+    }
+}
+
+pub fn enable_cron_modules(modules: &mut BTreeMap<String, Value>, manifest: Option<&Manifest>) {
+    let Some(manifest) = manifest.filter(|manifest| !manifest.crons.is_empty()) else { return };
+    let uses_actions = manifest.crons.values()
+        .any(|cron| manifest.functions.get(&cron.function).is_some_and(|function| !function.actions.is_empty()));
+    for module in std::iter::once("functions").chain(uses_actions.then_some("actions")) {
+        modules.entry(module.into()).or_insert_with(|| serde_json::json!({}))["on"] = Value::Bool(true);
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Function {
@@ -52,7 +93,7 @@ fn keys(value: &Value, allowed: &[&str], label: &str) -> Checked<()> {
     }
     Ok(())
 }
-fn identifier(name: &str) -> bool {
+pub(super) fn identifier(name: &str) -> bool {
     !name.is_empty() && name.len() <= 64 && name.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
@@ -82,16 +123,30 @@ pub fn read(source: &str) -> Checked<Manifest> {
         keys(value, &["entry", "mount", "methods", "access", "actions"], &format!("Function {name}"))?;
         let entry = value["entry"].as_str().unwrap_or("");
         if !entry_path(entry) { return Err(refuse("function.entry-invalid", format!("Function {name} entry must name a .ts, .js, .mts or .mjs file under functions/."))); }
-        let mount = value["mount"].as_str().unwrap_or("");
-        if !mount_path(mount) { return Err(refuse("function.mount-invalid", format!("Function {name} mount must be an absolute path of nonempty ASCII letter, digit, underscore or hyphen segments."))); }
-        if ["/_konae", "/oauth", "/.well-known", "/server", "/functions", "/mcp", "/assets"].iter().any(|reserved| overlaps(mount, reserved)) {
-            return Err(refuse("function.mount-reserved", format!("Function {name} mount {mount} is reserved.")));
-        }
-        let methods = value["methods"].as_array().filter(|a| !a.is_empty()).ok_or_else(|| refuse("function.methods-invalid", format!("Function {name} methods must be a nonempty array of GET or POST without duplicates.")))?;
-        let mut seen = BTreeSet::new();
-        for method in methods { if !matches!(method.as_str(), Some("GET" | "POST")) || !seen.insert(method.as_str().unwrap_or("")) { return Err(refuse("function.methods-invalid", format!("Function {name} methods must be a nonempty array of GET or POST without duplicates."))); } }
         let access = value.get("access").map_or(Some("authenticated"), Value::as_str).unwrap_or("");
-        if !["authenticated", "anonymous"].contains(&access) { return Err(refuse("function.access-invalid", format!("Function {name} access must be authenticated or anonymous."))); }
+        let (mount, methods) = if access == "scheduled" {
+            if value.get("mount").is_some_and(|mount| mount != "/")
+                || value.get("methods").is_some_and(|methods| methods != &serde_json::json!(["POST"]))
+            {
+                return Err(refuse("function.scheduled-route", format!("Function {name} with access scheduled uses mount / and method POST internally. Omit mount and methods.")));
+            }
+            ("/", BTreeSet::from(["POST"]))
+        } else {
+            let mount = value["mount"].as_str().unwrap_or("");
+            if !mount_path(mount) { return Err(refuse("function.mount-invalid", format!("Function {name} mount must be an absolute path of nonempty ASCII letter, digit, underscore or hyphen segments."))); }
+            if ["/_konae", "/oauth", "/.well-known", "/server", "/functions", "/mcp", "/assets"].iter().any(|reserved| overlaps(mount, reserved)) {
+                return Err(refuse("function.mount-reserved", format!("Function {name} mount {mount} is reserved.")));
+            }
+            let invalid = || refuse("function.methods-invalid", format!("Function {name} methods must be a nonempty array of GET or POST without duplicates."));
+            let methods = value["methods"].as_array().filter(|a| !a.is_empty()).ok_or_else(invalid)?;
+            let mut methods_set = BTreeSet::new();
+            for method in methods {
+                let method = method.as_str().filter(|method| matches!(*method, "GET" | "POST")).ok_or_else(invalid)?;
+                if !methods_set.insert(method) { return Err(invalid()); }
+            }
+            (mount, methods_set)
+        };
+        if !["authenticated", "anonymous", "scheduled"].contains(&access) { return Err(refuse("function.access-invalid", format!("Function {name} access must be authenticated, anonymous or scheduled."))); }
         let actions: Vec<String> = match value.get("actions") {
             None => Vec::new(),
             Some(v) => {
@@ -101,11 +156,30 @@ pub fn read(source: &str) -> Checked<Manifest> {
                 seen.into_iter().map(str::to_owned).collect()
             }
         };
-        functions.insert(name.clone(), Function { entry: entry.into(), mount: mount.into(), methods: seen.into_iter().map(str::to_owned).collect(), access: access.into(), actions });
+        functions.insert(name.clone(), Function { entry: entry.into(), mount: mount.into(), methods: methods.into_iter().map(str::to_owned).collect(), access: access.into(), actions });
     }
-    let manifest = Manifest { version: 1, functions };
+    let manifest = Manifest { version: 1, functions, crons: Arc::default() };
     check_manifest_size(&manifest)?;
     Ok(manifest)
+}
+
+pub fn read_sources(functions: Option<&str>, crons: Option<&str>) -> Checked<Option<Manifest>> {
+    let mut manifest = functions.map(read).transpose()?;
+    if let Some(source) = crons {
+        let declarations = cron::read(source, manifest.as_ref().map(|manifest| &manifest.functions))?;
+        if let Some(manifest) = &mut manifest {
+            manifest.crons = Arc::new(declarations);
+            check_manifest_size(manifest)?;
+        }
+    }
+    Ok(manifest)
+}
+
+fn read_manifest(value: &Value) -> Checked<Manifest> {
+    let mut functions = value.clone();
+    let crons = functions.as_object_mut().and_then(|value| value.remove("crons"))
+        .map(|crons| serde_json::json!({"version": 1, "crons": crons}).to_string());
+    read_sources(Some(&functions.to_string()), crons.as_deref()).map(Option::unwrap)
 }
 
 fn check_manifest_size(manifest: &Manifest) -> Checked<()> {
@@ -129,9 +203,7 @@ fn validate_context(manifest: &Manifest, files: Option<&BTreeSet<String>>, modul
     for (name, function) in &manifest.functions {
         if files.is_some_and(|files| !files.contains(&function.entry)) { return Err(refuse("function.entry-missing", format!("Function {name} entry {} is missing from the app sources.", function.entry))); }
     }
-    if !manifest.functions.is_empty() { crate::modules::require_on(modules, "functions")?; }
-    if manifest.functions.values().any(|f| f.access == "authenticated") { crate::modules::check_requires("functions", "auth", crate::modules::is_on(modules, "auth"))?; }
-    if manifest.functions.values().any(|f| !f.actions.is_empty()) { crate::modules::check_requires("functions", "actions", crate::modules::is_on(modules, "actions"))?; }
+    manifest.check_modules(modules)?;
     for (name, function) in &manifest.functions {
         for action in &function.actions {
             let definition = &actions[action];
@@ -139,9 +211,11 @@ fn validate_context(manifest: &Manifest, files: Option<&BTreeSet<String>>, modul
             let then_target = actions.as_object().is_some_and(|all| all.values().any(|other| other["kind"] == "call" && other["then"]["action"] == action.as_str()));
             check_action_shape(name, action, definition["kind"].as_str().unwrap_or(""), definition["access"].as_str().unwrap_or(""),
                 ["notify", "call", "signal", "schedule", "subscribe", "http", "grants"].iter().any(|key| definition.get(key).is_some()), then_target)?;
+            check_scheduled_action(name, function, action, definition["access"].as_str().unwrap_or(""))?;
         }
+        if function.access == "scheduled" { continue; }
         for (other, declaration) in manifest.functions.range(..name.clone()) {
-            if overlaps(&function.mount, &declaration.mount) { return Err(refuse("function.mount-conflict", format!("Function {name} mount {} overlaps function {other}.", function.mount))); }
+            if declaration.access != "scheduled" && overlaps(&function.mount, &declaration.mount) { return Err(refuse("function.mount-conflict", format!("Function {name} mount {} overlaps function {other}.", function.mount))); }
         }
         let mut paths = static_paths.to_vec();
         if let Some(actions) = actions.as_object() {
@@ -155,6 +229,16 @@ fn validate_context(manifest: &Manifest, files: Option<&BTreeSet<String>>, modul
             let prefix = path.split("/:").next().unwrap_or(&path);
             if overlaps(&function.mount, prefix) { return Err(refuse("function.mount-conflict", format!("Function {name} mount {} overlaps route {path}.", function.mount))); }
         }
+    }
+    Ok(())
+}
+
+pub fn check_scheduled_action(function_name: &str, function: &Function, action: &str, access: &str) -> Checked<()> {
+    if function.access == "scheduled" && !matches!(access, "anonymous" | "scheduled") {
+        return Err(refuse("function.scheduled-action", format!("Scheduled Function {function_name} can only call anonymous or scheduled actions. Check {action}.")));
+    }
+    if function.access != "scheduled" && access == "scheduled" {
+        return Err(refuse("function.scheduled-action", format!("Function {function_name} cannot call action {action}. That action runs only inside a scheduled Function.")));
     }
     Ok(())
 }
@@ -177,7 +261,7 @@ pub fn parse_server_artifact(value: &Value) -> Checked<ServerArtifact> {
         return Err(refuse("function.artifact-abi", "Server Artifact requires version 1 and ABI konae-functions/1."));
     }
     keys(value, &["version", "abi", "manifest", "bundles"], "Server Artifact")?;
-    let manifest = read(&value["manifest"].to_string())?;
+    let manifest = read_manifest(&value["manifest"])?;
     if serde_json::to_value(&manifest).expect("Manifest contains JSON values") != value["manifest"] {
         return Err(refuse("function.artifact-manifest", "Server Artifact manifest does not match functions.json."));
     }
@@ -206,7 +290,7 @@ pub fn validate_artifact(manifest: Option<&Manifest>, artifact: Option<&ServerAr
         return Ok(None);
     };
     if artifact.version != 1 || artifact.abi != ABI { return Err(refuse("function.artifact-abi", "Server Artifact requires version 1 and ABI konae-functions/1.")); }
-    let normalized = read(&serde_json::to_string(&artifact.manifest).expect("Manifest contains JSON values"))?;
+    let normalized = read_manifest(&serde_json::to_value(&artifact.manifest).expect("Manifest contains JSON values"))?;
     if normalized != artifact.manifest { return Err(refuse("function.artifact-manifest", "Server Artifact manifest does not match functions.json.")); }
     if artifact.bundles.keys().ne(artifact.manifest.functions.keys()) { return Err(refuse("function.artifact-bundles", "Server Artifact bundles must match the declared function names.")); }
     let mut total = 0;
@@ -217,7 +301,10 @@ pub fn validate_artifact(manifest: Option<&Manifest>, artifact: Option<&ServerAr
         hashes.insert(name.clone(), format!("{:x}", Sha256::digest(bundle.as_bytes())));
     }
     if total > MAX_SERVER { return Err(refuse("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.")); }
-    if manifest != Some(&artifact.manifest) { return Err(refuse("function.artifact-manifest", "Server Artifact manifest does not match functions.json.")); }
+    if manifest != Some(&artifact.manifest) {
+        let file = if manifest.is_some_and(|manifest| manifest.functions == artifact.manifest.functions) { "crons.json" } else { "functions.json" };
+        return Err(refuse("function.artifact-manifest", format!("Server Artifact manifest does not match {file}.")));
+    }
     for (name, bundle) in &artifact.bundles {
         if !valid_bundle(bundle) { return Err(bundle_contract_refusal(name)); }
     }
@@ -251,7 +338,7 @@ pub(crate) fn read_artifact_with_metadata(directory: &Path) -> Result<Option<(Se
     let metadata = std::fs::symlink_metadata(&file)?;
     anyhow::ensure!(metadata.is_file() && metadata.len() <= MAX_MANIFEST as u64, "Invalid server manifest file.");
     let published: Published = serde_json::from_slice(&std::fs::read(file)?)?;
-    let normalized = read(&serde_json::to_string(&published.manifest)?)?;
+    let normalized = read_manifest(&serde_json::to_value(&published.manifest)?)?;
     anyhow::ensure!(normalized == published.manifest, "Server manifest must be normalized.");
     let mut bundles = BTreeMap::new();
     for name in published.manifest.functions.keys() {
@@ -489,7 +576,7 @@ impl crate::DeployInput {
         restored.project.files.insert("actions.json".into(), snapshot.actions.clone());
         restored.project.files.insert("schema.sql".into(), snapshot.schema_sql.clone());
         if let Some(source) = &snapshot.schema_transforms { restored.project.files.insert("schema-transforms.json".into(), source.clone()); }
-        if let Some(server) = &snapshot.server { restored.project.files.insert("functions.json".into(), serde_json::to_string(&server.manifest)?); }
+        if let Some(server) = &snapshot.server { restored.project.files.extend(server.manifest.source_files()?); }
         restored.project.manifest = snapshot.manifest.clone();
         restored.visibility = snapshot.visibility.clone();
         Ok(restored)

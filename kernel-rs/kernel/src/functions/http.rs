@@ -8,7 +8,7 @@ use axum::{
     Json,
     body::Body,
     extract::Request,
-    http::{HeaderName, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
@@ -82,6 +82,20 @@ impl konae_functions_executor::RequestBody for IngressBody {
     }
 }
 impl IngressBody {
+    fn channel(complete: bool) -> (tokio::sync::mpsc::Sender<BodyFrame>, Arc<Self>) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        let ingress = Arc::new(Self {
+            receiver: Mutex::new(receiver),
+            state: Mutex::new(BodyState {
+                length: 0,
+                digest: Sha256::new(),
+                complete,
+                error: None,
+            }),
+        });
+        (sender, ingress)
+    }
+
     fn drain(&self) -> Result<(), String> {
         loop {
             match self.read_chunk(konae_functions_executor::protocol::BODY_CHUNK_BYTES) {
@@ -112,16 +126,7 @@ impl Drop for BodyPump {
 }
 
 fn start_body_pump(body: Body, budget: Budget) -> (Arc<IngressBody>, BodyPump) {
-    let (sender, receiver) = tokio::sync::mpsc::channel(2);
-    let ingress = Arc::new(IngressBody {
-        receiver: Mutex::new(receiver),
-        state: Mutex::new(BodyState {
-            length: 0,
-            digest: Sha256::new(),
-            complete: false,
-            error: None,
-        }),
-    });
+    let (sender, ingress) = IngressBody::channel(false);
     let state = ingress.clone();
     let task = tokio::spawn(async move {
         let mut stream = body.into_data_stream();
@@ -260,7 +265,7 @@ struct PreparedRun {
     config: InvocationConfig,
     input: Input,
     body: Arc<IngressBody>,
-    body_pump: BodyPump,
+    body_pump: Option<BodyPump>,
 }
 
 fn acquire_action_resources(
@@ -268,7 +273,7 @@ fn acquire_action_resources(
     deployment: &str,
     method: &str,
     budget: &Budget,
-) -> Result<(tokio::sync::OwnedSemaphorePermit, crate::ActionLock), &'static str> {
+) -> Result<(crate::limits::StatementPermit, crate::ActionLock), &'static str> {
     let deadline = tokio::time::Instant::from_std(budget.deadline());
     tokio::runtime::Handle::current().block_on(async {
         tokio::time::timeout_at(deadline, async {
@@ -366,12 +371,17 @@ async fn prelookup_receipt(
     }))
 }
 
+#[derive(Clone)]
+pub(super) struct FunctionFailureCode(pub String);
+
 fn failure(status: u16, code: &str, message: &str) -> Response {
-    (
+    let mut response = (
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         Json(json!({"error":message,"code":code})),
     )
-        .into_response()
+        .into_response();
+    response.extensions_mut().insert(FunctionFailureCode(code.to_owned()));
+    response
 }
 fn executor_failure(code: &str) -> Response {
     let status = match code {
@@ -468,8 +478,11 @@ fn record(
     started: Instant,
     timed: Timed,
 ) -> Response {
+    if timed.response.extensions().get::<CronSkipped>().is_some() {
+        return timed.response;
+    }
     let now = Instant::now();
-    crate::usage::function_latency(
+    crate::usage::function_invocation(
         &state.data_root,
         &deployment.id,
         FunctionTiming {
@@ -495,13 +508,92 @@ fn declaration(deployment: &Deployment, path: &str) -> Option<(String, Function)
         .functions
         .iter()
         .find(|(_, f)| {
-            path == f.mount
+            f.access != "scheduled" && (path == f.mount
                 || path
                     .strip_prefix(&f.mount)
-                    .is_some_and(|rest| rest.starts_with('/'))
+                    .is_some_and(|rest| rest.starts_with('/')))
         })
         .map(|(name, function)| (name.clone(), function.clone()))
 }
+
+async fn http_actor(
+    state: &AppState,
+    deployment: &Deployment,
+    function: &Function,
+    method: &Method,
+    headers: &HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+) -> Result<Option<String>, Response> {
+    if !function
+        .methods
+        .iter()
+        .any(|allowed| allowed == method.as_str())
+    {
+        let mut response = failure(
+            405,
+            "function.method-not-allowed",
+            "The function does not declare this HTTP method.",
+        );
+        response.headers_mut().insert(
+            header::ALLOW,
+            HeaderValue::from_str(&function.methods.join(", ")).unwrap(),
+        );
+        return Err(response);
+    }
+    if !crate::same_origin(headers)
+        || crate::path::foreign_referer(state, headers, &deployment.id)
+    {
+        return Err(failure(
+            403,
+            "function.origin-refused",
+            "Cross-origin function request rejected.",
+        ));
+    }
+    if crate::runtime::bearer(headers).is_some_and(|token| token.starts_with("lbk_"))
+    {
+        return Err(failure(
+            403,
+            "function.key-refused",
+            "Functions do not accept API keys.",
+        ));
+    }
+    let actor = if crate::modules::is_on(&deployment.modules, "auth") {
+        crate::authenticate_deployment(state, deployment, headers).await?
+    } else {
+        None
+    };
+    if (crate::is_private(deployment) || function.access == "authenticated") && actor.is_none()
+    {
+        return Err(failure(
+            401,
+            "authentication-required",
+            "authentication-required",
+        ));
+    }
+    let client = state.guards.client_ip(peer, headers);
+    let limited = match &actor {
+        Some(user) => state
+            .guards
+            .signed_in_actions
+            .check(&format!("runtime:{}:{}", deployment.id, user.user_id)),
+        None => state.guards.anonymous_actions.check(&format!(
+            "{}|{}",
+            deployment.id,
+            crate::limits::client_key(client)
+        )),
+    };
+    limited.map_err(crate::http::rate_limited)?;
+    Ok(actor.map(|user| user.user_id))
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Trigger<'a> {
+    Http,
+    Cron { id: &'a str, at: u64, manual: bool },
+}
+
+#[derive(Clone)]
+pub(super) struct CronSkipped;
 
 /// A function request holds the publication lease until native work and its receipt finish.
 pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Response, Request> {
@@ -511,24 +603,32 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
     let Some((observed_name, _)) = declaration(&observed, request.uri().path()) else {
         return Err(request);
     };
+    invoke(state, &observed, observed_name, request, Trigger::Http).await
+}
+
+pub(super) async fn invoke(
+    state: &AppState,
+    observed: &Deployment,
+    observed_name: String,
+    request: Request,
+    trigger: Trigger<'_>,
+) -> Result<Response, Request> {
     let started = Instant::now();
     let budget = Budget::until(started + state.functions.deadline);
     let _cancel = Cancel(budget.clone());
     let deadline = tokio::time::Instant::from_std(budget.deadline());
-    let admission = match state.functions.admit(&budget) {
-        Ok(admission) => admission,
-        Err(code) => {
-            let timed = Timed::refusal(executor_failure(&code), started.elapsed());
-            return Ok(record(
-                state,
-                &observed,
-                observed_name,
-                &budget,
-                started,
-                timed,
-            ));
+    let admission = if matches!(trigger, Trigger::Http) {
+        match state.functions.admit(&budget) {
+            Ok(admission) => Some(admission),
+            Err(code) => {
+                let timed = Timed::refusal(executor_failure(&code), started.elapsed());
+                return Ok(record(state, observed, observed_name, &budget, started, timed));
+            }
         }
+    } else {
+        None
     };
+    let skip_cron = || (StatusCode::NO_CONTENT, axum::Extension(CronSkipped)).into_response();
     let (generation, held, deployment) = match tokio::time::timeout_at(deadline, async {
         let generation = state.copies.generations.clone().read_owned().await;
         let held = crate::named_lock(state, &format!("publish:{}", observed.id), false).await;
@@ -538,6 +638,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
     .await
     {
         Ok(held) => held,
+        Err(_) if matches!(trigger, Trigger::Cron { manual: false, .. }) => return Ok(skip_cron()),
         Err(_) => {
             let timed = interrupted(
                 &budget,
@@ -547,7 +648,7 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             );
             return Ok(record(
                 state,
-                &observed,
+                observed,
                 observed_name,
                 &budget,
                 started,
@@ -556,86 +657,67 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
         }
     };
     let Some(deployment) = deployment else {
-        return Ok(failure(404, "function.not-found", "Function not found."));
+        return Ok(match trigger {
+            Trigger::Http => failure(404, "function.not-found", "Function not found."),
+            Trigger::Cron { .. } => skip_cron(),
+        });
     };
-    let Some((name, function)) = declaration(&deployment, request.uri().path()) else {
-        return Err(request);
+    let (name, function) = match trigger {
+        Trigger::Http => match declaration(&deployment, request.uri().path()) {
+            Some(function) => function,
+            None => return Err(request),
+        },
+        Trigger::Cron { id, at, manual } => {
+            let Some(server) = &deployment.server else { return Ok(skip_cron()) };
+            let Some(cron) = server.manifest.crons.get(id) else { return Ok(skip_cron()) };
+            if deployment.artifact_version != observed.artifact_version
+                || state.execution_mode.is_test() != manual
+                || (!manual && !super::cron::released_before_slot(&deployment, at))
+                || crate::maintenance::pause(&state.data_root, &deployment.id).is_some()
+                || !crate::modules::is_on(&deployment.modules, "functions")
+            {
+                return Ok(skip_cron());
+            }
+            let Some(function) = server.manifest.functions.get(&cron.function).filter(|fn_def| fn_def.access == "scheduled") else {
+                return Ok(skip_cron());
+            };
+            (cron.function.clone(), function.clone())
+        }
     };
     let bundle_hash = deployment.server.as_ref().unwrap().hashes[&name].clone();
     let operation = request
         .extensions()
         .get::<Operation>()
         .map(|operation| operation.0.clone());
+    if let Trigger::Cron { id, at, manual: false } = trigger {
+        let folder = crate::layout::data(&state.data_root, &deployment.id);
+        let name = super::cron::run_name(id);
+        let operation = operation.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            let _operation = operation;
+            crate::usage::claim_cron(&folder, &name, super::cron::slot(at))
+        });
+        match task.await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => return Ok(skip_cron()),
+            _ => return Ok(failure(503, "cron.claim-failed", "The Kernel could not record the cron attempt.")),
+        }
+    }
     let prepare = async {
         if let Some(message) = crate::maintenance::pause(&state.data_root, &deployment.id) {
             return Err(crate::maintenance::refusal(&message));
         }
         crate::modules::require_on(&deployment.modules, "functions")
             .map_err(|refused| crate::refusal_error(&refused))?;
-        if !function
-            .methods
-            .iter()
-            .any(|method| method == request.method().as_str())
-        {
-            let mut response = failure(
-                405,
-                "function.method-not-allowed",
-                "The function does not declare this HTTP method.",
-            );
-            response.headers_mut().insert(
-                header::ALLOW,
-                HeaderValue::from_str(&function.methods.join(", ")).unwrap(),
-            );
-            return Err(response);
-        }
-        if !crate::same_origin(request.headers())
-            || crate::path::foreign_referer(state, request.headers(), &deployment.id)
-        {
-            return Err(failure(
-                403,
-                "function.origin-refused",
-                "Cross-origin function request rejected.",
-            ));
-        }
-        if crate::runtime::bearer(request.headers()).is_some_and(|token| token.starts_with("lbk_"))
-        {
-            return Err(failure(
-                403,
-                "function.key-refused",
-                "Functions do not accept API keys.",
-            ));
-        }
-        let actor = if crate::modules::is_on(&deployment.modules, "auth") {
-            crate::authenticate_deployment(state, &deployment, request.headers()).await?
-        } else {
-            None
+        let actor_id = match trigger {
+            Trigger::Http => {
+                let peer = request.extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|value| value.0);
+                http_actor(state, &deployment, &function, request.method(), request.headers(), peer).await?
+            }
+            Trigger::Cron { .. } => None,
         };
-        if (crate::is_private(&deployment) || function.access == "authenticated") && actor.is_none()
-        {
-            return Err(failure(
-                401,
-                "authentication-required",
-                "authentication-required",
-            ));
-        }
-        let peer = request
-            .extensions()
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .map(|value| value.0);
-        let client = state.guards.client_ip(peer, request.headers());
-        let limited = match &actor {
-            Some(user) => state
-                .guards
-                .signed_in_actions
-                .check(&format!("runtime:{}:{}", deployment.id, user.user_id)),
-            None => state.guards.anonymous_actions.check(&format!(
-                "{}|{}",
-                deployment.id,
-                crate::limits::client_key(client)
-            )),
-        };
-        limited.map_err(crate::http::rate_limited)?;
-        let actor_id = actor.map(|user| user.user_id);
         let headers = [header::ACCEPT, header::CONTENT_TYPE]
             .into_iter()
             .filter_map(|name| {
@@ -708,12 +790,22 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             deployment.artifact_version,
             konae_functions_executor::protocol::ABI
         );
+        let admission = match admission {
+            Some(admission) => admission,
+            None => state.functions.admit(&budget).map_err(|code| executor_failure(&code))?,
+        };
         let lease = state
             .functions
             .lease_admitted(cache_key, &budget, admission)
             .await
             .map_err(|code| executor_failure(&code))?;
-        let (body, body_pump) = start_body_pump(request_body.unwrap(), budget.clone());
+        let (body, body_pump) = match trigger {
+            Trigger::Http => {
+                let (body, pump) = start_body_pump(request_body.unwrap(), budget.clone());
+                (body, Some(pump))
+            }
+            Trigger::Cron { .. } => (IngressBody::channel(true).1, None),
+        };
         let program = Arc::new(crate::action_shape::read(&deployment.actions).map_err(|_| {
             failure(
                 500,
@@ -722,6 +814,8 @@ pub(crate) async fn dispatch(state: &AppState, request: Request) -> Result<Respo
             )
         })?);
         let config = InvocationConfig {
+            app_id: deployment.id.clone(),
+            release_id: deployment.artifact_version.clone(),
             database: has_data.then(|| crate::layout::database(&state.data_root, &deployment.id)),
             program,
             function_name: name.clone(),

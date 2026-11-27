@@ -120,14 +120,16 @@ _Avoid_: owner email, admin address
 
 **Schedule**:
 A mutation's `"schedule"`, `{ "every": "15m" }` or `{ "daily": "02:00" }` in UTC, that only the Kernel's timer runs. The mutation takes no input, and a page polls a query to see what it did (ADR-0011).
-_Avoid_: cron, job, worker, background task
+
+**Cron job**:
+A named entry in `crons.json` that the Kernel runs at matching UTC minutes. It calls a Function declared with scheduled access. The Server Artifact carries the active declaration.
 
 **Signal**:
 A named occurrence a Server Action declares, with properties from its input bindings or `actor`, recorded next to Usage when the action succeeds. Only the owner reads Signals (ADR-0010).
 _Avoid_: event, track, custom metric
 
 **Usage**:
-The Kernel's daily totals for one Deployment: sessions, page views, actions, routes, uploads, file reads, signups, logins, refusals, notices, calls and scheduled runs, with the activity of each signed-in app account and what the app stores. It lives in `data/usage.sqlite`, and only the owner reads it (ADR-0010).
+The Kernel's daily totals for one Deployment: sessions, page views, actions, functions, routes, uploads, file reads, signups, logins, refusals, notices, calls and scheduled runs, with the activity of each signed-in app account and what the app stores. It lives in `data/usage.sqlite`, and only the owner reads it (ADR-0010).
 _Avoid_: analytics, telemetry, audit, metric
 
 **Invitation**:

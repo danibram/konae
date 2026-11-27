@@ -158,6 +158,13 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   const actionNames = [...new Set([...summary.actions.filter((a) => a.kind !== "call").map((a) => a.name), ...summary.metrics.filter((m) => m.feature === "execution").map((m) => m.name)])].sort();
   return <>
     <div className="usage-app-link"><a className="usage-address" href={summary.url} target="_blank" rel="noopener">{addressOf(summary.url)} <ArrowUpRight size={14} aria-hidden="true" /></a><a href={projectHref(summary.projectId)}>Open project</a></div>
+    {(kindTotal(summary, "function") > 0 || kindTotal(summary, "action") > 0) && <section aria-labelledby="usage-calls-heading">
+      <h2 id="usage-calls-heading">Calls</h2>
+      <div className="usage-charts">
+        <DailyChart title="Function calls per day" unit="calls" points={dailyUsage(summary, "function")} empty="No function calls recorded in this period." />
+        <DailyChart title="Successful action calls per day" unit="calls" points={dailyUsage(summary, "action")} empty="No successful action calls recorded in this period." />
+      </div>
+    </section>}
     <FunctionLatency summary={summary.functionLatency} />
     {notices.notSent > 0 && <Alert tone="warning" className="usage-error" title={`${number.format(notices.notSent)} email ${notices.notSent === 1 ? "notice was" : "notices were"} not sent`}>{[...new Set(notices.reasons.map((r) => r.label))].map((label) => label[0].toUpperCase() + label.slice(1)).join(". ")}. The actions themselves completed; only the email is missing.{notices.reasons.some((r) => r.reason === "no-transport") && " Whoever runs this installation can connect an email service."}</Alert>}
     {/* Only what makes this period's numbers incomplete stays in view; how they are counted waits in the disclosure. */}

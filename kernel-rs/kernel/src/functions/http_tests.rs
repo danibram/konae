@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    functions::tests::{publish, release},
     functions::runtime::Runtime,
+    functions::tests::{publish, release},
 };
 use konae_functions_executor::MemoryPolicy;
 use rusqlite::Connection;
@@ -699,6 +699,7 @@ async fn a_join_failure_reports_unknown_if_a_mutation_may_have_committed() {
 
 #[tokio::test]
 async fn admission_includes_requests_waiting_for_publication_and_releases_on_drop() {
+    let from = crate::usage::day(crate::now_ms());
     let root = std::env::temp_dir().join(format!("konae-function-queue-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let mut state = AppState::for_test(&root);
@@ -762,6 +763,76 @@ async fn admission_includes_requests_waiting_for_publication_and_releases_on_dro
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(response.headers()[header::RETRY_AFTER], "300");
     crate::usage::flush();
+    let to = crate::usage::day(crate::now_ms());
+    let usage = crate::usage::read_usage(&crate::layout::usage(&root, id), &from, &to).unwrap();
+    assert_eq!(
+        usage["totals"],
+        json!([{"kind": "function", "name": "orders", "count": 2}])
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires KONAE_TEST_FUNCTION_WORKER pointing to the built external JavaScript worker"]
+async fn completed_function_calls_have_one_daily_count() {
+    let executable = std::env::var_os("KONAE_TEST_FUNCTION_WORKER").unwrap();
+    let root = std::env::temp_dir().join(format!("konae-function-usage-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut state = AppState::for_test(&root);
+    let policy = std::env::var_os("KONAE_TEST_FUNCTION_CGROUP")
+        .map(|root| MemoryPolicy::LinuxCgroup {
+            delegated_root: root.into(),
+        })
+        .unwrap_or(MemoryPolicy::DevelopmentPolling);
+    state.functions = Arc::new(Runtime::configured(
+        executable.into(),
+        policy,
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+    ));
+    let deployment = publish(
+        &state,
+        &release(
+            "function_usage",
+            "export function handle() { return new Response('ok'); }",
+        ),
+    )
+    .await;
+    let service = crate::stack(state, axum::Router::new());
+    let from = crate::usage::day(crate::now_ms());
+    for (method, status) in [
+        ("GET", StatusCode::OK),
+        ("GET", StatusCode::OK),
+        ("PUT", StatusCode::METHOD_NOT_ALLOWED),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri("/api/orders")
+            .header("host", &deployment.hostname)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            service.clone().oneshot(request).await.unwrap().status(),
+            status
+        );
+    }
+    let to = crate::usage::day(crate::now_ms());
+    let summary = crate::usage::admin_call(
+        &root,
+        &deployment,
+        "usage_summary",
+        &json!({"from": from, "to": to}),
+    )
+    .await
+    .unwrap();
+    let calls = summary["usage"]["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["kind"] == "function" && row["name"] == "orders")
+        .map(|row| row["count"].as_u64().unwrap())
+        .sum::<u64>();
+    assert_eq!(calls, 3, "{summary}");
     std::fs::remove_dir_all(root).unwrap();
 }
 

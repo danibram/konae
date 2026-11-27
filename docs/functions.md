@@ -1,10 +1,10 @@
 # Server functions
 
-Server functions let an app handle HTTP requests with bundled JavaScript. The Kernel owns authentication, app data, and the declared Server Actions a handler may call. Functions are experimental. The [operator guide](./operate.md#typescript-function-workers) describes runner setup and Linux requirements.
+Server functions let an app handle HTTP requests and cron jobs with bundled JavaScript. The Kernel owns authentication, app data, and the declared Server Actions a handler may call. Functions are experimental. The [operator guide](./operate.md#typescript-function-workers) describes runner setup and Linux requirements.
 
 ## Add a function
 
-Turn on `functions` in the app's module settings. A function with `access: "authenticated"` also requires `auth`. A function that names Server Actions requires `actions`. Each dependency must be on before publishing. For a local run, set these modules in `konae.json` under `modules`.
+For HTTP Functions in an app without cron jobs, turn on `functions` in the app's module settings. A function with `access: "authenticated"` also requires `auth`. A function that names Server Actions requires `actions`. For a local run, set these modules in `konae.json` under `modules`.
 
 An anonymous function also requires a public Deployment. A private Deployment requires an app user session, even for a function whose `access` is `anonymous`.
 
@@ -38,6 +38,60 @@ Add `functions.json` to `app/`. This declaration exposes `GET /api/hello` withou
 Names start with an ASCII letter and contain at most 64 letters, digits, `_` or `-`. Each mount is an absolute path with nonempty ASCII segments. Mounts claim the exact path and its descendants. They cannot overlap another function, static route, or reserved Kernel path. Methods are a nonempty list of unique `GET` and `POST` values. Access defaults to `authenticated`. `actions` defaults to an empty list. The entry must name a source file under `app/functions/`.
 
 When a function uses Server Actions, its allowlist can name queries and mutations without external effects. It cannot name actions with `notify`, `signal`, `schedule`, `subscribe`, HTTP routes, grants, granted access, or a `then` target of an outgoing call. The build and Kernel check the declaration and artifact. The Kernel checks the allowlist, action schema, action access and actor bindings on every call.
+
+## Run a function on a cron schedule
+
+Declare the cron in the Capsule and publish the app. The same release enables Functions. If the cron target names Server Actions, the release enables Actions as well. In App settings under Modules, Functions lists the published cron jobs. Over MCP, call `modules_read` and read `modules.functions.current.crons`.
+
+In `app/functions.json`, declare a Function with `"access": "scheduled"`. Leave out `mount` and `methods`. The Kernel calls this Function internally, so it has no HTTP route.
+
+```json
+{
+  "version": 1,
+  "functions": {
+    "cleanup": {
+      "entry": "functions/cleanup.ts",
+      "access": "scheduled",
+      "actions": ["sessions.expire"]
+    }
+  }
+}
+```
+
+In `app/crons.json`, name the job, its cron expression and the Function to run.
+
+```json
+{
+  "version": 1,
+  "crons": {
+    "weekday-cleanup": {
+      "cron": "0 8 * * 1-5",
+      "function": "cleanup"
+    }
+  }
+}
+```
+
+This runs at 08:00 UTC from Monday through Friday. The five fields are minute, hour, day of month, month and day of week. Use numbers, `*`, lists such as `1,3,5`, ranges such as `1-5` and steps such as `*/15`. Sunday is `0` or `7`. If both day fields are restricted, either can match. An app can declare up to 32 jobs.
+
+Export the same `handle(request, context)` as an HTTP Function. The Kernel passes an empty POST request, the job ID as `cron` and the scheduled UTC time in Unix milliseconds as `scheduledAt` in the query string. `context.actor.userId` is null. Set `"access": "scheduled"` on a Server Action reserved for scheduled Functions. Scheduled Functions may also call actions that already allow anonymous access.
+
+```ts
+export async function handle(_request, context) {
+  await context.actions.call("sessions.expire", {});
+  return new Response(null, { status: 204 });
+}
+```
+
+The Kernel checks jobs at minute boundaries and attempts each job at most once per matching minute. It starts checking a release at the next minute boundary. Jobs in one app run in ID order. If the Kernel is down, the app is paused or its previous batch is still running, missed minutes are skipped. A failed attempt waits for the next matching minute. Cron attempts appear under `scheduled` in Usage and in `konae events` as `cron:<id>`.
+
+`konae dev` pauses the timer. Run a job with `konae test schedule cron:weekday-cleanup` using the configured Functions runner. App exports carry `app/crons.json` and the active schedule in the published Server Artifact.
+
+### Edit a cron with an agent
+
+In the editor, the build agent reads `/workspace/crons.json` and `/workspace/functions.json`. It creates a missing file with `write` or changes an existing entry with `edit_json`. Changing just the time uses the JSON Pointer `/crons/weekday-cleanup/cron`. The agent reads the edit back and runs `validate_capsule`. Apply saves the source change. Deploy puts the new schedule into effect.
+
+An outside agent can also edit the local `app/` files, or read and save the draft with `project_sources_read` and `project_sources_save`. Use the source revision from the read when saving over MCP. Read the saved sources back before publishing. [MCP tools and read-back](./mcp-tools.md#read-back-after-every-write)
 
 ## Write the handler
 

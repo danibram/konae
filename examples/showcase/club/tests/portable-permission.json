@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "action": "notes.mine",
+  "rowRule": "notes.user_id = actor.id",
+  "rowPrefix": "portable-permission-fixture-v1",
+  "allow": "actor's own note",
+  "deny": "another actor's note"
+}

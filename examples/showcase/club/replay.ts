@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -153,8 +154,19 @@ try {
 
   const root = path.join(scratch, "club");
   await cp(import.meta.dir, appDir(root), { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
-  const project = { id: "showcase_club", name: "Club", slug: "club", manifest: { version: 1, visibility: "private" } };
-  const cliProject = { ...project, modules: { auth: { on: true, signupPolicy: { mode: "invitation", allowlist: [] } } } };
+  const permissionFixtureBytes = new Uint8Array(await readFile(path.join(appDir(root), "tests/portable-permission.json")));
+  const permissionFixture = JSON.parse(new TextDecoder().decode(permissionFixtureBytes)) as {
+    version: 1;
+    action: "notes.mine";
+    rowRule: "notes.user_id = actor.id";
+    rowPrefix: string;
+    allow: "actor's own note";
+    deny: "another actor's note";
+  };
+  assert.equal(permissionFixture.version, 1);
+  assert.equal(permissionFixture.action, "notes.mine");
+  const project = { id: "showcase_club", name: "Club", slug: "club", manifest: { version: 1, visibility: "private", signupPolicy: { mode: "invitation", allowlist: [] } } };
+  const cliProject = { ...project, modules: { auth: { on: true } } };
   const publishToken = await origin.owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
   const receiptA = await publishLocal(root, { url: origin.url, project: cliProject }, publishToken.token) as Receipt;
   const A = app(origin, receiptA);
@@ -162,20 +174,20 @@ try {
   const firstPolicy = firstModules.modules.auth.state.signupPolicy as { mode: string };
   assert.equal(firstPolicy.mode, "invitation");
   const warnings: string[] = [];
-  const openProject = { ...project, modules: { auth: { on: true, signupPolicy: { mode: "open", allowlist: [] } } } };
+  const openProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "open", allowlist: [] } }, modules: { auth: { on: true } } };
   await publishLocal(root, { url: origin.url, project: openProject }, publishToken.token, (line) => warnings.push(line));
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /asks for signup Open, but this app has Invitation only\..*Users.*module_set on auth/);
   assert.equal((await origin.owner.call<any>("modules_read", { projectId: receiptA.id })).modules.auth.state.signupPolicy.mode, "invitation");
   const publishOnlySet = await message(new McpClient(`${origin.url}/mcp`, { token: publishToken.token }).call("module_set", { projectId: receiptA.id, module: "auth", options: { signupPolicy: { mode: "open", allowlist: [] } } }));
-  assert.match(publishOnlySet, /module_set needs a credential with manage_users/);
+  assert.equal(publishOnlySet, "Permission denied for manage_users.");
   refused("Signup policy", "module_set on auth with the CLI publish token", publishOnlySet);
   check("Publish", `konae publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode} from konae.json, on a token without manage_users. A republish naming open warned "${warnings[0]}" and kept invitation.`);
 
   const shell = await A.http("/");
   const shellText = await shell.text();
   assert.equal(shell.status, 200);
-  assert.match(shellText, /<title>Sign in<\/title>/);
+  assert.match(shellText, /<title>Sign in · Club<\/title>/);
   assert.match(shellText, /Only invited people can create an account/);
   assert(!shellText.includes("/_konae/auth/signup"));
   const stranger = await A.post("/_konae/auth/signup", { email: "stranger@example.test", password });
@@ -187,7 +199,7 @@ try {
 
   const people = { ana: "ana@club.example.test", ben: "ben@club.example.test", cy: "cy@club.example.test" };
   const invited = await origin.owner.call<{ results: Array<{ email: string; status: string; delivery: string }> }>("app_invitations_create", {
-    deploymentId: receiptA.id, emails: Object.values(people).map((email) => email.replace("ana", "Ana")), idempotencyKey: "club-invites-0001",
+    projectId: receiptA.id, emails: Object.values(people).map((email) => email.replace("ana", "Ana")), idempotencyKey: "club-invites-0001",
   });
   assert.deepEqual(invited.results.map((item) => item.status), ["invited", "invited", "invited"]);
   const cookies: Record<keyof typeof people, string> = {} as never;
@@ -204,9 +216,13 @@ try {
   for (const [client, display] of [[ana, "Ana"], [ben, "Ben"], [cy, "Cy"]] as const) assert.equal((await action(client, "me.join", { display })).changes, 1);
   check("Invitations", "Three invitations went through the development mailbox; each link opened the acceptance flow and set a password.");
 
-  const users = await origin.owner.call<{ users: Array<{ userId: string; email: string }> }>("app_users_list", { deploymentId: receiptA.id });
-  const anaId = users.users.find((user) => user.email === people.ana)!.userId;
-  await origin.owner.call("database_execute", { deploymentId: receiptA.id, operation: "sql", input: { sql: `UPDATE members SET role = 'organizer' WHERE user_id = '${anaId}'` } });
+  const users = await origin.owner.call<{ users: Array<{ userId: string; email: string }> }>("app_users_list", { projectId: receiptA.id });
+  const anaUser = users.users.find((user) => user.email === people.ana);
+  const benUser = users.users.find((user) => user.email === people.ben);
+  assert(anaUser && benUser, "Invited app accounts must appear in the account list.");
+  const anaId = anaUser.userId;
+  const benId = benUser.userId;
+  await origin.owner.call("database_execute", { projectId: receiptA.id, operation: "sql", input: { sql: `UPDATE members SET role = 'organizer' WHERE user_id = '${anaId}'` } });
   assert.equal((await action(ana, "me.get"))[0].role, "organizer");
   assert.equal((await action(ben, "me.get"))[0].role, "member");
   check("Organizer", "The owner mapped Ana's email to her user ID with app_users_list and promoted her with database_execute.");
@@ -225,6 +241,13 @@ try {
   assert.equal(anaNote.visibility, "private");
   assert.equal((await action(ana, "notes.add", { bookId: dispossessed, fileId: anaNote.id, name: "note-the-dispossessed.txt" })).changes, 1);
   assert.equal((await action(ben, "notes.add", { bookId: dispossessed, fileId: benNote.id, name: "note-the-dispossessed.txt" })).changes, 1);
+  const syntheticAnaRow = `${permissionFixture.rowPrefix}:ana`;
+  const syntheticBenRow = `${permissionFixture.rowPrefix}:ben`;
+  await origin.owner.call("database_execute", {
+    projectId: receiptA.id,
+    operation: "sql",
+    input: { sql: `INSERT INTO notes(user_id, book_id, file_id, name, created_at) VALUES ('${anaId}', ${dispossessed}, '${syntheticAnaRow}', 'synthetic permission row', 1), ('${benId}', ${dispossessed}, '${syntheticBenRow}', 'synthetic permission row', 2)` },
+  });
 
   const benReadsAnaNote = await message(ben.call("files_read", { fileId: anaNote.id }));
   assert.equal(benReadsAnaNote, "File not found.");
@@ -265,7 +288,7 @@ try {
   refused("File lifecycle", "Ana deletes Ben's private note with files_delete", anaDeletesBenNote);
   check("Files", "Ben cannot read Ana's private note over MCP or HTTP, reads her public cover both ways, and lists only what he may read. A visitor gets 401 for a public cover, a private note and a missing ID alike. Neither files_upload nor files_update accepts a visibility for organizers, and Ana's organizer role does not let her delete Ben's files.");
 
-  const key = await origin.owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receiptA.id, name: "Cover mirror", files: ["public"] });
+  const key = await origin.owner.call<{ key: string; keyId: string }>("api_keys_create", { projectId: receiptA.id, name: "Cover mirror", files: ["public"] });
   const keyCover = await A.http(`/_konae/files/${benCover.id}`, { bearer: key.key });
   assert.equal(keyCover.status, 200);
   assert.deepEqual(new Uint8Array(await keyCover.arrayBuffer()), coverTwo);
@@ -277,7 +300,7 @@ try {
   const keyOnMcpText = await keyOnMcp.text();
   assert.equal(JSON.parse(keyOnMcpText).error, "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.");
   refused("API key", "The same key on the runtime MCP endpoint", `${keyOnMcp.status} ${keyOnMcpText}`);
-  const keyForQuery = await message(origin.owner.call("api_keys_create", { deploymentId: receiptA.id, name: "Book list", actions: ["books.list"] }));
+  const keyForQuery = await message(origin.owner.call("api_keys_create", { projectId: receiptA.id, name: "Book list", actions: ["books.list"] }));
   refused("API key", "api_keys_create naming books.list, an authenticated action with no route", keyForQuery);
   check("API key", "A key scoped to public files reads a cover with Authorization: Bearer, gets 404 for a private note, and the runtime endpoint refuses it with 403 and says where keys work.");
 
@@ -293,13 +316,13 @@ try {
   let scheduled = 0;
   let refusedSchedules = 0;
   for (const deadline = Date.now() + 5_000; refusedSchedules < 2 && Date.now() < deadline; await Bun.sleep(100)) {
-    const usage = await origin.owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId: receiptA.id, from: today, to: today });
-    scheduled = usage.totals.find((total) => total.kind === "action" && total.name === "books.schedule")?.count ?? 0;
-    refusedSchedules = usage.totals.find((total) => total.kind === "refused" && total.name === "books.schedule")?.count ?? 0;
+    const usage = await origin.owner.call<{ usage: { totals: Array<{ kind: string; name: string; count: number }> } }>("usage_summary", { projectId: receiptA.id, from: today, to: today });
+    scheduled = usage.usage.totals.find((total) => total.kind === "action" && total.name === "books.schedule")?.count ?? 0;
+    refusedSchedules = usage.usage.totals.find((total) => total.kind === "refused" && total.name === "books.schedule")?.count ?? 0;
   }
   assert.equal(scheduled, 1);
   assert.equal(refusedSchedules, 2);
-  const organizerInvites = await message(ana.call("app_invitations_create", { deploymentId: receiptA.id, emails: ["dee@club.example.test"], idempotencyKey: "organizer-invite-01" }));
+  const organizerInvites = await message(ana.call("app_invitations_create", { projectId: receiptA.id, emails: ["dee@club.example.test"], idempotencyKey: "organizer-invite-01" }));
   refused("Roles in SQL", "Ana (organizer) calls app_invitations_create on the runtime endpoint", organizerInvites);
   assert.equal(await message(action(ana, "books.schedule", { id: solaris, meetsOn: "2026-12-04" })), scheduleGuard);
   assert.deepEqual((await action<Array<{ title: string; status: string }>>(ana, "books.list")).filter((book) => book.status === "current").map((book) => book.title), ["The Dispossessed"]);
@@ -311,7 +334,7 @@ try {
   assert.equal((await action(ben, "notes.add", { bookId: kindred, fileId: kindredNote.id, name: "note-kindred.txt" })).changes, 1);
   assert.equal((await action(ana, "books.remove", { id: kindred })).changes, 1);
   assert.deepEqual((await action<Array<{ book: string; file_id: string }>>(ben, "notes.mine")).map((note) => [note.book, note.file_id]),
-    [["A removed book", kindredNote.id], ["The Dispossessed", benNote.id]]);
+    [["A removed book", kindredNote.id], ["The Dispossessed", benNote.id], ["The Dispossessed", syntheticBenRow]]);
   assert.equal(await message(action(ben, "notes.add", { bookId: kindred, fileId: kindredNote.id, name: "note-kindred.txt" })), "Join the club first, and pick a book that is still on the list.");
   check("Removed book", "Ben's note on a book Ana removed stays in notes.mine under \"A removed book\", and notes.add refuses the removed book with its guard.");
 
@@ -398,17 +421,30 @@ try {
   refused("Recovery", "The same recovery link used twice", `${reused.status} ${await reused.text()}`);
   check("Recovery", "The emailed link reset Cy's password; her earlier session answers 401, the old password fails and the link works once.");
 
-  const exported = await origin.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("project_export", { deploymentId: receiptA.id });
+  const exported = await origin.owner.call<{ manifest: any; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: receiptA.id });
   assert.equal(exported.manifest.visibility, "private");
   assert.deepEqual(exported.manifest.signupPolicy, { mode: "invitation", allowlist: [] });
   const componentBytes: Record<string, Uint8Array> = {};
   for (const content of exported.manifest.contents) componentBytes[content.name] = await origin.owner.download(exported.downloads[content.name]);
+  const folderArchive = await origin.owner.download(exported.folder);
+  const fixtureRead = Bun.spawn(["tar", "-xOf", "-", "app/tests/portable-permission.json"], {
+    cwd: repo, stdin: new Blob([folderArchive]), stdout: "pipe", stderr: "pipe",
+  });
+  const [fixtureExit, exportedFixture] = await Promise.all([fixtureRead.exited, new Response(fixtureRead.stdout).arrayBuffer()]);
+  assert.equal(fixtureExit, 0, "The app folder export must contain the source test fixture.");
+  assert.deepEqual(new Uint8Array(exportedFixture), permissionFixtureBytes, "The exported source fixture must match the tested revision.");
   check("Export", `project_export wrote ${exported.manifest.contents.map((c: any) => `${c.name} ${c.size} B`).join(", ")}; excluded: ${exported.manifest.excluded.join("; ")}.`);
 
   await destination.owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const components: Record<string, string> = {};
   for (const content of exported.manifest.contents) components[content.name] = (await destination.owner.upload(componentBytes[content.name], project.id, content.name)).transferId;
-  const { artifact, files } = await buildLocal(root);
+  const { artifact, files, source } = await buildLocal(root);
+  assert(Object.hasOwn(files, "tests/portable-permission.json"), "The permission fixture must travel with the source revision.");
+  assert(!Object.hasOwn(artifact.files, "tests/portable-permission.json"), "The permission fixture must stay outside dist.");
+  const testedSourceRevision = createHash("sha256")
+    .update(JSON.stringify(Object.entries(source.files).sort(([left], [right]) => left.localeCompare(right))))
+    .update(JSON.stringify(Object.entries(source.encodings ?? {}).sort(([left], [right]) => left.localeCompare(right))))
+    .digest("hex");
   const payload = { project: { ...project, files }, visibility: "private", artifact, initialPackage: { manifest: exported.manifest, components } };
   const payloadUpload = await destination.owner.upload(json(payload), project.id);
   let receiptB: Receipt;
@@ -426,6 +462,24 @@ try {
   const cyB = await B.login(people.cy, newPassword);
   assert.deepEqual([anaB.status, benB.status, cyB.status], [200, 200, 200]);
   const anaOnB = B.runtime(anaB.cookie), benOnB = B.runtime(benB.cookie);
+  const anaNotesOnB = await action<Array<{ file_id: string }>>(anaOnB, permissionFixture.action);
+  const benNotesOnB = await action<Array<{ file_id: string }>>(benOnB, permissionFixture.action);
+  assert(anaNotesOnB.some((note) => note.file_id === syntheticAnaRow), permissionFixture.allow);
+  assert(!anaNotesOnB.some((note) => note.file_id === syntheticBenRow), permissionFixture.deny);
+  assert(benNotesOnB.some((note) => note.file_id === syntheticBenRow), permissionFixture.allow);
+  assert(!benNotesOnB.some((note) => note.file_id === syntheticAnaRow), permissionFixture.deny);
+  const permissionResult = {
+    testedSourceRevision,
+    deploymentId: receiptB.id,
+    activeRelease: (await destination.owner.call<{ deployment: { artifactVersion: string } }>("project_inspect", { projectId: receiptB.id })).deployment.artifactVersion,
+    appActor: "fresh imported app sessions",
+    rowRule: permissionFixture.rowRule,
+    fixture: permissionFixture.rowPrefix,
+    allowed: anaNotesOnB.some((note) => note.file_id === syntheticAnaRow) && benNotesOnB.some((note) => note.file_id === syntheticBenRow),
+    denied: !anaNotesOnB.some((note) => note.file_id === syntheticBenRow) && !benNotesOnB.some((note) => note.file_id === syntheticAnaRow),
+  };
+  assert(permissionResult.allowed && permissionResult.denied, JSON.stringify(permissionResult));
+  check("Portable permissions", JSON.stringify(permissionResult));
   assert.equal((await action(anaOnB, "me.get"))[0].role, "organizer");
   assert.deepEqual((await action(anaOnB, "books.list")).map((book: any) => [book.title, book.status, book.cover_file_id]),
     [["The Dispossessed", "current", anaCover.id], ["Solaris", "proposed", benCover.id]]);
@@ -445,11 +499,11 @@ try {
   const originKeyBody = await originKey.json();
   assert.deepEqual([originKey.status, originKeyBody], [401, { error: "invalid-api-key" }]);
   refused("Import", "The origin's API key on the destination's file read path", `${originKey.status} ${JSON.stringify(originKeyBody)}`);
-  const keysOnB = await destination.owner.call<{ keys: Array<{ keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }> }>("api_keys_list", { deploymentId: receiptB.id });
+  const keysOnB = await destination.owner.call<{ keys: Array<{ keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }> }>("api_keys_list", { projectId: receiptB.id });
   assert.deepEqual(keysOnB.keys.map(({ keyId, name, files, revokedReason }) => ({ keyId, name, files, revokedReason })),
     [{ keyId: key.keyId, name: "Cover mirror", files: ["public"], revokedReason: "import" }]);
   assert.equal(typeof keysOnB.keys[0].revokedAt, "number");
-  const invitationsOnB = await destination.owner.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { deploymentId: receiptB.id });
+  const invitationsOnB = await destination.owner.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { projectId: receiptB.id });
   check("Import", `The destination serves ${receiptB.url} under invitation; Ana, Ben and Cy sign in with their passwords, the organizer role, rows, cover and note bytes are intact, Ben still cannot read Ana's note, origin sessions answer 401, the origin key answers invalid-api-key and the destination lists it as "Cover mirror", public files, revoked at import. Invitation history travelled as ${invitationsOnB.invitations.map((item) => item.status).join(", ")}.`);
 
   const [contractCode, , contractErr] = await cli(["contract", "--dir", root]);

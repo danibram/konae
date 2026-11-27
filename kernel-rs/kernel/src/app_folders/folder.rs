@@ -72,6 +72,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let dist_digest = version_of(&dist);
     let server_artifact = crate::functions::read_artifact(&layout::server(root, id))?;
     let server = crate::functions::validate_artifact(server_artifact.as_ref().map(|a| &a.manifest), server_artifact.as_ref())?;
+    crate::functions::enable_cron_modules(&mut settings.modules, server.as_ref().map(|server| &server.manifest));
     let server_changed = released.as_ref().is_some_and(|r| r.server != server);
     let rebuilt = server_changed || released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
     let candidate_sources = state.execution_mode.is_test();
@@ -125,19 +126,18 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
                 files.insert("actions.json".to_owned(), actions.clone());
                 files.insert("schema.sql".to_owned(), schema.clone());
                 if let Some(document) = &schema_transforms { files.insert("schema-transforms.json".to_owned(), document.clone()); }
-                let function_source = if candidate_sources || rebuilt || fresh_sources {
-                    optional_text(&sources.join("functions.json")).await?
-                } else {
-                    server.as_ref().map(|published| serde_json::to_string(&published.manifest)).transpose()?
-                };
-                if let Some(source) = function_source {
-                    let declared = crate::functions::read(&source)?;
-                    for function in declared.functions.values() {
-                        if candidate_sources || rebuilt || fresh_sources {
+                if candidate_sources || rebuilt || fresh_sources {
+                    let function_source = optional_text(&sources.join("functions.json")).await?;
+                    let cron_source = optional_text(&sources.join("crons.json")).await?;
+                    if let Some(declared) = crate::functions::read_sources(function_source.as_deref(), cron_source.as_deref())? {
+                        for function in declared.functions.values() {
                             if let Ok(text) = tokio::fs::read_to_string(sources.join(&function.entry)).await { files.insert(function.entry.clone(), text); }
                         }
                     }
-                    files.insert("functions.json".into(), source);
+                    if let Some(source) = function_source { files.insert("functions.json".into(), source); }
+                    if let Some(source) = cron_source { files.insert("crons.json".into(), source); }
+                } else if let Some(server) = &server {
+                    files.extend(server.manifest.source_files()?);
                 }
                 files
             },
@@ -166,7 +166,9 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let program: crate::ActionProgram = serde_json::from_str(&actions)?;
     let _database = crate::database_lock(state, id).await;
     let database = layout::database(root, id);
-    if actions_enabled { tokio::fs::create_dir_all(layout::data(root, id)).await?; }
+    if actions_enabled || server.is_some() {
+        tokio::fs::create_dir_all(layout::data(root, id)).await?;
+    }
     if actions_enabled && !database.exists() {
         initialize_database(&database)?;
     }
@@ -555,6 +557,35 @@ mod tests {
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_folder_with_functions_and_no_actions_has_room_for_usage() {
+        let root = scratch();
+        let id = "function_only";
+        let state = AppState::for_test(&root);
+        let input: DeployInput = serde_json::from_value(crate::functions::tests::release(
+            id, "export function handle() { return new Response('ok'); }",
+        )).unwrap();
+        let sources = layout::sources(&root, id);
+        std::fs::create_dir_all(sources.join("functions")).unwrap();
+        for (name, source) in input.project.files {
+            std::fs::write(sources.join(name), source).unwrap();
+        }
+        let dist = layout::dist(&root, id);
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), &input.artifact.files["index.html"]).unwrap();
+        crate::functions::stage(&layout::server(&root, id), input.server_artifact.as_ref()).await.unwrap();
+        let mut settings = Settings::new(id, "Function only", id, &json!({"visibility": "public"}));
+        settings.modules.get_mut("functions").unwrap()["on"] = json!(true);
+        settings.write(&root).await.unwrap();
+
+        assert!(!layout::data(&root, id).exists());
+        let deployment = open(&state, id, None).await.unwrap();
+        assert!(layout::data(&root, id).is_dir());
+        assert!(!crate::modules::is_on(&deployment.modules, "actions"));
+        assert!(!layout::database(&root, id).exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

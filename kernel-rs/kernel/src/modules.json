@@ -49,7 +49,13 @@
         "app accounts or invitations",
         "authenticated actions",
         "actor bindings"
-      ]
+      ],
+      "data": {
+        "version": 1,
+        "components": [
+          "identity"
+        ]
+      }
     },
     "actions": {
       "summary": "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
@@ -62,7 +68,22 @@
         "actions.json",
         "schema.sql",
         "miniapp.actions"
-      ]
+      ],
+      "data": {
+        "version": 2,
+        "reserved": [
+          "__konae_schema_state",
+          "__konae_schema_history",
+          "__konae_notify_intents"
+        ],
+        "components": [
+          "database"
+        ],
+        "migrations": [
+          "schema-transforms",
+          "notify-intents"
+        ]
+      }
     },
     "page": {
       "summary": "Values from the page address. The Kernel fills params when a declared page path answers.",
@@ -103,7 +124,14 @@
       ],
       "uses": [
         "miniapp.files"
-      ]
+      ],
+      "data": {
+        "version": 1,
+        "components": [
+          "files"
+        ],
+        "objects": "file-index"
+      }
     },
     "calls": {
       "summary": "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
@@ -116,7 +144,19 @@
       ],
       "uses": [
         "actions.json kind=call"
-      ]
+      ],
+      "data": {
+        "version": 1,
+        "components": [
+          "database"
+        ],
+        "reserved": [
+          "__konae_calls"
+        ],
+        "migrations": [
+          "calls-app-outbox"
+        ]
+      }
     },
     "http": {
       "summary": "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
@@ -177,8 +217,36 @@
       "agentRule": "after-owner-confirms",
       "requires": [],
       "uses": [
-        "functions.json"
-      ]
+        "functions.json",
+        "crons.json"
+      ],
+      "data": {
+        "version": 1,
+        "components": [
+          "database"
+        ],
+        "reserved": [
+          "__konae_function_receipts"
+        ],
+        "migrations": [
+          "function-receipts"
+        ]
+      }
+    },
+    "usage": {
+      "summary": "Per-app usage records.",
+      "switch": false,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "never",
+      "requires": [],
+      "uses": [],
+      "data": {
+        "version": 1,
+        "components": [
+          "usage"
+        ]
+      }
     }
   }
 }

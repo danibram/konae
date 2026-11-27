@@ -60,7 +60,8 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
                 && !path.starts_with(".well-known/")
                 && path != "mcp"
                 && path != "server" && !path.starts_with("server/")
-                && path != "functions" && !path.starts_with("functions/"),
+                && path != "functions" && !path.starts_with("functions/")
+                && (path != "crons.json" || !input.project.files.contains_key("crons.json")),
             "Invalid or reserved artifact path."
         );
     }
@@ -83,30 +84,38 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     crate::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
     let empty_actions = r#"{"version":1,"actions":{}}"#;
     let actions_source = input.project.files.get("actions.json").map(String::as_str).unwrap_or(empty_actions);
+    let functions = crate::functions::read_sources(
+        input.project.files.get("functions.json").map(String::as_str),
+        input.project.files.get("crons.json").map(String::as_str),
+    )?;
     let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
     let initial_modules = input.initial_modules.as_ref().or(package_modules);
-    let mut candidate_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone()).unwrap_or_else(|| crate::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
+    let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
+    let first_release = existing_modules.is_none();
+    let mut candidate_modules = existing_modules.unwrap_or_else(|| crate::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
+    crate::functions::enable_cron_modules(&mut candidate_modules, functions.as_ref());
     if input.project.manifest["fileAccess"] == "app-users" {
         let files = candidate_modules.get_mut("files").expect("files is switchable");
         files["on"] = serde_json::json!(true);
         files["fileAccess"] = serde_json::json!("app-users");
     }
-    if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
+    if first_release
         && initial_modules.is_none_or(|modules| !modules.contains_key("actions")) && uses_actions {
         candidate_modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
+    }
+    if first_release
+        && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
+        && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {
+        candidate_modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
+    }
+    if let Some(manifest) = functions.as_ref().filter(|manifest| !manifest.crons.is_empty()) {
+        manifest.check_modules(&candidate_modules)?;
     }
     for module in crate::modules::release_use_order() {
         let used = match module.as_str() { "files" => uses_files, "actions" => uses_actions, "http" => uses_http, "calls" => uses_calls, _ => false };
         if used { crate::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
     }
     let program = crate::action_shape::read(actions_source)?;
-    let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
-    candidate_modules = existing_modules.unwrap_or(candidate_modules);
-    if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
-        && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
-        && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {
-        candidate_modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
-    }
     if input.visibility != "public" && !crate::modules::is_on(&candidate_modules, "auth") {
         return Err(anyhow::Error::new(crate::modules::check_private_auth(false).unwrap_err()));
     }
@@ -115,7 +124,6 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         return Err(anyhow::Error::new(crate::modules::require_on(&candidate_modules, "auth").unwrap_err()));
     }
     if uses_actions { crate::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
-    let functions = input.project.files.get("functions.json").map(|source| crate::functions::read(source)).transpose()?;
     if let Some(manifest) = &functions {
         let files = input.project.files.keys().cloned().collect();
         let actions: Value = serde_json::from_str(actions_source)?;
@@ -155,7 +163,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         } else {
             initialize_database(&temp)?;
         }
-        crate::schema_change::apply_with_transforms(
+        let change = crate::schema_change::apply_with_transforms(
             &temp,
             input
                 .project
@@ -166,7 +174,8 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
             &program,
             input.project.files.get("schema-transforms.json").map(String::as_str),
             crate::schema_change::Mode::Plan,
-        )
+        )?;
+        Ok(change)
     })();
     let _ = tokio::fs::remove_file(temp).await;
     result

@@ -58,7 +58,7 @@ pub use app_data::{connection as app_db, schema_change, schema_transform};
 pub use actions::{
     ActionBinding, ActionDefinition, ActionLock, ActionProgram, Ran, ResultBudget, SqlTok,
     SqlTokKind, action_lock, aggregate_select_list, bounded_row, bounded_rows, is_sql_word_cont,
-    is_sql_word_start, json_sql, limit_index, resolve_bindings, run_action, run_action_in_slot,
+    is_sql_word_start, json_sql, limit_index, resolve_bindings, run_action, run_action_in_slot, run_action_in_slot_with_notify,
     run_mutation, run_mutation_on_connection, run_query, run_query_on_connection,
     sql_json, sql_tokens, unbounded_query_reason, validate_action, validate_declarations,
 };

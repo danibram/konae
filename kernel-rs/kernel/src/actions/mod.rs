@@ -11,9 +11,10 @@ mod validation;
 
 pub use binding::{json_sql, resolve_bindings};
 pub use execution::{
-    Ran, run_action, run_action_in_slot, run_mutation, run_mutation_on_connection, run_query,
+    Ran, run_action, run_action_in_slot, run_action_in_slot_with_notify, run_mutation, run_mutation_on_connection, run_query,
     run_query_on_connection,
 };
+pub(crate) use execution::run_mutation_effects_on_connection;
 pub use lock::{ActionLock, action_lock};
 pub use model::{ActionBinding, ActionDefinition, ActionProgram};
 pub use results::{ResultBudget, bounded_row, bounded_rows, sql_json};

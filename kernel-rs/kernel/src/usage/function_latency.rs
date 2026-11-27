@@ -77,24 +77,24 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
 }
 
 pub(super) fn write(db: &Connection, at: u64, sample: &FunctionTiming) -> Result<()> {
-    db.execute(
+    db.prepare_cached(
         "INSERT INTO function_latency(at,name,version,budget_us,total_us,queue_us,
           initialization_us,execution_us,cold,timed_out,outcome)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-        params![
-            at as i64,
-            sample.name,
-            sample.version,
-            sample.budget.as_micros() as i64,
-            sample.total.as_micros() as i64,
-            sample.queue.as_micros() as i64,
-            sample.initialization.as_micros() as i64,
-            sample.execution.as_micros() as i64,
-            sample.cold,
-            sample.timed_out,
-            sample.outcome.name()
-        ],
-    )?;
+    )?
+    .execute(params![
+        at as i64,
+        sample.name,
+        sample.version,
+        sample.budget.as_micros() as i64,
+        sample.total.as_micros() as i64,
+        sample.queue.as_micros() as i64,
+        sample.initialization.as_micros() as i64,
+        sample.execution.as_micros() as i64,
+        sample.cold,
+        sample.timed_out,
+        sample.outcome.name()
+    ])?;
     Ok(())
 }
 
@@ -223,7 +223,8 @@ pub(super) fn read(path: &std::path::Path, from: i64, to: i64) -> Result<Value> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::Batch;
+    use crate::usage::{Batch, DAY_MS, Message, day, read_usage, writer};
+    use std::sync::mpsc::sync_channel;
 
     struct Fixture(std::path::PathBuf);
     impl Fixture {
@@ -311,19 +312,40 @@ mod tests {
     #[test]
     fn retention_is_bounded_and_declared_to_the_reader() {
         let fixture = Fixture::new();
-        let now = 1_800_000_000_000;
-        let batch = Batch {
-            function_timings: (0..MAX_SAMPLES + 5)
-                .map(|n| (now + n as u64, timing(10)))
-                .collect(),
-            ..Batch::default()
-        };
-        crate::usage::write(&fixture.0, &batch, now + 20_000).unwrap();
+        let midnight = crate::now_ms() / DAY_MS * DAY_MS;
+        let now = midnight - 5;
+        let (send, receive) = sync_channel((MAX_SAMPLES + 5) as usize);
+        for n in 0..MAX_SAMPLES + 5 {
+            send.send(Message::FunctionLatency {
+                folder: fixture.0.clone(),
+                at: now + n as u64,
+                timing: timing(10),
+            })
+            .unwrap();
+        }
+        drop(send);
+        writer(receive);
         let summary = read(&fixture.path(), now as i64, now as i64 + 20_000).unwrap();
         assert_eq!(summary["series"][0]["samples"], MAX_SAMPLES);
         assert_eq!(summary["prunedThrough"], now + 4);
         assert_eq!(summary["retainedFrom"], now + 5);
         assert_eq!(summary["retainedOnly"], true);
+        let yesterday = day(now);
+        let today = day(midnight);
+        let usage = read_usage(&fixture.path(), &yesterday, &today).unwrap();
+        assert_eq!(
+            usage["days"],
+            json!([
+                {"day": yesterday, "kind": "function", "name": "orders", "count": 5},
+                {"day": today, "kind": "function", "name": "orders", "count": MAX_SAMPLES},
+            ])
+        );
+        assert_eq!(
+            usage["totals"],
+            json!([
+                {"kind": "function", "name": "orders", "count": MAX_SAMPLES + 5},
+            ])
+        );
         let db = Connection::open(fixture.path()).unwrap();
         assert_eq!(
             db.query_row("SELECT COUNT(*) FROM function_latency", [], |r| r

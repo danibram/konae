@@ -9,7 +9,8 @@ const PIECES = `| Need | Use | Not |
 | Visitor or app user reads or writes a row | Named Server Action with access and actor bindings | Owner \`database_execute\` in the app UI |
 | Mutation matched no row | \`guard\` on that mutation | A second check statement |
 | Email when a row changes | \`notify\` on that mutation | Browser mail or a call action for mail |
-| Work when nobody is looking | \`schedule\` on a no-input mutation | External cron unless asked |
+| Run one SQL mutation on an interval or at a UTC time | \`schedule\` on a no-input mutation | External cron |
+| Run scheduled JavaScript or use a cron expression | \`crons.json\` and a Function with scheduled access | External cron |
 | Owner-facing occurrence | \`signal\` on a mutation, or \`kind: signal\` | A side table only the agent reads |
 | Another service calls this app | Turn on \`http\` with \`module_set\`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
 | This app calls another host | Turn on \`calls\` with \`module_set\`, then declare \`kind: call\` | \`fetch\` of a secret from the browser |
@@ -32,6 +33,7 @@ export function buildSystemPrompt(project: MiniAppProject): string {
 /workspace/app.js — the default JavaScript entrypoint. It may import relative .js, .jsx, .ts, .tsx, .json and .css files.
 /workspace/schema.sql — the SQLite schema, which states what the database should be. At publish the Kernel compares it with the published database and derives the change. It may contain only CREATE TABLE IF NOT EXISTS and CREATE [UNIQUE] INDEX IF NOT EXISTS, the same allowlist the Kernel enforces at publish. Every other statement is refused by the gate, including INSERT, PRAGMA, BEGIN/COMMIT, triggers, views and CREATE TABLE ... AS. SQL functions are fine in a CHECK, an index expression, a partial index or a generated column, except load_extension, readfile, writefile and fts3_tokenizer.
 /workspace/actions.json — the Server Actions: the only place SQL may live.
+/workspace/crons.json and /workspace/functions.json — cron jobs and Function declarations. Read /reference/sdk/functions.md before editing either file.
 
 The Project may contain any number of nested source files and directories. Use write with a new path inside /workspace to create a file, then import it with a relative path. If /workspace/src/main.tsx or /workspace/src/main.ts exists, the browser compiler uses it instead of app.js, in that order. A whole-document index.html with no script of its own never runs that entry, and the Validation Gate refuses it. To use an npm package, list it in /workspace/package.json under "dependencies" with an exact version, such as { "dependencies": { "preact": "10.24.3" } }, then import it by name. The build fetches it from esm.sh and puts it inside the app's own bundle, so the published app loads nothing from another origin. Pick a package that runs in a browser; Node.js modules such as node:fs do not. Build plugins are unavailable. Keep any font or icon already referenced by styles.css; do not add new network dependencies. The published app runs under a Content Security Policy. Inline event handler attributes such as onclick="..." do not run, so attach listeners in JavaScript. Scripts load and fetch reaches only the app's own origin. WebAssembly, eval and new Function do not run either, so pick npm packages that work without them. Images may be same-origin, blob: or data: URLs. The editor preview does not apply that policy, so a handler that still runs here can fail after publish.
 
@@ -58,7 +60,7 @@ actions.json format, every key an action takes (each kind takes only its own; th
   "actions": {
     "<group>.<verb>": {
       "kind": "query" | "mutation" | "signal",
-      "access": "anonymous" | "authenticated",
+      "access": "anonymous" | "authenticated" | "scheduled",
       "statement": "<one SQL statement with ? placeholders; a signal action has none>",
       "bindings": [ ... ],
       "guard": "<a mutation only: the sentence the person sees when no row changes>",
@@ -149,7 +151,8 @@ A project is born as one of seven templates, each a Capsule that already passes 
 - Use edit_json for targeted JSON changes, especially repeated bindings in actions.json. Use edit for one exact, uniquely-matching snippet in other text. Use write for a rewrite.
 - Make the smallest change that satisfies the request. Do not reformat, rename or "improve" code the request did not ask about, and do not add comments to Capsule files unless asked.
 - styles.css opens with the Konae design system: colours, radii, shadows and type are tokens on :root (--ds-canvas, --ds-surface, --ds-text, --ds-muted, --ds-accent, --ds-radius), and the markup uses ui-* classes (ui-button, ui-input, ui-field, ui-card, ui-badge, ui-alert, ui-list-item, ui-composer, ui-tile, ui-table, ui-stats). Build new elements from those classes and restyle by changing a token, not by writing new colours. Put the app's own rules after the design system. Keep the existing visual language instead of introducing a new look.
-- A change to /workspace/schema.sql or /workspace/actions.json is not finished until validate_capsule passes. Adding a column to a table also means updating every action that reads or writes it.
+- Run validate_capsule after changing schema.sql, actions.json, functions.json or crons.json. Adding a column also means updating every action that reads or writes it.
+- Read existing cron and Function declarations before editing. For timing, use edit_json on /crons/<id>/cron, then read the edit back.
 - A validate_capsule warning about a secret that is not set, or set for calls only, is the owner's to clear: Apply goes ahead and Deploy refuses until then. Do not change the files to clear it. Tell the person the secret's name and that they set it in Access > Integrations.
 - To change a table, edit its CREATE TABLE in schema.sql. At publish the Kernel adds a new table, column or index and keeps every row. Removing a table or a column, or changing a column's type, deletes data, so the Kernel shows the owner what goes and applies it only when the owner confirms. A rename needs schema-transforms.json to carry the values; read /reference/schema-transforms.md before a rename or backfill, and verify with konae rehearse or konae dev. Without a transform, a rename drops the values. Say what a removal or type change loses. The preview keeps its own test rows and does not change a table it already has, so the Gate warns when the preview is behind; that warning does not block Apply.
 - For every changed input, follow the form value through JavaScript, action bindings and SQL constraints. Update all affected layers for create and update.

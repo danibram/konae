@@ -2,6 +2,8 @@
 
 Declare `schedule` on a mutation that takes no input, and the Kernel's own timer runs it when nobody is looking.
 
+If the work needs JavaScript or a five-field cron expression, [schedule a Function](../functions.md#run-a-function-on-a-cron-schedule) in `app/crons.json`.
+
 ## How it works
 
 A schedule fits work such as releasing a hold that lapsed or closing a day. The Kernel's timer looks once a minute and runs the action at the first look after its period opens. A run has no caller, so an `actor` binding is null and the guard does not apply. A run takes the Deployment's data lock and has the same 2-second statement budget as a call.
@@ -35,7 +37,7 @@ A schedule fits work such as releasing a hold that lapsed or closing a day. The 
     }
     ```
 
-5. To watch a run without waiting, start `konae dev` with `KONAE_SCHEDULE_MIN_SECONDS`, a number from 1 to 300. Every schedule then runs once every that many seconds. The Kernel takes it only on a loopback address.
+5. Start `konae dev` and run `konae test schedule days.close` to run the mutation once. Read the result with `konae events`.
 
     ```sh
     KONAE_SCHEDULE_MIN_SECONDS=10 bun run konae -- dev --dir <folder>
@@ -52,11 +54,11 @@ A schedule fits work such as releasing a hold that lapsed or closing a day. The 
 
 ## Check it worked
 
-- Read the runs with `usage_summary` and the project's `projectId`, plus `from` and `to` dates. It returns the newest 500 scheduled runs in the range with `action`, `at`, `outcome`, `changes` and, for a failed run, `error`. On `konae dev`, `bun run konae -- events --dir <folder>` lists them.
+- Read the runs with `usage_summary` and the project's `projectId`, plus `from` and `to` dates. It returns the newest 500 scheduled runs in the range, including row counts for mutations. On `konae dev`, `bun run konae -- events --dir <folder>` lists them.
 - Call the query that reads the rows the run wrote, through the page.
 - After `release_apply`, read the Deployment back with `project_inspect`.
 
-The editor preview has no schedule timer and no Usage store. Try schedules on `konae dev` or on a published Deployment.
+Use `konae dev` for manual runs and a published Deployment for automatic runs.
 
 ## Read next
 

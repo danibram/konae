@@ -1,4 +1,4 @@
-import { parseFunctions, validateFunctions, validateServerArtifact, FUNCTIONS_ABI, type ServerArtifact } from "../kernel/functions";
+import { parseFunctionSources, withCronModules, validateFunctions, validateServerArtifact, FUNCTIONS_ABI, type ServerArtifact } from "../kernel/functions";
 import { refusal } from "../kernel/refusal";
 import * as esbuild from "esbuild-wasm";
 import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
@@ -12,21 +12,22 @@ import { sdkRequired } from "../lib/module-use";
 let initialized: Promise<void> | undefined;
 
 export async function buildProjectInBrowser(project: MiniAppProject): Promise<BuildArtifact> {
-  const source = project.files["functions.json"];
-  const manifest = source === undefined ? undefined : parseFunctions(source);
+  const manifest = parseFunctionSources(project.files["functions.json"], project.files["crons.json"]);
   const actions = JSON.parse(project.files["actions.json"] ?? '{"actions":{}}').actions ?? {};
-  if (manifest) validateFunctions(manifest, { files: Object.keys(project.files), modules: project.modules, actions });
+  const modules = withCronModules(manifest, project.modules, actions);
+  const context = { files: Object.keys(project.files), modules, actions };
+  if (manifest) validateFunctions(manifest, context);
   const artifact = await assembleStaticArtifact({
     paths: Object.keys(project.files),
     read: async (path) => sourceContents(project, path),
-    compile: () => compileProjectInBrowser(project, { release: true }),
+    compile: () => compileProjectInBrowser({ ...project, modules }, { release: true }),
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
-    sdk: sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined),
+    sdk: sdkRequired(context.modules, project.files, project.manifest.visibility as string | undefined),
     routing: project.manifest.routing,
   });
   if (!manifest || !Object.keys(manifest.functions).length) return artifact;
-  validateFunctions(manifest, { files: Object.keys(project.files), modules: project.modules, actions, staticPaths: Object.keys(artifact.files) });
+  validateFunctions(manifest, { ...context, staticPaths: Object.keys(artifact.files) });
   const bundles: Record<string, string> = {};
   for (const [name, fn] of Object.entries(manifest.functions)) {
     const bundle = await bundleInBrowser(project, textFiles(project), fn.entry, true, true, name);

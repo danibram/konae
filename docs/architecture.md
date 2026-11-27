@@ -1,10 +1,190 @@
 # Konae architecture
 
-## Product rule
+## Complete architecture
 
-A new app starts no process, VM or container. It is one app folder: a static Build Artifact, a SQLite database and the declarations the Kernel runs. Functions starts a child worker only when an admitted request needs one, then keeps it warm until its idle timeout. A recently used app can retain worker memory during that interval.
+This map shows the running Kernel and the proposed additions. Plain boxes are existing capabilities. Blue boxes are implemented shared Kernel services and their current consumers. Orange boxes remain proposed. Each app keeps its own accounts, rows and access rules.
 
-The Kernel decides who an actor is, whether a Deployment is public or private, and which action that actor may call. A proxy, an S3 store or a mail provider stores or carries bytes and makes no access decision.
+```mermaid
+flowchart TB
+  AUTHORS["Editor + agent · CLI + Git"]
+  USERS["Browser SDK · external clients"]
+  DEVICE["Devices"]
+  subgraph PLATFORM["Konae · owner operations"]
+    OWNER["Owner accounts + OAuth + MCP"]
+    PROJECT["Projects + source revisions + conversations<br/>app files declare operations, inputs and access"]
+    GATE["Validation Gate + build<br/>refuse invalid app contracts before publication"]
+    OWNER --> PROJECT --> GATE
+  end
+  AUTHORS --> OWNER
+  subgraph KERNEL["Kernel · shared by all apps"]
+    subgraph LIFE["Publication and app lifecycle"]
+      REG["Module registry + contracts + data inventory"]
+      RELEASE["Deployments + compatibility + coherent activation"]
+      PORT["App folders + export / import + copies / restore"]
+      REG --> RELEASE
+      RELEASE --> PORT
+    end
+    ENTRY["HTTP, MCP, Functions, cron, schedules<br/>resolve app + release + actor/job · admit authority and limits"]
+    subgraph MODS["App modules · each owns its operations and permissions"]
+      AUTH["auth<br/>accounts, sessions, invitations"]
+      ACTIONS["actions<br/>named SQL, guards, actor bindings"]
+      PAGE["page<br/>declared paths and parameters"]
+      HTTP["http<br/>routes, keys and signatures"]
+      CALLS["calls<br/>outbound requests and completions"]
+      FILES["files<br/>upload, access, list and delete"]
+      FUNCTIONS["functions<br/>JavaScript and allowed operations"]
+      SEO["seo<br/>canonical, cards, robots and sitemap"]
+      DOCUMENTS["documents · new<br/>issue and download"]
+      INTAKE["file intake · new<br/>versions and change events"]
+    end
+    subgraph COMMON["Shared Kernel services"]
+      TX["App transactions + idempotency<br/>commit rows, receipts and effect intentions together"]
+      BLOBS["Blob storage + quotas<br/>module-owned references"]
+      JOBS["Bounded fair dispatcher<br/>per-app admission, wake-up and recovery"]
+      HANDLERS["Module handlers<br/>Calls + Notify; transport stays behind handlers"]
+      INVENTORY["Registered data inventory<br/>reserved tables + versions + migrations + export components"]
+      TIMER["Schedule + cron<br/>produce declared work"]
+      MAIL["Notify + account mail<br/>recipient verification and delivery"]
+      OBS["Usage + Signals + execution status<br/>operation counts and outcomes · Function latency"]
+      ROUTING["Routing + static serving<br/>hosts, domains, paths and CSP"]
+      RUNNER["Worker supervision<br/>timeouts, memory and bounded IPC"]
+    end
+    RELEASE --> ENTRY
+    ENTRY --> MODS
+    ENTRY --> ROUTING
+    MODS --> COMMON
+    REG --> INVENTORY
+    INVENTORY --> RELEASE
+    INVENTORY --> PORT
+    TIMER --> ENTRY
+    JOBS --> HANDLERS
+    FUNCTIONS --> RUNNER
+    DOCUMENTS -.-> RUNNER
+    TX -->|"after commit"| JOBS
+  end
+  GATE --> REG
+  USERS --> ENTRY
+  subgraph ADAPTERS["Runtime and installation adapters"]
+    JS["JavaScript runner<br/>deno_core"]
+    TYPST["Typst process · new"]
+    FTP["Multi-app FTPS listener · new"]
+    PROVIDERS["SMTP / Resend · HTTP services"]
+    STORAGE["Local disk / S3"]
+  end
+  DEVICE --> FTP -->|"app and source credential"| ENTRY
+  RUNNER --> JS
+  RUNNER -.-> TYPST
+  MAIL --> PROVIDERS
+  HANDLERS --> PROVIDERS
+  BLOBS --> STORAGE
+  subgraph DATA["Persistent state"]
+    APPDATA["Per app<br/>sources + release + accounts + rows<br/>module state + pending work + blob references"]
+    HOSTDATA["Per installation<br/>owners + projects + credentials<br/>bindings + delivery bookkeeping"]
+  end
+  TX --> APPDATA
+  PORT --> APPDATA
+  OWNER --> HOSTDATA
+  PROJECT --> HOSTDATA
+  classDef evolved fill:#d9e6ff,stroke:#3159a3,color:#172b4d
+  classDef proposed fill:#ffe0c5,stroke:#b85818,color:#63300d
+  class REG,RELEASE,PORT,TX,JOBS,HANDLERS,INVENTORY evolved
+  class DOCUMENTS,INTAKE,FTP,TYPST proposed
+```
+
+The registry describes each module's state, reserved tables, format version and export components. Publication checks pending work against the candidate schema before activation. HTTP, MCP, Functions, schedules and cron resolve an app-scoped execution context with its accepted release, actor or job, typed job authority, permissions and limits. Calls and Notify handlers claim their durable records through the in-process fair dispatcher; each handler keeps its own retry rules and hands network work to its transport. Blue boxes mark shared services in use. Orange boxes mark proposed additions.
+
+### What app authors must declare
+
+Konae requires app authors to make backend decisions in the app's declarations. The Kernel enforces the accepted contract whenever the operation runs. Authors should receive access checks, resource limits, transaction handling and operational records by using that contract, without writing middleware for each app. Functions must use the same declared operations and verified identity.
+
+| Author decision | Enforcement in the current Kernel | Benefit for the app |
+| --- | --- | --- |
+| Name an operation and declare its input bindings | Both validation doors check the declaration; the Kernel binds input to prepared SQL. The browser has no generic SQL endpoint. | Invalid inputs fail before SQL execution; the operation has a stable name for usage records. |
+| Declare access and use the verified actor in row rules | The Kernel checks access and supplies actor bindings. Input cannot replace the actor. | Identity checks are shared by SDK, HTTP and Function calls. The app still owns its row policy. |
+| Bound row reads and use declared queries or mutations | Validation requires bounded queries. Runtime applies result budgets, deadlines and SQL admission. GET Functions cannot invoke mutations. | Requests have resource limits without each author implementing them. |
+| Request an effect through its module | Notify intentions commit with the mutation. Calls retains its accepted request and continuation. | The app does not need its own notification queue or recovery loop. |
+| Declare a Function's allowed actions | The Kernel checks the allowlist and actor on each call. A POST with allowed actions requires an idempotency key and stores its receipt with the changes. | JavaScript cannot acquire additional authority; a replay cannot duplicate a committed Function mutation. |
+| Keep app state in declared schemas and module-owned storage | The lifecycle code packages accounts, rows, module records and referenced blobs. | Moving the app uses the same export path as other apps. |
+
+The Kernel records usage and execution outcomes on the supported operation paths, and Functions also records timing. Signals describe occurrences the author explicitly names. Operational telemetry must not require an app to emit its own Signal for every request.
+
+### Contract work still needed
+
+`authenticated` proves an identity, not the correctness of arbitrary row-filtering SQL. The Kernel cannot infer whether a table belongs to a household, an organization or every app user. The next access-contract work should require an explicit scope and allowed/denied examples that run through both doors and after import. It must preserve app-defined roles. Today the portable permission examples demonstrate these checks, but publication does not require every app to supply them.
+
+Idempotency is currently guaranteed for the declared Function POST contract and internal durable work. Ordinary Server Action mutations do not acquire that guarantee automatically. A future mutation retry contract must define its key, scope and replay result before the Kernel accepts automatic retries.
+
+Each new module must expose its operation name, outcome and resource use through the common execution path. Uniform cross-module timing and correlation are still extension work; the current Functions timing store is not a complete tracing system. The acceptance test for a module must invoke it through every supported entry, reject unauthorized input, exercise its budget, inspect its operational record and move its state to another Kernel. Missing runtime guarantees cannot be replaced by a recommendation in the app's README.
+
+### Dependencies between the boxes
+
+| Caller | Uses | Reason |
+| --- | --- | --- |
+| Files | Auth, blob storage | Account-owned uploads and byte storage |
+| HTTP | Actions | Expose named actions through declared routes |
+| Page | Actions, routing | Resolve declared page paths and parameters |
+| SEO | Routing and published page metadata | Generate addresses and search metadata |
+| Calls | Actions, durable work, HTTP transport | Commit an outgoing request and later apply its completion |
+| Functions | Worker supervisor, explicitly allowed operations | Run app code with a fixed actor and bounded authority |
+| Schedule and cron | Actions or Functions | Start the declared operation at its due time; committed effects wake their dispatcher |
+| Notify | Mutation result, verified recipient, mail transport | Request an email after an accepted mutation |
+| Documents | Actions, transactions, blobs, dispatcher, Typst | Freeze document input, render it and authorize downloads |
+| File intake | Transactions, blobs, dispatcher | Accept a version and record its change for declared consumers |
+| FTPS adapter | File intake | Translate a device transfer into an accepted app version |
+| Export, import, copies and cleanup | Every module's data inventory | Preserve live state and pending work, identify referenced bytes |
+| Usage and Signals | Execution outcomes and declared signals | Report what happened without controlling domain decisions |
+
+Functions requires Actions when its declaration invokes actions. Documents requires Auth when its access query requires an app session. Intake requires Functions when its consumer is JavaScript. A module's declaration determines these dependencies.
+
+### The architectural changes
+
+| Shared piece | Implemented behavior | Extension point |
+| --- | --- | --- |
+| Module registry | `modules.json` and the compiled registry own module settings, reserved table names, state versions and export components. Schema migration and SQL authorization consult registered names. | A module registers its tables, version, migration and export components once. |
+| Execution and transactions | `execution::Context` carries app, release, actor or job, typed job authority, allowed operations and limits. Actions, Functions, schedules and Calls continuations use the same authority checks. Typed effects prepare receipts and Notify intents on the app transaction's connection. | New in-process handlers receive the context and connection-owned services without depending on a JavaScript engine. |
+| Background execution | The bounded in-process dispatcher admits work per app and resource, rotates app turns and recovers committed work at startup, import and maintenance resume. Calls and Notify use real handlers. | A module adds a handler and keeps its own durable record, retry policy and transport adapter. |
+| Publication and lifecycle | The publisher checks pending Calls against the candidate schema before activation. Static GET captures bytes and ETag under the lock for the same release, including rollback. | A module declares retained inputs and compatibility checks before adding a data migration. |
+| Export and import | Registered reserved names and export components keep internal state known to schema migration, SQL authorization and portable packages, including when Actions is off. | New module state joins the registered inventory and the existing package path. |
+
+Mail delivery remains at installation scope. New Calls live in each app's `database.sqlite` beside its rows. The Calls registry declares its table, format version and migration. The offline queue migration transfers old installation rows into the app database, keeps each `callId`, and deletes a source row only after the app commit. Account mail and owner administration keep their respective identity and installation stores. A transaction spanning app rows and an effect must use the same SQLite database. Blobs are staged before that transaction and become visible through committed references.
+
+#### Migrating the legacy queues
+
+The Kernel does not convert `calls.sqlite` during startup. The operator stops the Kernel first, then runs these commands against a local copy of the installation data. The first `queues preflight` reads installed records without upgrading app settings. It reports affected app IDs and whether their consumers are paused. Put those apps in maintenance, then run preflight again and proceed only when `consumersPaused` is true. Preflight also checks for a declaration for each pending Call in the current release, the supported `mail.sqlite` columns, and the key that opens every encrypted account link. It reports a short key fingerprint, never the key.
+
+Legacy Calls did not retain their accepted declarations. Migration fixes the currently published declaration for each old job, matching the declaration the old worker would use at that moment. If the declaration is missing or the old job requires different behavior, drain it with the previous release before migrating. New jobs retain their declaration when accepted.
+
+```sh
+export KONAE_DATA_DIR=/path/to/local-installation-copy
+export KONAE_QUEUE_CONSUMERS_PAUSED=1
+./konae queues preflight
+./kernel maintenance on --app <affected-id>
+./konae queues preflight
+./konae queues migrate
+./konae queues rollback /path/printed/by/migrate
+```
+
+Stop every process that serves this data directory before the first command. Repeat the maintenance command for every app ID returned by preflight. The exclusive Kernel lock makes migration and rollback refuse while a serving Kernel runs. `migrate` writes a checksummed backup of the queue and app databases before changing anything. It copies each Calls row transactionally and deletes its source only after the target commit, so interruption can resume without changing IDs or duplicating rows. It leaves `mail.sqlite` and all app files in place. Rollback checks every backup checksum before restoring databases and sidecars. Use rollback before resuming writes because it restores the database contents at backup time.
+
+`mail.sqlite` is an ordinary SQLite database, not an encrypted database. Account links in `jobs.link_sealed` use AES-256-GCM with the job ID as associated data. The migration reads `KONAE_MAIL_SECRET`, then `KONAE_SETUP_KEY`, then the private `mail-key` fallback, and checks the ciphertext before proceeding. Keep the same installation key through migration. Never copy it into an app folder or export. If no key opens the old bytes, use the previous release and its original key to drain those messages; a replacement key cannot decrypt them.
+
+Keep synchronous reads and short mutations on direct calls. The dispatcher handles work accepted for later execution. Load workers on demand, bound concurrency globally and per app, and give active apps turns. Keep one writer per app folder. A remote worker can execute a bounded job while its owning Kernel validates and commits the result.
+
+### How another module is added
+
+A module supplies declarations and their validation cases, typed operations with access checks, versioned state and the lifecycle hooks it needs. A module with background work also supplies a job handler. The Kernel provides an app-scoped execution context and only the services the operation declares.
+
+Register modules explicitly when compiling the Kernel. Ordinary app logic uses Actions and Functions. A new native capability adds a module and its tests. The architecture succeeds when that addition leaves unrelated modules' implementations intact and the existing publication, export and dispatch paths handle it through the registered contract.
+
+| Module responsibility | Registration point |
+| --- | --- |
+| Settings, internal tables and portable format | `modules.json`, with validation cases and the module's migration code |
+| Rows and effects in one commit | `TransactionEffect::prepare` on the supplied app connection |
+| Work after the response | A module handler, durable app records and a dispatcher resource |
+| Stored bytes | A blob-reference provider in `modules`; Files keeps its own download ACL |
+| Retained SQL requirements | A compatibility hook called by `modules::check_pending_work` inside the candidate schema transaction |
+
+Actions, Functions, Calls and Notify exercise execution and transaction services. Files exercises the blob inventory. Documents, then intake and its FTPS adapter, are the next consumers. Each addition must pass the existing publication, permissions and portability checks.
 
 ## One installation
 
@@ -28,7 +208,7 @@ flowchart TB
   subgraph data["One data directory"]
     OWNERS[("owners.sqlite<br/>mcp.sqlite")]
     APPS[("apps/#lt;id#gt;/<br/>one app folder per app")]
-    QUEUES[("mail.sqlite<br/>calls.sqlite")]
+    QUEUES[("mail.sqlite<br/>legacy calls.sqlite")]
   end
   KO --> OWNERS
   KE --> APPS
@@ -37,7 +217,7 @@ flowchart TB
   QUEUES -.-> OUT["Mail provider<br/>and other services"]
 ```
 
-An installation has a main server process and one data directory. Functions may start child runner processes on demand. Owners reach Konae on the editor host, through the editor, the CLI or an agent's MCP client. Visitors, app users and other services reach the Kernel on each app's own host. Konae keeps owners and the project list in its two stores, and the Kernel keeps one app folder per app and the queues for email and calls. The `kernel` binary is the Kernel alone, with no Konae in front.
+An installation has a main server process and one data directory. Functions may start child runner processes on demand. Owners reach Konae on the editor host, through the editor, the CLI or an agent's MCP client. Visitors, app users and other services reach the Kernel on each app's own host. Konae keeps owners and the project list in its two stores. The Kernel keeps pending Calls and Notify intents in each app folder, while the installation mail queue tracks delivery. The legacy `calls.sqlite` remains until queue migration. The `kernel` binary is the Kernel alone, with no Konae in front.
 
 ## Kernel, Konae and the functions executor
 
@@ -73,8 +253,13 @@ The Kernel groups code under `kernel-rs/kernel/src/` by the decisions it makes. 
 | `app_data/` | App database connections, schema changes, Owner SQL, and app database backups |
 | `actions/` | Action declarations, bindings, SQL rules, and execution |
 | `files/` | File access policy, the app's index, upload, listing, reads, and deletion |
-| `functions/` | Manifest and artifact checks, HTTP admission, worker reuse, and transactions for Server Actions called by Functions |
-| `integrations/` | HTTP Actions, callers and signatures, and the call action outbox |
+| `functions/` | Manifest and artifact checks, HTTP admission, worker reuse, and the Function-specific idempotency receipt |
+| `execution.rs` | App and release context, actor authority, operation limits, shared SQL admission, typed effects, and the bounded in-process dispatcher |
+| `server/state.rs`, `server/startup.rs` | Dispatcher ownership, fair admission, and recovery wake-ups |
+| `integrations/calls.rs` | Portable Calls records, accepted declaration and input, job handler, transport boundary, and guarded completion |
+| `notify.rs`, `installation/mail.rs` | Portable notice intents, per-recipient delivery state, idempotent handoff, and installation mail transport |
+| `modules.json`, `modules/` | Module state contract, reserved database objects, versions, migrations, dependencies, and package components |
+| `app_data/schema_change.rs`, `app_data/schema_transform.rs` | Registered table ownership, schema planning, and module migrations |
 | `routing/` | Hostnames, domains, path addresses, pages, static responses, and SEO |
 | `modules/` | The registry, module state, options, and dependencies |
 | `installation/`, `copies/` | Installation stores, mail delivery, maintenance, copies, restore, and revocation records |
@@ -84,9 +269,41 @@ The Kernel groups code under `kernel-rs/kernel/src/` by the decisions it makes. 
 
 Keep decisions in the module that owns the state. For example, the file URL and the runtime MCP both ask `files` which files the actor may read. The blob adapter handles the bytes. Shared case files stay in `kernel-rs/kernel/src/` so the editor and Kernel can run the same examples.
 
+### Dependencies between app modules
+
+A dependency follows a declared operation. A Function that calls a Server Action needs Actions. One that returns text can run alone. A module that shares blob storage with Files can run with Files off.
+
+| Proposed operation | What happens |
+| --- | --- |
+| Issue a document | An Actions mutation returns the document ID, recipient and snapshot. Before commit, Documents records the pending issue on the same SQLite connection and pins the template, fonts, assets and compiler version. Rollback cancels both writes. After commit a worker renders the PDF. Retries publish one result per issue ID. Downloads run the app's access query for the current actor and serve the stored PDF. |
+| Receive a file | One FTPS listener maps each credential to one app and source. Intake stages the bytes, then commits the version and a pending change before acknowledging the transfer. A new path records a creation. Replacing its contents records an update. Each event identifies the source, path and immutable version. The source declares how to recognize a retransmission after a lost acknowledgement. |
+| Process a file | The app declares a consumer for the source. The dispatcher can redeliver after a crash. The consumer reads that version and records its result once per version and consumer. A JavaScript parser would require a narrowly scoped Function input for those bytes. Intake and Documents themselves both work with Functions off. |
+
+Keep module records in Kernel-controlled tables. When a mutation promises an effect, give the module a typed way to append its record to that mutation's transaction. App SQL must have no direct write access to those tables. After a move, existing PDFs remain readable and pending work resumes once its required renderer is available. New device uploads resume once the operator binds the FTPS source.
+
+### Compatibility across Kernel versions
+
+The compiled registry is the source of reserved table names, module data versions, migrations and export components. Schema planning applies a module migration only when its registration is present. SQL authorization denies app writes to registered internal tables, and package export asks each registered module for its data components even when Actions is off. A module can therefore retain private state without enabling the app's SQL interface.
+
+Publication checks the candidate release against durable work before switching the active database or artifact. Pending Calls keep their accepted declaration and input; the publisher prepares each continuation against the candidate schema and refuses incompatible changes with `schema.pending-work`. Static GET reads access rules, bytes and ETag while holding the shared app lock, so a successful switch or rollback cannot mix revisions. These checks run in the normal plan, publish and serving paths.
+
+An unknown module explicitly set to `on: false` can remain in the folder without being executed. An active unknown module is refused. An exported package also declares versions of its module data, and import rejects unknown or unsupported declared data versions. Older packages without that field follow the existing package validation path. These checks do not make an older Kernel understand a new active capability.
+
+### Background dispatch in use
+
+Pending Calls and Notify intents live in each app database. The in-process dispatcher keeps bounded, deduplicated queues of ready app IDs and gives each app one turn. Calls and notice handoff have separate resource queues. Their handlers claim durable work from the app database, and the mail transport keeps its own installation queue and worker. Each module defines when its job has succeeded. Workers receive references to stored bytes.
+
+Each module admits at most 1,000 pending jobs of its handled kind per app. Producers signal after committing. Startup checks served apps once to recover lost signals, while import and maintenance resume signal the affected app. Each resource keeps at most one queued entry and one retry timer per app. There is no fixed cap that drops wake-ups when many apps become ready. A handler takes one job and returns the app to the queue if more work remains. Failed reads use the same retry timer with backoff. Idle apps need no repeated scans.
+
+Notice handoff uses the installation mail queue and its separate worker. Mail reconciles changed recipient outcomes in batches and records which results reached the app database. A confirmed result causes no further app writes until its delivery state changes.
+
+Start with one writer for each app folder. A worker can retry under a stable operation ID. The owning Kernel checks the result and publishes it. If attempts can overlap, check the attempt number when committing the result. When moving an app, recover its pending internal work and coordinate the handover before resuming external deliveries. An SMTP server may already have accepted a message when the sender loses its connection.
+
 ### Functions execution
 
-`functions/manifest_artifact.rs` checks declarations and reads bundled handlers. `functions/http.rs` selects the Deployment and authenticates the request. `functions/invocation.rs` binds the actor and owns the SQLite transaction and idempotency receipt. `functions/runtime.rs` keeps workers warm and can take explicit runtime configuration. The executor and runner use the same IPC protocol.
+`functions/manifest_artifact.rs` checks declarations and reads bundled handlers. `functions/http.rs` selects the Deployment and authenticates the request. `execution::Context` pins app, artifact release, actor, operation allowlist and limits. Actions, Functions, scheduled mutations and call continuations use that authority check. `functions/invocation.rs` keeps the Function transaction open across its declared actions, and its typed `FunctionReceiptEffect` writes the existing idempotency receipt on that same connection before commit. Actions run synchronous SQL directly. A Function reuses its connection, budget and admitted app and installation slots for every action it groups.
+
+`execution::TransactionEffect::prepare(&Connection)` is the in-process hook for a module-owned effect that must commit with app rows. `TransactionEffects` runs those hooks before the transaction commits. A handler must use the supplied SQLite connection, perform no network I/O, open no nested transaction and acquire no second SQL slot. Function receipts and notice intents use this hook. Calls persist their accepted declaration and input in the app database. After commit, the dispatcher wakes their module handlers. A Calls result commits only while its app, accepted release, operation ID and attempt still own the job. Notify delivery keeps its durable intent and per-recipient outcome in the app database, then transfers it idempotently to the installation mail queue.
 
 A standalone HTTP host could use the worker runtime once it has a second caller. That host would mount validated bundles and supply the capabilities it allows. Konae's app identity, Server Action permissions, and data rules belong to the Kernel host.
 
@@ -113,7 +330,7 @@ apps/<id>/
 ├── dist/               the Build Artifact the Kernel serves
 ├── server/             private Functions bundles, not served to browsers
 ├── data/
-│   ├── database.sqlite # app rows
+│   ├── database.sqlite # app rows, module state and pending Calls
 │   ├── identity.sqlite # app accounts, sessions, challenges, invitations and API keys
 │   ├── usage.sqlite    # Usage, Signals and scheduled runs
 │   ├── files/          # file index and local uploads, unless a bucket holds bytes
@@ -135,13 +352,27 @@ The `<id>` is the project's ID, and it names the Deployment too. An export hands
 
 `schema.sql` is the only model of the database. At publish, at import and when the `kernel` binary starts a folder, the Kernel compares it with the live database and derives the schema change. A new table, column or index applies. A dropped table, a dropped column or a retyped column applies only with the confirmation the plan names ([ADR-0005](./adr/0005-schema-sql-is-the-only-model-and-a-release-is-all-or-nothing.md)).
 
+### One revision per request
+
+Publishing switches `dist/` before replacing the in-memory Deployment. Static serving takes the app's shared database lock, resolves the Deployment again under that lock, and captures the artifact bytes before releasing it. The publisher holds the matching exclusive lock while it replaces the database, sources, artifact and Deployment. A GET therefore uses one release for its access rules, ETag and bytes, including when publication rolls back. Static serving drops the lock before dispatching a page action.
+
+The publisher holds the app lock only while it checks and installs the candidate database and switches release files. A release with identical `schema.sql` and schema-transform declarations checks pending Calls against the live database and skips the database copy. Other schema changes use a staged database. Before activation, the publisher prepares every pending Calls continuation against the candidate schema. A continuation that no longer prepares blocks publication with `schema.pending-work`; finishing the job permits the owner to plan and confirm the change. In a concurrent publish test, the body and ETag must belong to the same revision after success or rollback, and a second app must answer while the first is switching.
+
+### Refactor acceptance
+
+Each worker result must name the app, accepted release, operation ID and attempt. The Kernel commits a result only while that attempt still owns the job. A retry or restart must keep the accepted declaration and input. The durable Calls and Notify handlers carry these ownership checks through their normal dispatch and completion paths.
+
+Publication tests must read a response body and its ETag from one release, then repeat after a failed switch. A Calls test must enqueue under release A, publish release B, export and import the app, then deliver the saved A request and continuation.
+
+The portable Club permission case binds `notes.mine` to a freshly authenticated app actor and the row rule `notes.user_id = actor.id`. It runs allowed and denied reads against the imported database on the receiving Kernel. Its synthetic fixture is part of the tested source revision and stays outside `dist/`. The replay reports the fixture/source revision digest separately from the active artifact release. A host account does not replace the app's row decision.
+
 ## Who owns which store
 
 ```text
 <KONAE_DATA_DIR>/
 ├── apps/<id>/              the Kernel: one app folder per app
 ├── mail.sqlite             the Kernel: the email queue
-├── calls.sqlite            the Kernel: the call actions' queue and outbox
+├── calls.sqlite            the Kernel: legacy Calls rows awaiting app migration
 ├── transfers.sqlite        the Kernel: unfinished MCP transfers and upload receipts
 ├── transfers/              the Kernel: their bytes
 ├── files-store.json        the Kernel: which file store holds the bytes
@@ -164,13 +395,27 @@ The `<id>` is the project's ID, and it names the Deployment too. An export hands
 
 A bare `kernel` keeps no owner and no audit log. Under Konae the same Kernel adds `owners.sqlite` and `mcp.sqlite` to the stores a copy carries and a restore installs.
 
+Export and import temporarily hold the app in maintenance and synchronize its mail receipts. If a notice has reached `mail.sqlite` but remains pending there, the transfer refuses with a count and asks the operator to drain that queue first. Handed-off terminal and uncertain outcomes travel with the app and are not retried. Intents that have not reached the mail transport stay portable and resume after import. For a move, keep the source in maintenance until the receiving Kernel takes over.
+
 With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation's bucket, and `data/files/index.json` in the app folder still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). SQLite, sources and `dist/` stay local. With `KONAE_COPY_S3=1`, copies go to `copies/` in the same bucket and carry their own file bytes, so a copy restores a file deleted after it was made.
+
+The module inventory enumerates blob IDs and sizes from each registered provider. Export, import, copy, cleanup and `files-migrate` use that inventory regardless of the Files switch. A failed inventory read stops cleanup before deletion. An archive can carry a module's private blob without adding it to the Files index or granting access through Files.
+
+Documents and file intake will register their own references and access rules. They must count incoming bytes and compute SHA-256 while staging, then check the shared quota under the app lock when committing a reference. Their immutable records, retained render resources and transfer acknowledgements remain work for those modules.
+
+For the portability test, render one receipt with template A and leave a second pending. Publish B, export and import on another machine with Files off. Disconnect the source. The first download must match its original SHA-256. The second must render with A's distinct content. For `files-migrate`, switch from S3 to local, disconnect the bucket and run reconciliation. Verify the stored hashes of the PDF and a pending FTP version. A separate quota test should race two uploads for space that can hold only one.
 
 ## Two doors, one set of refusals
 
 A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before Apply. When actions is on, the Kernel parses the same `actions.json` and `schema.sql` at `release_plan` and when the `kernel` binary starts a folder. When actions is off, it accepts both files missing and creates no app database. Both refuse a used module that is off with the same code and sentence. Shared rules have case files that both test suites run, such as `module-use-cases.json`, `sql-rule-cases.json`, `action-cases.json`, `http-binding-cases.json`, `guard-cases.json`, `schedule-cases.json` and `call-cases.json`. Other case files cover one side only ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The query bound is `src/lib/query-bound.ts` on one side and its port in `actions/sql.rs` on the other.
 
 An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. When a module with a browser call is on, it refuses a Capsule with an entry (`src/main.tsx`, `src/main.ts` or `app.js`) whose pages are all whole documents that load no script, because that entry would never run, and the Validation Gate refuses it with the same sentence. With all such modules off, the builder accepts those documents and injects no SDK. `kernel-rs/kernel/src/routing/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
+
+### A shared parser for action declarations
+
+The two parsers can disagree about which rule failed first. Give them 101 actions with `bindings` missing from one. The editor parser reports the 100-action limit. The Kernel reports the missing field. A proposed Rust parser would return either the normalized action program or the first refusal with its code, message and hint. The Kernel would call it natively. The editor would load it as WebAssembly on the first Actions validation and pass the resulting program to Preview. Published pages would ship none of the parser. Each host would still check statements against its own SQLite database, and the Kernel would enforce runtime access.
+
+The [validation experiment](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md) measured a 178 KB gzipped prototype. Before replacing the TypeScript parser, measure cold validation in the editor and run both builds on the same corpus. Include files with multiple errors to verify refusal order, and valid files to compare bindings and the results that Preview and the Kernel return for the same actor and rows.
 
 ## The editor preview
 
@@ -221,6 +466,8 @@ On a public Deployment a visitor may call actions declared `anonymous`, and may 
 
 The browser never receives a database credential, the SQLite file, a generic SQL endpoint or an owner capability. A page calls named Server Actions, and the Kernel resolves the Deployment and the actor from the host and the session or key, validates the input, applies the action's access and the quotas, then runs its prepared statement. Developer tools can replay any browser request, so security never depends on hiding an SDK method or a button.
 
+HTTP routes, declared pages and runtime MCP calls read the action declarations for the active Deployment. Each request still checks access against its actor. MCP distinguishes a malformed stored program (500) from an unknown action (404). The publisher installs the action program with the release under the app lock.
+
 The owner side is a different trust domain. SQL on the live database, backups, export and import go through the owner's MCP, with the owner's permissions and Konae's audit log. An app session never authorizes an owner tool. A path under `/_konae/` that names no route of the Kernel answers 410 and points to the owner's MCP.
 
 An upload is private to the app user who uploaded it unless the upload sets it public. With the `files` module option `fileAccess` set to `"app-users"`, every signed-in user of the app may read every upload, and only the uploader deletes one. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in app user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. Only the uploader changes a file's visibility or deletes it. Nothing is served from the bucket, and no bucket URL reaches the browser.
@@ -261,6 +508,14 @@ Under HTTPS the owner cookie is `__Host-konae_owner_session` and the app cookie 
 The owner's MCP, owner sign-in and the OAuth routes refuse a request whose `Origin` is an app host before they read a credential. The runtime endpoint refuses an `Origin` that differs from its `Host`, so one app's page cannot call another app's runtime, and each app keeps its own accounts, so its session means nothing to another app.
 
 `tests/security-http.integration.test.ts` and `tests/security-auth.integration.test.ts` check each of these against a local Kernel. `bun run examples/product-fit/smoke.ts` opens every example in Chrome and fails on a policy violation.
+
+## When one app needs its own Kernel
+
+App folders separate data. SQLite's memory limit applies to the whole process, including owner sign-in and the mail queue. Runtime SQL takes per-app and installation admission slots. A transaction keeps its slot through execution, including grouped Function actions and durable continuations. One admitted query can still consume the shared SQLite memory budget. [Limits](./limits.md)
+
+Use two local apps to decide when to split. Measure errors and p95 latency for an ordinary read on B and for owner sign-in, first at rest and then while A runs its normal report. If a single report still breaks the installation's latency or availability target, try moving A's whole folder to a Kernel with its own memory budget and one writer. This preserves local SQL transactions and the existing app format. An SQL worker process would add a protocol for transactions and cancellation. Consider it if moving whole apps proves too costly. A separate machine becomes useful if the two processes still contend for CPU or disk.
+
+Today the owner can move an app with maintenance, export and import. Automatic placement would also have to route runtime traffic and owner operations to the same Kernel, arrange backups, and transfer responsibility for pending deliveries before resuming them. App accounts and rules travel with the folder. Installation mail queues and owner credentials have their own lifecycle. [Export and import](./adr/0008-an-app-leaves-by-export-and-returns-by-import.md)
 
 ## Known gaps
 
