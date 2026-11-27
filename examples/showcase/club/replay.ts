@@ -363,8 +363,9 @@ try {
           const images = [...document.querySelectorAll<HTMLImageElement>("img.cover")];
           return images.length === 2 && images.every((img) => img.complete && img.naturalWidth === 120);
         }, undefined, { timeout: 10_000 });
-        await page.locator("#notes summary", { hasText: "The Dispossessed" }).click();
-        await page.locator("#notes .note-text").filter({ hasText: benNoteText }).waitFor({ timeout: 10_000 });
+        const note = page.locator(`#notes details[data-file="${benNote.id}"]`);
+        await note.locator("summary").click();
+        await note.locator(".note-text").filter({ hasText: benNoteText }).waitFor({ timeout: 10_000 });
         if (!storage) {
           const sdk = await page.evaluate(async (noteId) => {
             const miniapp = (window as any).miniapp;

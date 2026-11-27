@@ -458,7 +458,7 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
     http::routes_published(&deployment);
     state.functions.release_changed(&id, &deployment.artifact_version).await;
     if input.initial_package.is_some() {
-        modules::wake_durable_work(&state, &id).await;
+        modules::wake_durable_work(state, &id).await;
     }
     remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
