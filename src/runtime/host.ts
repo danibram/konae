@@ -599,6 +599,7 @@ export class MiniAppRuntimeHost {
     if (!declaration && this.actionsFailure) {
       throw new Error(`Server action not declared. actions.json is invalid: ${this.actionsFailure}`);
     }
+    if (declaration?.access === "scheduled") throw new Error(`Action ${declaration.name} runs only inside a scheduled Function.`);
     if (declaration?.http && routeCallers(declaration.http, "public")) {
       throw new Error(`Action ${declaration.name} answers only on its HTTP route, ${declaration.http.method} ${declaration.http.path}.`);
     }

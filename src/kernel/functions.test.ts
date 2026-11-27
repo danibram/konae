@@ -1,6 +1,33 @@
 import { expect, test } from "bun:test";
 import cases from "../../kernel-rs/kernel/src/functions-cases.json";
-import { parseFunctions, validateFunctions, validateServerArtifact, serverFolderEntries, serverArtifactFromFolder, verifyServerFolder, type ServerArtifact } from "./functions";
+import cronCases from "../../kernel-rs/kernel/src/cron-cases.json";
+import { parseFunctions, parseFunctionSources, validateFunctions, validateServerArtifact, serverFolderEntries, serverArtifactFromFolder, verifyServerFolder, type ServerArtifact } from "./functions";
+
+const cronFunctions = JSON.stringify({ version: 1, functions: {
+  digest: { entry: "functions/digest.ts", access: "scheduled" },
+  web: { entry: "functions/web.ts", access: "anonymous", mount: "/web", methods: ["POST"] },
+} });
+
+for (const fixture of cronCases) test(`cron parity: ${fixture.case}`, () => {
+  const run = () => parseFunctionSources(cronFunctions, JSON.stringify(fixture.crons));
+  if ("expression" in fixture) expect(run()?.crons?.digest.cron).toBe(fixture.expression);
+  else {
+    try { run(); throw Error("Expected a refusal"); }
+    catch (error) { expect(error).toMatchObject({ code: fixture.code, message: fixture.error }); }
+  }
+});
+
+test("rebuilding is required when crons.json changes", () => {
+  const source = { version: 1, crons: { digest: { cron: "0 8 * * *", function: "digest" } } };
+  const manifest = parseFunctionSources(cronFunctions, JSON.stringify(source));
+  const artifact = {
+    version: 1, abi: "konae-functions/1", manifest,
+    bundles: { digest: "export function handle() {}", web: "export function handle() {}" },
+  };
+  source.crons.digest.cron = "0 9 * * *";
+  const changed = parseFunctionSources(cronFunctions, JSON.stringify(source));
+  expect(() => validateServerArtifact(changed, artifact)).toThrow("Server Artifact manifest does not match crons.json.");
+});
 
 for (const fixture of cases) test(`functions parity: ${fixture.name}`, () => {
   const run = () => { const manifest = parseFunctions(fixture.source); validateFunctions(manifest, fixture); return manifest; };

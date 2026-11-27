@@ -1,0 +1,105 @@
+[
+  {
+    "case": "normalize whitespace and keep numeric lists, ranges and steps",
+    "crons": { "version": 1, "crons": { "digest": { "cron": "  0,15-45/15\t8-10 1,15 * 0,5-7  ", "function": "digest" } } },
+    "expression": "0,15-45/15 8-10 1,15 * 0,5-7"
+  },
+  {
+    "case": "reject seconds",
+    "crons": { "version": 1, "crons": { "digest": { "cron": "0 0 8 * * *", "function": "digest" } } },
+    "code": "cron.expression-invalid",
+    "error": "Cron digest must use a five-field UTC cron expression, such as \"0 8 * * 1-5\"."
+  },
+  {
+    "case": "reject out of range values",
+    "crons": { "version": 1, "crons": { "digest": { "cron": "0 8 * 13 *", "function": "digest" } } },
+    "code": "cron.expression-invalid",
+    "error": "Cron digest must use a five-field UTC cron expression, such as \"0 8 * * 1-5\"."
+  },
+  {
+    "case": "reject a zero step",
+    "crons": { "version": 1, "crons": { "digest": { "cron": "*/0 8 * * *", "function": "digest" } } },
+    "code": "cron.expression-invalid",
+    "error": "Cron digest must use a five-field UTC cron expression, such as \"0 8 * * 1-5\"."
+  },
+  {
+    "case": "reject an unknown function",
+    "crons": { "version": 1, "crons": { "digest": { "cron": "0 8 1 * *", "function": "missing" } } },
+    "code": "cron.target-invalid",
+    "error": "Cron digest must name a Function with access scheduled in functions.json. Check missing."
+  },
+  {
+    "case": "reject a public function as a cron target",
+    "crons": { "version": 1, "crons": { "digest": { "cron": "0 8 1 * *", "function": "web" } } },
+    "code": "cron.target-invalid",
+    "error": "Cron digest must name a Function with access scheduled in functions.json. Check web."
+  },
+  {
+    "case": "reject extra keys",
+    "crons": { "version": 1, "crons": { "digest": { "cron": "0 8 * * *", "function": "digest", "timezone": "Europe/Madrid" } } },
+    "code": "cron.definition-invalid",
+    "error": "Cron digest must declare a cron string and a function name."
+  },
+{
+  "case": "reject a missing crons object",
+  "crons": {
+    "version": 1
+  },
+  "code": "cron.invalid",
+  "error": "crons.json must be a JSON object with version 1 and a crons object."
+},
+{
+  "case": "reject an ID starting with a digit",
+  "crons": {
+    "version": 1,
+    "crons": {
+      "1digest": {}
+    }
+  },
+  "code": "cron.id-invalid",
+  "error": "Cron 1digest must have an ID of 1 to 64 ASCII letters, digits, underscores or hyphens, starting with a letter."
+},
+{
+  "case": "limit the number of jobs per app",
+  "crons": {
+    "version": 1,
+    "crons": {
+      "cron00": {},
+      "cron01": {},
+      "cron02": {},
+      "cron03": {},
+      "cron04": {},
+      "cron05": {},
+      "cron06": {},
+      "cron07": {},
+      "cron08": {},
+      "cron09": {},
+      "cron10": {},
+      "cron11": {},
+      "cron12": {},
+      "cron13": {},
+      "cron14": {},
+      "cron15": {},
+      "cron16": {},
+      "cron17": {},
+      "cron18": {},
+      "cron19": {},
+      "cron20": {},
+      "cron21": {},
+      "cron22": {},
+      "cron23": {},
+      "cron24": {},
+      "cron25": {},
+      "cron26": {},
+      "cron27": {},
+      "cron28": {},
+      "cron29": {},
+      "cron30": {},
+      "cron31": {},
+      "cron32": {}
+    }
+  },
+  "code": "cron.count-over",
+  "error": "crons.json may declare at most 32 jobs."
+}
+]

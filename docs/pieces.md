@@ -12,7 +12,8 @@ This is the table the `pieces` topic of `platform_guide` returns, and the one in
 | Visitor or app user reads or writes a row | Named Server Action with access and actor bindings | Owner `database_execute` in the app UI |
 | Mutation matched no row | `guard` on that mutation | A second check statement |
 | Email when a row changes | `notify` on that mutation | Browser mail or a call action for mail |
-| Work when nobody is looking | `schedule` on a no-input mutation | External cron unless asked |
+| Run one SQL mutation on an interval or at a UTC time | `schedule` on a no-input mutation | External cron |
+| Run scheduled JavaScript or use a cron expression | `crons.json` and a Function with scheduled access | External cron |
 | Owner-facing occurrence | `signal` on a mutation, or `kind: signal` | A side table only the agent reads |
 | Another service calls this app | Turn on `http` with `module_set`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
 | This app calls another host | Turn on `calls` with `module_set`, then declare `kind: call` | `fetch` of a secret from the browser |
@@ -35,6 +36,7 @@ The app folder is the app: `konae.json`, `app/`, `dist/` and `data/` with its da
 ## Where each piece is explained
 
 - `guard`, `notify`, `schedule`, `signal`, `http` and `kind: call` are on [Server Actions](./server-actions.md).
+- `crons.json` and scheduled Function access are on [Server functions](./functions.md#run-a-function-on-a-cron-schedule).
 - Signup Policy, invitations and roles kept by the app are on [Accounts and access](./accounts-and-access.md).
 - Export and import are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) guide.
 - `miniapp.files` and the `files.fileAccess` module option are in the [upload files](./guides/upload-files.md) guide.

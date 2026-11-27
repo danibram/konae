@@ -412,6 +412,9 @@ pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
         if mutation.kind != "mutation" {
             return Err(refuse("call.then-not-mutation", format!("Action {name} names {target} as its then, which is not a mutation.")));
         }
+        if mutation.access == "scheduled" {
+            return Err(refuse("call.then-scheduled", format!("Action {name} names {target} as its then, but that action runs only inside a scheduled Function.")));
+        }
         if mutation.http.is_some() {
             return Err(refuse("call.then-routed", format!(
                 "Action {name} names {target} as its then, which answers on an HTTP route. A then mutation runs only after its call."

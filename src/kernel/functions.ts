@@ -3,8 +3,9 @@ import { checksum } from "../mcp/client";
 import { parse as parseEsm } from "@babel/parser";
 
 export const FUNCTIONS_ABI = "konae-functions/1";
-export type FunctionDefinition = { entry: string; mount: string; methods: ("GET" | "POST")[]; access: "authenticated" | "anonymous"; actions: string[] };
-export type FunctionsManifest = { version: 1; functions: Record<string, FunctionDefinition> };
+export type FunctionDefinition = { entry: string; mount: string; methods: ("GET" | "POST")[]; access: "authenticated" | "anonymous" | "scheduled"; actions: string[] };
+type CronDefinition = { cron: string; function: string };
+export type FunctionsManifest = { version: 1; functions: Record<string, FunctionDefinition>; crons?: Record<string, CronDefinition> };
 export type ServerArtifact = { version: 1; abi: typeof FUNCTIONS_ABI; manifest: FunctionsManifest; bundles: Record<string, string> };
 export type FunctionsContext = { files: Iterable<string>; modules?: Record<string, { on?: boolean }>; actions?: Record<string, unknown>; staticPaths?: string[] };
 
@@ -191,21 +192,114 @@ function parseFunctions(source: string): FunctionsManifest {
     if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)) throw refusal("function.name-invalid", `Function ${name} must have a name of 1 to 64 ASCII letters, digits, underscores or hyphens, starting with a letter.`);
     if (!object(declaration)) throw refusal("function.definition-invalid", `Function ${name} must be an object.`);
     keys(declaration, ["entry", "mount", "methods", "access", "actions"], `Function ${name}`);
-    const { entry, mount, methods } = declaration;
+    const { entry } = declaration;
     if (typeof entry !== "string" || !entry.startsWith("functions/") || entry.includes("\\") || entry.split("/").some((part) => !part || part === "." || part === "..") || !/\.(ts|js|mts|mjs)$/.test(entry)) throw refusal("function.entry-invalid", `Function ${name} entry must name a .ts, .js, .mts or .mjs file under functions/.`);
-    if (typeof mount !== "string" || mount.length > 256 || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(mount)) throw refusal("function.mount-invalid", `Function ${name} mount must be an absolute path of nonempty ASCII letter, digit, underscore or hyphen segments.`);
-    if (["/_konae", "/oauth", "/.well-known", "/server", "/functions", "/mcp", "/assets"].some((path) => functionPathsOverlap(mount, path))) throw refusal("function.mount-reserved", `Function ${name} mount ${mount} is reserved.`);
-    if (!Array.isArray(methods) || !methods.length || !methods.every((method): method is "GET" | "POST" => method === "GET" || method === "POST") || new Set(methods).size !== methods.length) throw refusal("function.methods-invalid", `Function ${name} methods must be a nonempty array of GET or POST without duplicates.`);
     const access = declaration.access === undefined ? "authenticated" : declaration.access;
-    if (access !== "authenticated" && access !== "anonymous") throw refusal("function.access-invalid", `Function ${name} access must be authenticated or anonymous.`);
+    const scheduled = access === "scheduled";
+    if (scheduled && (declaration.mount !== undefined && declaration.mount !== "/" ||
+        declaration.methods !== undefined && (!Array.isArray(declaration.methods) || declaration.methods.length !== 1 || declaration.methods[0] !== "POST"))) {
+      throw refusal("function.scheduled-route", `Function ${name} with access scheduled uses mount / and method POST internally. Omit mount and methods.`);
+    }
+    const mount = scheduled ? "/" : declaration.mount;
+    const methods = scheduled ? ["POST"] : declaration.methods;
+    if (typeof mount !== "string" || !scheduled && (mount.length > 256 || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(mount))) throw refusal("function.mount-invalid", `Function ${name} mount must be an absolute path of nonempty ASCII letter, digit, underscore or hyphen segments.`);
+    if (!scheduled && ["/_konae", "/oauth", "/.well-known", "/server", "/functions", "/mcp", "/assets"].some((path) => functionPathsOverlap(mount, path))) throw refusal("function.mount-reserved", `Function ${name} mount ${mount} is reserved.`);
+    if (!Array.isArray(methods) || !methods.length || !methods.every((method): method is "GET" | "POST" => method === "GET" || method === "POST") || new Set(methods).size !== methods.length) throw refusal("function.methods-invalid", `Function ${name} methods must be a nonempty array of GET or POST without duplicates.`);
+    if (access !== "authenticated" && access !== "anonymous" && access !== "scheduled") throw refusal("function.access-invalid", `Function ${name} access must be authenticated, anonymous or scheduled.`);
     const actions = declaration.actions === undefined ? [] : declaration.actions;
     if (!Array.isArray(actions) || !actions.every((action): action is string => typeof action === "string" && action.length > 0 && new TextEncoder().encode(action).length <= 128) || new Set(actions).size !== actions.length) throw refusal("function.actions-invalid", `Function ${name} actions must be an array of unique action names.`);
     Object.defineProperty(functions, name, { value: { entry, mount, methods: [...methods].sort(byteOrder), access, actions: [...actions].sort(byteOrder) }, enumerable: true });
   }
   const manifest: FunctionsManifest = { version: 1, functions };
-  const hashes = Object.fromEntries(Object.keys(functions).map((name) => [name, "0".repeat(64)]));
-  if (new TextEncoder().encode(serverManifestText(manifest, hashes)).length > 262144) throw refusal("function.manifest-size", "Server manifest exceeds 262144 UTF-8 bytes.");
+  checkManifestSize(manifest);
   return manifest;
+}
+
+function checkManifestSize(manifest: FunctionsManifest) {
+  const hashes = Object.fromEntries(Object.keys(manifest.functions).map((name) => [name, "0".repeat(64)]));
+  if (new TextEncoder().encode(serverManifestText(manifest, hashes)).length > 262144) throw refusal("function.manifest-size", "Server manifest exceeds 262144 UTF-8 bytes.");
+}
+
+function cronExpression(source: string): string | undefined {
+  if (source.length > 128 || /[^\x00-\x7f]/.test(source)) return undefined;
+  const fields = source.split(/[ \t\n\f\r]+/).filter(Boolean);
+  const limits = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+  if (fields.length !== limits.length) return undefined;
+  const valid = fields.every((field, index) => {
+    const [min, max] = limits[index];
+    return field.split(",").every((item) => {
+      const match = /^(\*|([0-9]{1,2})(?:-([0-9]{1,2}))?)(?:\/([0-9]{1,2}))?$/.exec(item);
+      if (!match) return false;
+      const [, base, first, last, step] = match;
+      if (step !== undefined && (base !== "*" && last === undefined || Number(step) < 1 || Number(step) > max - min + 1)) return false;
+      if (base === "*") return true;
+      return Number(first) >= min && Number(last ?? first) <= max && Number(first) <= Number(last ?? first);
+    });
+  });
+  return valid ? fields.join(" ") : undefined;
+}
+
+function readCrons(value: unknown, manifest: FunctionsManifest | undefined): Record<string, CronDefinition> {
+  if (!object(value) || value.version !== 1 || !object(value.crons) || Object.keys(value).length !== 2) {
+    throw refusal("cron.invalid", "crons.json must be a JSON object with version 1 and a crons object.");
+  }
+  const declarations = value.crons;
+  const ids = Object.keys(declarations).sort(byteOrder);
+  if (ids.length > 32) throw refusal("cron.count-over", "crons.json may declare at most 32 jobs.");
+  return Object.fromEntries(ids.map((id) => {
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(id)) throw refusal("cron.id-invalid", `Cron ${id} must have an ID of 1 to 64 ASCII letters, digits, underscores or hyphens, starting with a letter.`);
+    const entry = declarations[id];
+    if (!object(entry) || Object.keys(entry).length !== 2 || typeof entry.cron !== "string" || typeof entry.function !== "string") {
+      throw refusal("cron.definition-invalid", `Cron ${id} must declare a cron string and a function name.`);
+    }
+    const expression = cronExpression(entry.cron);
+    if (!expression) throw refusal("cron.expression-invalid", `Cron ${id} must use a five-field UTC cron expression, such as "0 8 * * 1-5".`);
+    if (!manifest || !Object.hasOwn(manifest.functions, entry.function) || manifest.functions[entry.function].access !== "scheduled") {
+      throw refusal("cron.target-invalid", `Cron ${id} must name a Function with access scheduled in functions.json. Check ${entry.function}.`);
+    }
+    return [id, { cron: expression, function: entry.function }];
+  }));
+}
+
+function parseFunctionSources(functions: string | undefined, crons: string | undefined): FunctionsManifest | undefined {
+  const manifest = functions === undefined ? undefined : parseFunctions(functions);
+  if (crons !== undefined) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(crons); } catch { parsed = null; }
+    const compiled = readCrons(parsed, manifest);
+    if (manifest && Object.keys(compiled).length) {
+      manifest.crons = compiled;
+      checkManifestSize(manifest);
+    }
+  }
+  return manifest;
+}
+
+function parseServerManifest(value: unknown): FunctionsManifest {
+  if (!object(value) || !Object.hasOwn(value, "crons")) return parseFunctions(JSON.stringify(value));
+  const { crons, ...functions } = value;
+  const manifest = parseFunctions(JSON.stringify(functions));
+  const declarations = readCrons({ version: 1, crons }, manifest);
+  if (Object.keys(declarations).length) manifest.crons = declarations;
+  checkManifestSize(manifest);
+  return manifest;
+}
+
+function withCronModules(
+  manifest: FunctionsManifest | undefined,
+  modules: Record<string, { on: boolean; [option: string]: unknown }> | undefined,
+  actions: Record<string, unknown>,
+): typeof modules {
+  const crons = Object.values(manifest?.crons ?? {});
+  if (!manifest || crons.length === 0) return modules;
+
+  const usesActions = crons.some((cron) => manifest.functions[cron.function].actions.length > 0)
+    || (modules?.actions === undefined && Object.keys(actions).length > 0);
+  return {
+    ...modules,
+    functions: { ...modules?.functions, on: true },
+    ...(usesActions ? { actions: { ...modules?.actions, on: true } } : {}),
+  };
 }
 
 function validateFunctions(manifest: FunctionsManifest, context: FunctionsContext): void {
@@ -223,10 +317,13 @@ function validateFunctions(manifest: FunctionsManifest, context: FunctionsContex
       if (definition === undefined || definition === null) throw refusal("function.action-missing", `Function ${name} names unknown action ${action}.`);
       const thenTarget = Object.values(context.actions ?? {}).some((other) => object(other) && other.kind === "call" && object(other.then) && other.then.action === action);
       if (!object(definition) || !["query", "mutation"].includes(String(definition.kind)) || definition.access === "granted" || thenTarget || ["notify", "call", "signal", "schedule", "subscribe", "http", "grants"].some((key) => Object.hasOwn(definition, key))) throw refusal("function.action-unsupported", `Function ${name} action ${action} must be a query or mutation without external effects.`);
+      if (fn.access === "scheduled" && definition.access !== "anonymous" && definition.access !== "scheduled") throw refusal("function.scheduled-action", `Scheduled Function ${name} can only call anonymous or scheduled actions. Check ${action}.`);
+      if (fn.access !== "scheduled" && definition.access === "scheduled") throw refusal("function.scheduled-action", `Function ${name} cannot call action ${action}. That action runs only inside a scheduled Function.`);
     }
+    if (fn.access === "scheduled") continue;
     for (const [other, declaration] of entries) {
       if (other >= name) break;
-      if (functionPathsOverlap(fn.mount, declaration.mount)) throw refusal("function.mount-conflict", `Function ${name} mount ${fn.mount} overlaps function ${other}.`);
+      if (declaration.access !== "scheduled" && functionPathsOverlap(fn.mount, declaration.mount)) throw refusal("function.mount-conflict", `Function ${name} mount ${fn.mount} overlaps function ${other}.`);
     }
     const paths = [...context.staticPaths ?? []];
     for (const action of Object.values(context.actions ?? {})) {
@@ -250,7 +347,7 @@ function validateServerArtifact(manifest: FunctionsManifest | undefined, input: 
   }
   if (!object(input) || input.version !== 1 || input.abi !== FUNCTIONS_ABI) throw refusal("function.artifact-abi", "Server Artifact requires version 1 and ABI konae-functions/1.");
   keys(input, ["version", "abi", "manifest", "bundles"], "Server Artifact");
-  const normalized = parseFunctions(JSON.stringify(input.manifest));
+  const normalized = parseServerManifest(input.manifest);
   if (canonical(input.manifest) !== canonical(normalized)) throw refusal("function.artifact-manifest", "Server Artifact manifest does not match functions.json.");
   if (!object(input.bundles) || JSON.stringify(Object.keys(input.bundles).sort(byteOrder)) !== JSON.stringify(Object.keys(normalized.functions).sort(byteOrder))) throw refusal("function.artifact-bundles", "Server Artifact bundles must match the declared function names.");
   const bundles: Record<string, string> = {};
@@ -263,7 +360,10 @@ function validateServerArtifact(manifest: FunctionsManifest | undefined, input: 
     Object.defineProperty(bundles, name, { value: bundle, enumerable: true });
   }
   if (total > 8388608) throw refusal("function.artifact-size", "Server Artifact exceeds 8388608 UTF-8 bytes.");
-  if (!manifest || canonical(normalized) !== canonical(manifest)) throw refusal("function.artifact-manifest", "Server Artifact manifest does not match functions.json.");
+  if (!manifest || canonical(normalized) !== canonical(manifest)) {
+    const file = manifest && canonical(normalized.functions) === canonical(manifest.functions) ? "crons.json" : "functions.json";
+    throw refusal("function.artifact-manifest", `Server Artifact manifest does not match ${file}.`);
+  }
   for (const name of Object.keys(bundles)) {
     const nodeModule = nodeModuleFromSource(bundles[name]);
     if (nodeModule) throw refusal("function.node-module-unsupported", `Server functions cannot import the Node.js module node:${nodeModule}.`);
@@ -278,11 +378,11 @@ function serverManifestText(manifest: FunctionsManifest, hashes: Record<string, 
   return JSON.stringify({ version: 1, abi: FUNCTIONS_ABI, manifest, hashes }, null, 2);
 }
 
-  return { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText, nodeModuleFromSource, validateFunctionSources };
+  return { parseFunctions, parseFunctionSources, parseServerManifest, withCronModules, validateFunctions, validateServerArtifact, serverManifestText, nodeModuleFromSource, validateFunctionSources };
 }
 
-const { parseFunctions, validateFunctions, validateServerArtifact, serverManifestText, nodeModuleFromSource, validateFunctionSources } = functionsContract(refusal, parseEsm);
-export { parseFunctions, validateFunctions, serverManifestText, validateServerArtifact, nodeModuleFromSource, validateFunctionSources };
+const { parseFunctions, parseFunctionSources, parseServerManifest, withCronModules, validateFunctions, validateServerArtifact, serverManifestText, nodeModuleFromSource, validateFunctionSources } = functionsContract(refusal, parseEsm);
+export { parseFunctions, parseFunctionSources, withCronModules, validateFunctions, serverManifestText, validateServerArtifact, nodeModuleFromSource, validateFunctionSources };
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -303,7 +403,7 @@ export function serverArtifactFromFolder(files: Record<string, Uint8Array>): Ser
   if (!files["manifest.json"] || files["manifest.json"].length > 262144) throw Error("Invalid server manifest file.");
   const published: unknown = JSON.parse(decode.decode(files["manifest.json"]));
   if (!object(published)) throw Error("Invalid server manifest file.");
-  const manifest = parseFunctions(JSON.stringify(published.manifest));
+  const manifest = parseServerManifest(published.manifest);
   const expected = ["manifest.json", ...Object.keys(manifest.functions).map((name) => `${name}.mjs`)].sort();
   if (JSON.stringify(Object.keys(files).sort()) !== JSON.stringify(expected)) throw Error("Server directory contains a missing or undeclared file.");
   const bundles = Object.fromEntries(Object.keys(manifest.functions).map((name) => [name, decode.decode(files[`${name}.mjs`])]));
@@ -322,5 +422,5 @@ export async function verifyServerFolder(files: Record<string, Uint8Array>): Pro
 
 export function functionsBuildSupport(): string {
   return `const parseEsm = createRequire(import.meta.url)('./babel-parser.cjs').parse;
-const { parseFunctions, validateFunctions, validateServerArtifact, validateFunctionSources } = (${functionsContract.toString()})(undefined, parseEsm);`;
+const { parseFunctionSources, withCronModules, validateFunctions, validateServerArtifact, validateFunctionSources } = (${functionsContract.toString()})(undefined, parseEsm);`;
 }

@@ -18,7 +18,7 @@ export const runtimeScriptAttribute = "data-konae-runtime";
 
 export const runtimeFile = "runtime.js";
 
-export const sourceOnlyFiles = ["schema-transforms.json", "functions.json"];
+export const sourceOnlyFiles = ["schema-transforms.json", "functions.json", "crons.json"];
 
 
 export const pathPrefixPattern = /^\/p\/([^\/]+)(\/|$)/;

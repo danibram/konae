@@ -20,6 +20,11 @@ const source = JSON.stringify({ version: 1, functions: { orders: { entry: "funct
 const serverCode = 'import { actions } from "konae:actions"; throw Error("SERVER_TOP_LEVEL_SENTINEL"); export const handle = (_request, context) => { actions(context); return new Response("SERVER_PRIVATE_BYTES"); };';
 const files = { "index.html": "<!doctype html><html><body>Public</body></html>", "functions.json": source, "functions/orders.ts": serverCode, "package.json": '{"dependencies":{}}', "package-lock.json": '{"lockfileVersion":3}' };
 const project: MiniAppProject = { id: "functions", name: "Functions", slug: "functions", manifest: { ...createDefaultManifest(), visibility: "public" }, files, directories: [], updatedAt: 0, modules: { functions: { on: true } } };
+const crons = { report: { cron: "0 8 * * 1-5", function: "orders" } };
+const cronFiles = {
+  "functions.json": JSON.stringify({ version: 1, functions: { orders: { entry: "functions/orders.ts", access: "scheduled" } } }),
+  "crons.json": JSON.stringify({ version: 1, crons }),
+};
 
 async function folder() {
   const root = await mkdtemp(path.join(tmpdir(), "konae-functions-")); roots.push(root);
@@ -38,11 +43,20 @@ test("editor builds separate ESM bytes and preview never imports server entry", 
   expect(Object.keys(built.files)).toEqual(["index.html"]);
   const preview = await compileProjectInBrowser({ ...project, files: { ...files, "app.js": 'document.title = "client";' } });
   expect(preview.script).not.toContain("SERVER_PRIVATE_BYTES");
+  const scheduled = await buildProjectInBrowser({ ...project, modules: { functions: { on: false } }, files: { ...files, ...cronFiles } });
+  expect(scheduled.serverArtifact?.manifest.crons).toEqual(crons);
+  expect(Object.keys(scheduled.files)).toEqual(["index.html"]);
 });
 
 test("local and refreshed folder builds validate candidate server bundles", async () => {
   const root = await folder();
+  for (const [file, contents] of Object.entries(cronFiles)) await writeFile(path.join(root, "app", file), contents);
+  const settingsPath = path.join(root, "konae.json");
+  const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+  settings.modules.functions.on = false;
+  await writeFile(settingsPath, JSON.stringify(settings));
   const local = await buildLocal(root);
+  expect(local.serverArtifact?.manifest.crons).toEqual(crons);
   expect(local.serverArtifact?.bundles.orders).toContain("SERVER_TOP_LEVEL_SENTINEL");
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("SERVER_PRIVATE_BYTES");
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toMatch(/return \w+\.actions/);
@@ -61,6 +75,9 @@ test("local and refreshed folder builds validate candidate server bundles", asyn
   const stderr = await new Response(process.stderr).text();
   expect({ exitCode: await process.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(await readFile(path.join(root, "server/orders.mjs"), "utf8")).toContain("listenerCount");
+  const published = JSON.parse(await readFile(path.join(root, "server/manifest.json"), "utf8"));
+  expect(published.manifest.crons).toEqual(crons);
+  expect(existsSync(path.join(root, "dist/crons.json"))).toBe(false);
   expect(await readFile(path.join(root, "app/package-lock.json"), "utf8")).toBe(files["package-lock.json"]);
 
   await writeFile(path.join(root, "scripts/local-builder.mjs"), `export async function bundleModule() { return { script: "", styles: "" }; }

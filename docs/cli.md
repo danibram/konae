@@ -80,11 +80,12 @@ Pull exports sources, `dist/`, `konae.json` settings and published data into `.k
 bun run konae -- test --dir ./my-app status
 bun run konae -- test --dir ./my-app calls
 bun run konae -- test --dir ./my-app schedule <action>
+bun run konae -- test --dir ./my-app schedule cron:<id>
 bun run konae -- test --dir ./my-app reply <call-id> --stdin
 bun run konae -- test --dir ./my-app scenario tests/payments.json
 ```
 
-These commands require a local `dev` Kernel with test controls. `status` reports the mode and paused schedules. `calls` lists calls awaiting a reply, calls waiting for retry backoff with `nextAttemptAt`, and continuations whose outcome was interrupted. `schedule` runs one declared schedule mutation through the Kernel's normal action path.
+These commands require a local `dev` Kernel with test controls. `status` reports the mode and paused schedules, including cron jobs. `calls` lists calls awaiting a reply, calls waiting for retry backoff with `nextAttemptAt`, and continuations whose outcome was interrupted. `schedule <action>` runs one scheduled mutation. `schedule cron:<id>` runs the job in `app/crons.json` through the configured Functions runner.
 
 `reply` reads JSON from stdin or `--file`. A response names the `responseNumber` shown by `calls` and supplies either an HTTP `status` with a JSON `body`, or a transport `error`:
 

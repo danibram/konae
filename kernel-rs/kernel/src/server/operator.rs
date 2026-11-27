@@ -48,7 +48,7 @@ pub fn usage() -> &'static str {
   kernel inventory [--policy]   inspect the installation or print its store policies
   kernel schema fingerprint --schema <schema.sql> | --database <database.sqlite>
   kernel test status [--app <id>]
-  kernel test schedule <action> [--app <id>]
+  kernel test schedule <action|cron:id> [--app <id>]
   kernel test calls [--app <id>]
   kernel test reply <call id> [--app <id>]   reads response JSON from standard input
   kernel test reset-effects [--app <id>]   retires pending work after a stopped local reset
@@ -200,7 +200,7 @@ async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Resu
             )
         }
         Some("schedule") => {
-            let action = words.required("the scheduled action's name")?;
+            let action = words.required("a scheduled action name or cron:id")?;
             ensure!(words.rest().is_empty(), "{}", usage());
             let deployment = served(state, id).await?;
             crate::schedule::run_manually(state, &deployment, &action).await

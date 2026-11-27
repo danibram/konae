@@ -1,6 +1,6 @@
 import { checkConnects } from "../kernel/calls";
 export type DeploymentVisibility = "public" | "private";
-export type RuntimeActionAccess = "anonymous" | "authenticated" | "granted";
+export type RuntimeActionAccess = "anonymous" | "authenticated" | "scheduled" | "granted";
 export type RuntimeActionKind = "query" | "mutation" | "signal" | "call";
 export type RuntimeActionDeclaration = { name: string; kind: RuntimeActionKind; access: RuntimeActionAccess };
 

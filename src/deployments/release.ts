@@ -1,4 +1,4 @@
-import { parseFunctions, validateServerArtifact, type ServerArtifact } from "../kernel/functions";
+import { parseFunctionSources, validateServerArtifact, type ServerArtifact } from "../kernel/functions";
 import type { McpClient, Transfer } from "../mcp/client";
 import { checkArtifact, checkRelease, checkSourceUpload } from "../lib/size";
 import { checkSourceFiles } from "../lib/source-rules";
@@ -88,7 +88,7 @@ export async function publishProject<Receipt>(
   const { project: sent, visibility, artifact: built, serverArtifact: suppliedServer, initialSignupPolicy, initialModules, contactEmail } = await contents();
   const { serverArtifact: builtServer, ...artifact } = built;
   const serverArtifact = suppliedServer ?? builtServer;
-  validateServerArtifact(sent.files["functions.json"] === undefined ? undefined : parseFunctions(sent.files["functions.json"]), serverArtifact);
+  validateServerArtifact(parseFunctionSources(sent.files["functions.json"], sent.files["crons.json"]), serverArtifact);
   const sources: SourceFiles & { directories: string[] } = {
     files: sent.files,
     ...(sent.encodings && Object.keys(sent.encodings).length ? { encodings: sent.encodings } : {}),

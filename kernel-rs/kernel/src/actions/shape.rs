@@ -60,8 +60,8 @@ fn check_types(name: &str, action: &Value) -> Result<(), Refusal> {
             format!(r#"Action {name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated"."#),
         ));
     }
-    if !matches!(text("access"), Some("anonymous" | "authenticated")) {
-        return Err(refuse("action.access-invalid", format!(r#"Action {name} has an invalid access. Use "anonymous" or "authenticated"."#)));
+    if !matches!(text("access"), Some("anonymous" | "authenticated" | "scheduled")) {
+        return Err(refuse("action.access-invalid", format!(r#"Action {name} has an invalid access. Use "anonymous", "authenticated" or "scheduled"."#)));
     }
     let kind = text("kind").unwrap_or_default();
     if !matches!(kind, "query" | "mutation" | "signal" | "call") {
@@ -140,11 +140,18 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
             format!(r#"Action {name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated"."#),
         ));
     }
-    if action.access != "anonymous" && action.access != "authenticated" {
-        return Err(refuse("action.access-invalid", format!(r#"Action {name} has an invalid access. Use "anonymous" or "authenticated"."#)));
+    if !matches!(action.access.as_str(), "anonymous" | "authenticated" | "scheduled") {
+        return Err(refuse("action.access-invalid", format!(r#"Action {name} has an invalid access. Use "anonymous", "authenticated" or "scheduled"."#)));
     }
     if !matches!(action.kind.as_str(), "query" | "mutation" | "signal" | "call") {
         return Err(refuse("action.kind-invalid", format!(r#"Action {name} has an invalid kind. Use "query", "mutation", "signal" or "call"."#)));
+    }
+    if action.access == "scheduled" && (!matches!(action.kind.as_str(), "query" | "mutation")
+        || action.http.is_some() || action.page.is_some() || action.notify.is_some()
+        || action.signal.is_some() || action.schedule.is_some() || action.subscribe.is_some()
+        || action.bindings.iter().any(|binding| binding.source == "actor"))
+    {
+        return Err(refuse("action.scheduled-shape", format!("Action {name} with access scheduled must be a query or mutation without an actor binding, route or external effect.")));
     }
     for (index, binding) in action.bindings.iter().enumerate() {
         if binding.nullable && binding.source != "input" {

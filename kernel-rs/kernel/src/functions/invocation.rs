@@ -216,7 +216,7 @@ pub fn admit(config: InvocationConfig, budget: Budget) -> Result<Admission> {
             "The function does not declare this HTTP method.",
         ));
     }
-    if config.function.access != "anonymous" && config.actor.is_none() {
+    if config.function.access == "authenticated" && config.actor.is_none() {
         return Err(Failure::new(
             "authentication-required",
             401,
@@ -247,6 +247,7 @@ pub fn admit(config: InvocationConfig, budget: Budget) -> Result<Admission> {
             action,
             &config.program,
         )?;
+        crate::functions::check_scheduled_action(&config.function_name, &config.function, name, &action.access)?;
         crate::validate_action(name, action)?;
     }
     let has_data = !config.function.actions.is_empty();
@@ -470,7 +471,7 @@ impl Invocation {
                 "GET functions cannot invoke mutations.",
             ));
         }
-        if action.access != "anonymous" && self.actor.is_none() {
+        if !matches!(action.access.as_str(), "anonymous" | "scheduled") && self.actor.is_none() {
             return Err(Failure::new(
                 "authentication-required",
                 401,

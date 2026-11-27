@@ -17,7 +17,7 @@ The policy's `script-src` is `'self'` plus the SHA-256 of each inline script. It
 
 ## What the preview lacks
 
-The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.
+The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try these on a published Deployment or use the local test controls. In `konae dev`, use `konae test schedule` to run a scheduled mutation or cron job on demand. [CLI test controls](./cli.md#test)
 
 Turn on HTTP routes and outgoing calls with `module_set` for `http` and `calls`. Both require `actions`. `connects` remains in the Capsule manifest and controls the page's `connect-src`.
 

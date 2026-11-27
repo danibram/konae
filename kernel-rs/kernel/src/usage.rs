@@ -826,6 +826,24 @@ pub fn schedule_baseline(folder: &Path, action: &str, schedule: &str, slot: i64)
 /// its slot done, in one transaction. A failed run leaves the slot open, so
 /// the next tick tries again.
 pub fn record_run(folder: &Path, run: &Run) -> Result<()> {
+    record_scheduled_run(folder, run, false)
+}
+
+pub(crate) fn claim_cron(folder: &Path, name: &str, slot: i64) -> Result<bool> {
+    let db = open(&folder.join(USAGE_DATABASE))?;
+    Ok(db.execute(
+        "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, 'cron', ?2)
+         ON CONFLICT(action) DO UPDATE SET slot = excluded.slot
+         WHERE schedule_state.slot < excluded.slot",
+        params![name, slot],
+    )? == 1)
+}
+
+pub(crate) fn record_cron(folder: &Path, run: &Run) -> Result<()> {
+    record_scheduled_run(folder, run, true)
+}
+
+fn record_scheduled_run(folder: &Path, run: &Run, is_cron: bool) -> Result<()> {
     let mut db = open(&folder.join(USAGE_DATABASE))?;
     let transaction = db.transaction()?;
     let outcome = if run.changes.is_some() {
@@ -848,14 +866,14 @@ pub fn record_run(folder: &Path, run: &Run) -> Result<()> {
         "execution",
         run.action,
         "schedule",
-        if run.changes == Some(0) {
+        if !is_cron && run.changes == Some(0) {
             "unchanged"
         } else {
             outcome
         },
         1,
     )?;
-    if run.changes.is_some() {
+    if !is_cron && run.changes.is_some() {
         transaction.execute(
             "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, ?2, ?3)
              ON CONFLICT(action) DO UPDATE SET schedule = excluded.schedule, slot = excluded.slot",
@@ -1258,8 +1276,11 @@ pub fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
             )?;
             let rows = query.query_map(params![start * 86_400_000, (end + 1) * 86_400_000, SCHEDULED_PAGE], |row| {
                 let error: Option<String> = row.get(4)?;
-                let mut run = json!({"action": row.get::<_, String>(0)?, "at": row.get::<_, i64>(1)?,
-                    "outcome": row.get::<_, String>(2)?, "changes": row.get::<_, i64>(3)?});
+                let action: String = row.get(0)?;
+                let mut run = json!({"action": action, "at": row.get::<_, i64>(1)?, "outcome": row.get::<_, String>(2)?});
+                if !action.starts_with("cron:") {
+                    run["changes"] = json!(row.get::<_, i64>(3)?);
+                }
                 if let Some(error) = error {
                     run["error"] = Value::String(error);
                 }

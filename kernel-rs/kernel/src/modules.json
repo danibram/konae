@@ -177,7 +177,8 @@
       "agentRule": "after-owner-confirms",
       "requires": [],
       "uses": [
-        "functions.json"
+        "functions.json",
+        "crons.json"
       ]
     }
   }

@@ -47,6 +47,9 @@ async fn invoke_action_inner(
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Server action not declared."),
     };
+    if action.access == "scheduled" {
+        return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only inside a scheduled Function."));
+    }
     // An action whose route does not answer anyone answers only there.
     if let Some(route) = http::route_only(&name, action, is_private(&deployment)) {
         return error(

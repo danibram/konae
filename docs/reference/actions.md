@@ -40,7 +40,8 @@ Before it reads a statement, each door checks the number of actions, then each a
 | More than 100 actions | `A project may declare at most 100 actions.` |
 | A name that is not lowercase dotted words of letters and digits, or is over 100 characters | `Invalid server action name: <name>` |
 | `"access": "granted"` | `Action <name> uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated".` |
-| Any other access | `Action <name> has an invalid access. Use "anonymous" or "authenticated".` |
+| Access other than `anonymous`, `authenticated`, `scheduled` or `granted` | `Action <name> has an invalid access. Use "anonymous", "authenticated" or "scheduled".` |
+| `"access": "scheduled"` with an actor binding, another entry point or external effects | `Action <name> with access scheduled must be a query or mutation without an actor binding, route or external effect.` |
 | A kind other than `query`, `mutation`, `signal` or `call` | `Action <name> has an invalid kind. Use "query", "mutation", "signal" or "call".` |
 | `"nullable": true` on a binding that is not an input | `Action <name> has an invalid nullable input binding.` |
 | A binding of another source, an input with no key or another type, an actor field other than `id`, a kernel field other than `now`, or a literal that is not a string, a number or null | `Invalid binding <index> in <name>.` |

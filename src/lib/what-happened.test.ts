@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { callFailures, callOutcome, noticeFailures, noticeOutcome, noticeReasons, whatHappened, type Call, type Notice, type Sources } from "./what-happened";
+import { callFailures, callOutcome, noticeFailures, noticeOutcome, noticeReasons, scheduledOutcome, whatHappened, type Call, type Notice, type Sources } from "./what-happened";
 import type { UsageSummary } from "./usage";
 
 const day = "2026-11-08";
@@ -22,6 +22,10 @@ const notice = (over: Partial<Notice>): Notice => ({ noticeId: "n1", action: "ta
 const call = (over: Partial<Call>): Call => ({ callId: "c1", action: "hooks.send", state: "delivered", attempts: 1, method: "POST", url: "https://hooks.example.org/in", status: 200, error: null, answer: null, createdAt: at("10:00"), updatedAt: at("10:00"), nextAttemptAt: null, then: null, ...over });
 
 describe("what happened", () => {
+  test("a cron reports its Function outcome without guessing how many rows changed", () => {
+    expect(scheduledOutcome({ action: "cron:cleanup", at: at("08:00"), outcome: "ok" })).toEqual({ tone: "success", words: "Function completed." });
+    expect(scheduledOutcome({ action: "cron:cleanup", at: at("08:00"), outcome: "failed", error: "Function returned status 500." })).toEqual({ tone: "danger", words: "Function returned status 500." });
+  });
   test("lists notices, calls, scheduled runs, routes and signals newest first", () => {
     const sources: Sources = {
       summary: summary({
