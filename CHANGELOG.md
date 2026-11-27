@@ -14,6 +14,9 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - Function timing includes individual Server Actions. `konae events` shows local function traces, and operators can send sampled traces to an OTLP/HTTP collector.
 - App exports carry pending Calls and notice intents alongside their database rows. The destination can resume them after import. [Export and import](./docs/reference/export-and-import.md)
 - Usage shows daily Function calls and successful Server Actions by name. Function counts start after the Kernel update and survive pruning of the latency samples. [Usage and Signals](./docs/reference/usage-and-signals.md)
+- Server Actions can issue private PDFs with Documents. The Kernel supervises a local Typst renderer, and the app's download rule and PDF bytes travel together in an export. [Documents](./docs/documents.md)
+- Apps can publish selected authenticated query Actions to external MCP clients with app-scoped OAuth grants. [App MCP tools](./docs/mcp-app-tools.md)
+- File intake keeps immutable received versions and resumes their pending consumers after import. An optional FTPS listener accepts uploads for configured app sources. [File intake](./docs/file-intake.md) and [FTPS](./docs/ftps.md)
 
 ### Changed
 

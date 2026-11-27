@@ -2,7 +2,7 @@
 
 ## Complete architecture
 
-This map shows the running Kernel and the proposed additions. Plain boxes are existing capabilities. Blue boxes are implemented shared Kernel services and their current consumers. Orange boxes remain proposed. Each app keeps its own accounts, rows and access rules.
+This map shows how the Kernel serves apps, runs workers and talks to installation adapters. Blue boxes mark shared Kernel services. Each app keeps its own accounts, rows and access rules.
 
 ```mermaid
 flowchart TB
@@ -30,18 +30,19 @@ flowchart TB
       ACTIONS["actions<br/>named SQL, guards, actor bindings"]
       PAGE["page<br/>declared paths and parameters"]
       HTTP["http<br/>routes, keys and signatures"]
+      MCP["mcp<br/>published query tools and app OAuth"]
       CALLS["calls<br/>outbound requests and completions"]
       FILES["files<br/>upload, access, list and delete"]
       FUNCTIONS["functions<br/>JavaScript and allowed operations"]
       SEO["seo<br/>canonical, cards, robots and sitemap"]
-      DOCUMENTS["documents · new<br/>issue and download"]
-      INTAKE["file intake · new<br/>versions and change events"]
+      DOCUMENTS["documents<br/>issue and download"]
+      INTAKE["file intake<br/>versions and change events"]
     end
     subgraph COMMON["Shared Kernel services"]
       TX["App transactions + idempotency<br/>commit rows, receipts and effect intentions together"]
       BLOBS["Blob storage + quotas<br/>module-owned references"]
       JOBS["Tokio dispatcher<br/>turns by app, wake-up and recovery"]
-      HANDLERS["Module handlers<br/>Calls + Notify; transport stays behind handlers"]
+      HANDLERS["Module handlers<br/>Calls, Notify, Documents and File intake"]
       INVENTORY["Registered data inventory<br/>reserved tables + versions + migrations + export components"]
       TIMER["Schedule + cron<br/>produce declared work"]
       MAIL["Notify + account mail<br/>recipient verification and delivery"]
@@ -65,13 +66,13 @@ flowchart TB
   GATE --> REG
   USERS --> ENTRY
   subgraph ADAPTERS["Runtime and installation adapters"]
-    JS["JavaScript runner<br/>deno_core"]
-    TYPST["Typst process · new"]
-    FTP["Multi-app FTPS listener · new"]
+    JS["JavaScript runners<br/>StarlingMonkey and deno_core"]
+    TYPST["Local Typst process"]
+    FTP["Multi-app FTPS listener"]
     PROVIDERS["SMTP / Resend · HTTP services"]
     STORAGE["Local disk / S3"]
   end
-  DEVICE --> FTP -->|"app and source credential"| ENTRY
+  DEVICE --> FTP -->|"app and source credential"| INTAKE
   RUNNER --> JS
   RUNNER -.-> TYPST
   MAIL --> PROVIDERS
@@ -86,12 +87,10 @@ flowchart TB
   OWNER --> HOSTDATA
   PROJECT --> HOSTDATA
   classDef evolved fill:#d9e6ff,stroke:#3159a3,color:#172b4d
-  classDef proposed fill:#ffe0c5,stroke:#b85818,color:#63300d
   class REG,RELEASE,PORT,TX,JOBS,HANDLERS,INVENTORY evolved
-  class DOCUMENTS,INTAKE,FTP,TYPST proposed
 ```
 
-The registry describes each module's state, reserved tables, format version and export components. Publication checks pending work against the candidate schema before activation. HTTP, MCP, Functions, schedules and cron resolve an app-scoped execution context with its accepted release, actor or job, typed job authority, permissions and limits. Calls and Notify handlers claim their durable records through the in-process fair dispatcher; each handler keeps its own retry rules and hands network work to its transport. Blue boxes mark shared services in use. Orange boxes mark proposed additions.
+The registry describes each module's state, reserved tables, format version and export components. Publication checks pending work against the candidate schema before activation. HTTP, MCP, Functions, schedules and cron resolve the app, release, actor or job, permissions and limits. Calls, Notify, Documents and File intake handle their own durable records through the shared dispatcher.
 
 ### What app authors must declare
 
@@ -182,7 +181,7 @@ Register modules explicitly when compiling the Kernel. Ordinary app logic uses A
 | Stored bytes | A blob-reference provider in `modules`; Files keeps its own download ACL |
 | Retained SQL requirements | A compatibility hook called by `modules::check_pending_work` inside the candidate schema transaction |
 
-Actions, Functions, Calls and Notify exercise execution and transaction services. Files exercises the blob inventory. Documents, then intake and its FTPS adapter, are the next consumers. Each addition must pass the existing publication, permissions and portability checks.
+Documents and File intake register private blobs and durable work. FTPS feeds the intake operation. App MCP publishes selected query Actions under the app account's authority. Each module follows the existing publication, permissions and portability checks.
 
 ## One installation
 
@@ -413,7 +412,7 @@ With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation
 
 The module inventory enumerates unique blob IDs and sizes from each registered provider. Export, import preflight, restore, copy, quota checks, cleanup and `files-migrate` use that inventory regardless of the Files switch. A failed inventory read stops cleanup before deletion. An archive can carry a module's private blob without adding it to the Files index or granting access through Files.
 
-Documents and file intake will register their own references and access rules. They must count incoming bytes and compute SHA-256 while staging, then check the shared quota under the app lock when committing a reference. Their immutable records, retained render resources and transfer acknowledgements remain work for those modules.
+Documents and File intake register their own blob references. The Kernel checks the shared quota under the app lock before committing a reference. Documents keeps the frozen render inputs with its issue. File intake keeps each version's SHA-256 and confirms the upload after the version and consumer jobs commit.
 
 For the portability test, render one receipt with template A and leave a second pending. Publish B, export and import on another machine with Files off. Disconnect the source. The first download must match its original SHA-256. The second must render with A's distinct content. For `files-migrate`, switch from S3 to local, disconnect the bucket and run reconciliation. Verify the stored hashes of the PDF and a pending FTP version. A separate quota test should race two uploads for space that can hold only one.
 
