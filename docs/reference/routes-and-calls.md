@@ -242,9 +242,9 @@ Before each attempt to a host outside the installation, the Kernel resolves the 
 
 ### Delivery and the outbox
 
-The worker in `calls.sqlite` sends each call within seconds. An attempt has 10 seconds, and an answer over 64 KiB ends the call with `answer-too-large`. A network failure, a timeout, a DNS failure, 408, 425, 429 or a 5xx is retried after 30 seconds, then 1, 2 and 4 minutes, up to 5 attempts. Any other answer is final. An app queues at most 20 calls in any 60 seconds, or `KONAE_CALLS_PER_MINUTE`; the next is refused with `This app reached its limit of calls in the last minute. Try again in a minute.` An app in maintenance sends nothing until it leaves maintenance.
+The Kernel stores each call in the app database. The dispatcher gives ready apps turns and sends their calls in the background. An attempt has 10 seconds, and an answer over 64 KiB ends the call with `answer-too-large`. A network failure, a timeout, a DNS failure, 408, 425, 429 or a 5xx is retried after 30 seconds, then 1, 2 and 4 minutes, up to 5 attempts. Any other answer is final. An app queues at most 20 calls in any 60 seconds, or `KONAE_CALLS_PER_MINUTE`; the next is refused with `This app reached its limit of calls in the last minute. Try again in a minute.` An app in maintenance sends nothing until it leaves maintenance.
 
-When a call ends, its `then` mutation runs once, with no actor. Each of its inputs is read by a JSON pointer from this document:
+When a call ends, the Kernel applies its accepted `then` mutation without an app user. It stores the response before running the continuation. Recovery can finish the continuation without making the HTTP call again. Each of its inputs is read by a JSON pointer from this document:
 
 | Pointer | Value |
 | --- | --- |
@@ -256,7 +256,7 @@ When a call ends, its `then` mutation runs once, with no actor. Each of its inpu
 
 A pointer that finds nothing leaves its input out, so it binds NULL when the input is nullable. A string input takes a number, a boolean or a structure as its JSON text. The `then` mutation must be a mutation with no HTTP route and no actor binding, and every required input must be filled. `miniapp.actions.call` refuses it with `Action <name> runs only after the call <call> answers.` It counts in Usage as an action, or under `refused` when its guard refuses. Its `notify` sends as any mutation's does; a notice to `actor` records `no-account`.
 
-`calls_read { "projectId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome. The outbox keeps the newest 1000 finished calls per app. An export does not carry pending calls. A scheduled copy carries `calls.sqlite`.
+`calls_read { "projectId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome. The outbox keeps the newest 1000 finished calls per app. An app export carries the outbox, including pending calls. Put the source app in maintenance before taking the final export for a move. Let only one installation run its pending deliveries. The installation copy also carries any legacy `calls.sqlite` awaiting migration.
 
 ### A page that reads another app
 

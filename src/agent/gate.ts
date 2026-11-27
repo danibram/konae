@@ -1,4 +1,4 @@
-import { parseFunctionSources, withCronModules, validateFunctions, validateServerArtifact } from "../kernel/functions";
+import { parseFunctionSources, withCronModules, validateFunctions, validateServerArtifact, validateFunctionSources } from "../kernel/functions";
 import { servedPath } from "../lib/static-artifact.js";
 import type { Database, SqlJsStatic } from "sql.js";
 import { notifyColumnRefusal, notifyReturning, notifyReturningStatement, parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
@@ -71,6 +71,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       try {
         const manifest = parseFunctionSources(functionsSource, cronsSource);
         if (manifest) {
+          validateFunctionSources(manifest, Object.fromEntries(Object.entries(files).filter((entry): entry is [string, string] => typeof entry[1] === "string")));
           const actions = JSON.parse(actionsSource)?.actions ?? {};
           modules = withCronModules(manifest, modules, actions);
           if (Object.values(actions).some((action) => typeof action === "object" && action !== null && "access" in action && action.access === "scheduled")) {

@@ -8275,5 +8275,31 @@
     },
     "code": "function.artifact-size",
     "message": "Server Artifact exceeds 8388608 UTF-8 bytes."
+  },
+  {
+    "name": "published bundle bytes differ from their manifest hash",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"export const handle=()=>null;"}},
+    "ok": true,
+    "folderDigestMismatch": true,
+    "code": "function.artifact-digest",
+    "message": "Server Artifact hashes do not match its bundles.",
+    "hint": {"fix":"capsule","remedy":"Restore each server bundle from the published Server Artifact, then check its hashes again."}
+  },
+  {
+    "name": "multiple unsupported Node imports choose the byte-order minimum",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"import fs from 'node:fs'; import cp from 'node:child_process'; export const handle = () => [fs, cp];"}},
+    "code": "function.node-module-unsupported",
+    "message": "Server functions cannot import the Node.js module node:child_process.",
+    "hint": {"fix":"capsule","remedy":"Remove the unsupported Node.js module import from the server function."}
+  },
+  {
+    "name": "unsupported Node module import uses shared refusal",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[]}}}",
+    "artifact": {"version":1,"abi":"konae-functions/1","manifest":{"version":1,"functions":{"orders":{"entry":"functions/orders.ts","mount":"/api/orders","methods":["GET"],"access":"anonymous","actions":[]}}},"bundles":{"orders":"import fs from 'node:fs'; export const handle = () => fs;"}},
+    "code": "function.node-module-unsupported",
+    "message": "Server functions cannot import the Node.js module node:fs.",
+    "hint": {"fix":"capsule","remedy":"Remove the unsupported Node.js module import from the server function."}
   }
 ]

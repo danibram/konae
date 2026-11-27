@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 
-pub const ABI: &str = "konae-functions-ipc/2";
+pub const ABI: &str = "konae-functions-ipc/3";
 pub const STRICT_WORKER_BOOTSTRAP: [u8; 4] = *b"KFS1";
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
@@ -75,18 +76,31 @@ pub struct Capability {
     pub request: u64,
     pub token: String,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineKind {
+    Deno,
+    Starlingmonkey,
+    Quickjs,
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum ParentMessage {
     Init {
         abi: String,
-        function: String,
-        source: String,
+        bundles: BTreeMap<String, String>,
         generation: String,
         limits: WorkerLimits,
     },
+    InitPrepared {
+        abi: String,
+        generation: String,
+        limits: WorkerLimits,
+        components: BTreeMap<String, u32>,
+    },
     Invoke {
         capability: Capability,
+        function: String,
         input: Input,
     },
     Spin {
@@ -118,6 +132,8 @@ pub enum ChildMessage {
     Ready {
         abi: String,
         generation: String,
+        #[serde(default)]
+        engine: Option<EngineKind>,
     },
     Operation {
         capability: Capability,
@@ -137,6 +153,7 @@ pub enum ChildMessage {
     Failure {
         capability: Option<Capability>,
         code: String,
+        detail: Option<String>,
     },
     ShutdownComplete {
         invoked: bool,
@@ -270,6 +287,57 @@ pub fn write<W: Write, T: Serialize>(writer: &mut W, message: &T) -> io::Result<
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn ipc_v3_init_invoke_and_failure_round_trip() {
+        let init = ParentMessage::Init {
+            abi: ABI.into(),
+            bundles: BTreeMap::from([
+                ("orders".into(), "export function handle() {}".into()),
+                ("users".into(), "export function handle() {}".into()),
+            ]),
+            generation: "generation".into(),
+            limits: WorkerLimits::default(),
+        };
+        let decoded: ParentMessage = read(&mut Cursor::new(encode(&init).unwrap())).unwrap();
+        assert_eq!(
+            serde_json::to_value(init).unwrap(),
+            serde_json::to_value(decoded).unwrap()
+        );
+
+        let invoke = ParentMessage::Invoke {
+            capability: Capability {
+                generation: "generation".into(),
+                request: 1,
+                token: "token".into(),
+            },
+            function: "users".into(),
+            input: Input {
+                url: "http://example.test".into(),
+                method: "GET".into(),
+                headers: vec![],
+                body: vec![],
+                body_len: 0,
+                actor: "".into(),
+            },
+        };
+        let decoded: ParentMessage = read(&mut Cursor::new(encode(&invoke).unwrap())).unwrap();
+        assert_eq!(
+            serde_json::to_value(invoke).unwrap(),
+            serde_json::to_value(decoded).unwrap()
+        );
+
+        let failure = ChildMessage::Failure {
+            capability: None,
+            code: "handler_error".into(),
+            detail: Some("TypeError: failed".into()),
+        };
+        let decoded: ChildMessage = read(&mut Cursor::new(encode(&failure).unwrap())).unwrap();
+        assert_eq!(
+            serde_json::to_value(failure).unwrap(),
+            serde_json::to_value(decoded).unwrap()
+        );
+    }
 
     #[test]
     fn rejects_oversized_frame_before_reading_payload() {

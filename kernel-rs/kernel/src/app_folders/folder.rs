@@ -37,7 +37,10 @@ pub async fn open_all(state: &AppState, confirmation: Option<&str>) -> Result<Ve
     ids.sort();
     let mut opened = Vec::new();
     for id in ids {
-        let result = open(state, &id, confirmation).await;
+        let result = match open(state, &id, confirmation).await {
+            Err(error) if error.is::<crate::functions::ConfigurationError>() => return Err(error),
+            result => result,
+        };
         opened.push((id, result));
     }
     Ok(opened)
@@ -73,6 +76,13 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let server_artifact = crate::functions::read_artifact(&layout::server(root, id))?;
     let server = crate::functions::validate_artifact(server_artifact.as_ref().map(|a| &a.manifest), server_artifact.as_ref())?;
     crate::functions::enable_cron_modules(&mut settings.modules, server.as_ref().map(|server| &server.manifest));
+    let prepared = crate::functions::prepare_artifact(state, server_artifact.as_ref()).await
+        .with_context(|| format!("Could not prepare published functions for app {id}"))?;
+    if server.as_ref().is_some_and(|published| !published.manifest.functions.is_empty())
+        && !state.functions.has_runner()
+    {
+        eprintln!("konae: app {id} publishes server functions, but KONAE_FUNCTIONS_RUNNER is unset. Set it to the functions runner executable to serve function requests.");
+    }
     let server_changed = released.as_ref().is_some_and(|r| r.server != server);
     let rebuilt = server_changed || released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
     let candidate_sources = state.execution_mode.is_test();
@@ -216,6 +226,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     deployments.retain(|_, served| served.id != id);
     deployments.insert(deployment.hostname.clone(), deployment.clone());
     drop(deployments);
+    state.functions.retain_prepared(id, prepared);
     crate::http::routes_published(&deployment);
     state.functions.release_changed(id, &deployment.artifact_version).await;
     Ok(deployment)

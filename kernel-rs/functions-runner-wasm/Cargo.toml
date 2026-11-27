@@ -1,0 +1,40 @@
+[package]
+name = "konae-functions-runner-wasm"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+base64 = { version = "0.22", optional = true }
+openssl = { version = "0.10.82", features = ["vendored"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+zeroize = { version = "1.9", optional = true }
+konae-functions-executor = { path = "../functions-executor" }
+serde_json = "1"
+sha2 = "0.10.9"
+libc = { version = "0.2", optional = true }
+wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "runtime", "cranelift"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+anyhow = "1.0"
+wasmtime = { version = "=38.0.4", default-features = false, features = ["std", "runtime", "cranelift", "parallel-compilation"] }
+
+[profile.release.build-override]
+opt-level = 3
+
+[features]
+default = ["starling-runner"]
+quickjs-runner = ["dep:libc"]
+starling-bench = ["wasmtime/component-model", "wasmtime/pooling-allocator"]
+starling-runner = ["starling-bench", "dep:base64", "dep:libc", "dep:openssl", "dep:serde", "dep:zeroize"]
+
+[[bin]]
+name = "starling-bench"
+path = "measure/starling.rs"
+required-features = ["starling-bench"]

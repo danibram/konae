@@ -8,7 +8,7 @@ Functions accept at most 100000000 HTTP request-body bytes, which means 100 MB i
 
 After authentication, rate limits and Function admission, the Kernel reads the request incrementally. It hashes and counts each byte, then sends at most 64 KiB per binary IPC frame when the worker asks for another chunk. Hono receives a standard Web `Request` whose body is a `ReadableStream`. The worker keeps its existing heap and RSS limits. The Kernel allows 8 MiB of pending body chunks across active Functions and fails fast with 503 when that budget is full. It does not allocate a 100 MB buffer, spool full requests to disk or reserve body memory when an app starts. The deadline covers upload, worker queueing, IPC and handler execution.
 
-The private Kernel-to-runner protocol uses ABI `konae-functions-ipc/2`; the public bundle manifest remains on `konae-functions/1`. Operators must update the Kernel and runner as a pair. Their startup handshake rejects a mixed pair.
+This decision introduced `konae-functions-ipc/2`. [ADR-0020](./0020-wasm-functions-runner.md) updates the private protocol to `konae-functions-ipc/3`. The public bundle manifest uses `konae-functions/1`. Operators must update the Kernel and runner together. Their startup handshake rejects a mixed pair.
 
 A POST handler with an action allowlist must consume the complete body before its first action call. An early call creates a sticky native failure, including when JavaScript catches the rejected Promise. The Kernel opens no write transaction before body EOF and checks the complete body size before committing an action or receipt. A request that exceeds the limit cannot leave a data mutation or idempotency receipt.
 

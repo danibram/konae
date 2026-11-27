@@ -1,9 +1,10 @@
+use super::invocation::{Admission, InvocationConfig};
+use super::trace::{self, TraceBuffer, TraceContext, TraceRecord};
+use super::{Function, invocation as function_data, runtime::RunProgress};
 use crate::{
     AppState, Deployment, Operation,
     usage::{FunctionOutcome, FunctionTiming},
 };
-use super::{Function, invocation as function_data, runtime::RunProgress};
-use super::invocation::{Admission, InvocationConfig};
 use axum::{
     Json,
     body::Body,
@@ -22,7 +23,6 @@ use std::{
 };
 
 const MAX_FUNCTION_BODY_BYTES: usize = 100_000_000;
-const MAX_LEGACY_FUNCTION_BODY_BYTES: usize = 16 * 1024;
 const MAX_AGGREGATE_PENDING_BODY_BYTES: usize = 8 * 1024 * 1024;
 static FUNCTION_BODY_BUDGET: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
@@ -187,69 +187,18 @@ fn start_body_pump(body: Body, budget: Budget) -> (Arc<IngressBody>, BodyPump) {
     (ingress, BodyPump(task))
 }
 
-async fn read_replay_body(
-    body: Body,
-    legacy: bool,
-    budget: &Budget,
-) -> Result<
-    (
-        usize,
-        [u8; 32],
-        Option<Vec<u8>>,
-        Vec<tokio::sync::OwnedSemaphorePermit>,
-    ),
-    Response,
-> {
-    let mut incoming = body.into_data_stream();
-    let mut length = 0usize;
-    let mut digest = Sha256::new();
-    let mut legacy_bytes = legacy.then(Vec::new);
-    let mut permits = Vec::new();
-    while let Some(chunk) = tokio::time::timeout_at(
-        tokio::time::Instant::from_std(budget.deadline()),
-        incoming.next(),
-    )
-    .await
-    .map_err(|_| executor_failure("deadline_exceeded"))?
-    {
-        let chunk = chunk.map_err(|_| {
-            failure(
-                400,
-                "invalid_body",
-                "The function request body could not be read.",
-            )
-        })?;
-        for bytes in chunk.chunks(konae_functions_executor::protocol::BODY_CHUNK_BYTES) {
-            if length.saturating_add(bytes.len()) > MAX_FUNCTION_BODY_BYTES {
-                return Err(failure(
-                    413,
-                    "body_too_large",
-                    "The function request exceeds 100000000 bytes.",
-                ));
-            }
-            let next_length = length + bytes.len();
-            if legacy_bytes.is_some() && next_length > MAX_LEGACY_FUNCTION_BODY_BYTES {
-                legacy_bytes = None;
-                permits.clear();
-            }
-            length = next_length;
-            digest.update(bytes);
-            let permit = function_body_budget()
-                .try_acquire_many_owned(bytes.len() as u32)
-                .map_err(|_| executor_failure("function.capacity"))?;
-            if let Some(legacy_bytes) = &mut legacy_bytes {
-                permits.push(permit);
-                legacy_bytes.extend_from_slice(bytes);
-            }
-        }
-    }
-    Ok((length, digest.finalize().into(), legacy_bytes, permits))
-}
-
 struct Cancel(Budget);
 impl Drop for Cancel {
     fn drop(&mut self) {
         self.0.cancel();
+    }
+}
+#[derive(Clone)]
+struct ResponseCode(String);
+struct NativeTraceCompletion(TraceBuffer);
+impl Drop for NativeTraceCompletion {
+    fn drop(&mut self) {
+        self.0.native_finished();
     }
 }
 struct Timed {
@@ -259,6 +208,8 @@ struct Timed {
     execution: Duration,
     cold: bool,
     outcome: FunctionOutcome,
+    error_code: Option<String>,
+    error_detail: Option<String>,
 }
 struct PreparedRun {
     lease: super::runtime::Lease,
@@ -302,8 +253,42 @@ enum ReceiptPrelookup {
     Continue(Body),
     Replay(Timed),
 }
+async fn read_replay_body(body: Body, budget: &Budget) -> Result<(usize, [u8; 32]), Response> {
+    let mut incoming = body.into_data_stream();
+    let mut length = 0usize;
+    let mut digest = Sha256::new();
+    while let Some(chunk) = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(budget.deadline()),
+        incoming.next(),
+    )
+    .await
+    .map_err(|_| executor_failure("deadline_exceeded"))?
+    {
+        let chunk = chunk.map_err(|_| {
+            failure(
+                400,
+                "invalid_body",
+                "The function request body could not be read.",
+            )
+        })?;
+        if length.saturating_add(chunk.len()) > MAX_FUNCTION_BODY_BYTES {
+            return Err(failure(
+                413,
+                "body_too_large",
+                "The function request exceeds 100000000 bytes.",
+            ));
+        }
+        length += chunk.len();
+        digest.update(chunk);
+    }
+    Ok((length, digest.finalize().into()))
+}
 impl Timed {
     fn refusal(response: Response, elapsed: Duration) -> Self {
+        let error_code = response
+            .extensions()
+            .get::<ResponseCode>()
+            .map(|value| value.0.clone());
         Self {
             response,
             queue: elapsed,
@@ -311,6 +296,8 @@ impl Timed {
             execution: Duration::ZERO,
             cold: false,
             outcome: FunctionOutcome::Refused,
+            error_code,
+            error_detail: None,
         }
     }
 }
@@ -327,32 +314,31 @@ async fn prelookup_receipt(
     budget: &Budget,
     started: Instant,
 ) -> Result<ReceiptPrelookup, Response> {
-    let candidate = function_data::lookup_receipt(database, actor, function_name, key, budget)
-        .map_err(|error| failure(error.status, error.code, &error.message))?;
+    let database = database.clone();
+    let actor = actor.map(str::to_owned);
+    let function_name = function_name.to_owned();
+    let key = key.to_owned();
+    let lookup_budget = budget.clone();
+    let candidate = tokio::task::spawn_blocking(move || {
+        function_data::lookup_receipt(&database, actor.as_deref(), &function_name, &key, &lookup_budget)
+    })
+    .await
+    .map_err(|_| failure(500, "receipt_lookup_failed", "The function receipt lookup failed."))?
+    .map_err(|error| failure(error.status, error.code, &error.message))?;
     let Some(stored_fingerprint) = candidate else {
         return Ok(ReceiptPrelookup::Continue(body));
     };
-    let legacy = !stored_fingerprint.starts_with("v3:");
-    let (body_len, body_digest, legacy_body, _permits) =
-        read_replay_body(body, legacy, budget).await?;
-    if legacy && legacy_body.is_none() {
+    let (body_len, body_digest) = read_replay_body(body, budget).await?;
+    let fingerprint =
+        function_data::request_fingerprint_v3(method, path, body_len, &body_digest, headers)
+            .map_err(|error| failure(error.status, error.code, &error.message))?;
+    if !stored_fingerprint.starts_with("v3:") {
         return Err(failure(
             409,
             "idempotency_conflict",
             "Idempotency-Key was already used with a different request.",
         ));
     }
-    let fingerprint = if legacy {
-        function_data::request_fingerprint(
-            method,
-            path,
-            legacy_body.as_deref().unwrap_or_default(),
-            headers,
-        )
-    } else {
-        function_data::request_fingerprint_v3(method, path, body_len, &body_digest, headers)
-    }
-    .map_err(|error| failure(error.status, error.code, &error.message))?;
     if fingerprint != stored_fingerprint {
         return Err(failure(
             409,
@@ -368,6 +354,8 @@ async fn prelookup_receipt(
         execution: Duration::ZERO,
         cold: false,
         outcome: FunctionOutcome::Replayed,
+        error_code: None,
+        error_detail: None,
     }))
 }
 
@@ -381,6 +369,9 @@ fn failure(status: u16, code: &str, message: &str) -> Response {
     )
         .into_response();
     response.extensions_mut().insert(FunctionFailureCode(code.to_owned()));
+    response
+        .extensions_mut()
+        .insert(ResponseCode(code.to_owned()));
     response
 }
 fn executor_failure(code: &str) -> Response {
@@ -434,8 +425,22 @@ fn outcome(code: &str) -> FunctionOutcome {
     }
 }
 
+/// After the deadline the executor gets this long to bring the worker back cooperatively
+/// (its own cancel handshake) before the Kernel kills the worker process from outside.
+const ABORT_GRACE: Duration = Duration::from_millis(200);
+
+/// Kills the request's worker if its invocation is still running once the grace has passed.
+/// An invocation that ended in time cleared its abort handler, so a warm worker survives.
+fn schedule_abort(budget: Budget) {
+    tokio::spawn(async move {
+        tokio::time::sleep(ABORT_GRACE).await;
+        budget.abort();
+    });
+}
+
 fn interrupted(budget: &Budget, code: &str, started: Instant, progress: &RunProgress) -> Timed {
-    let code = if budget.cancel().may_have_committed() {
+    let mutation = budget.cancel();
+    let code = if mutation.may_have_committed() {
         "mutation_outcome_unknown"
     } else {
         code
@@ -467,6 +472,8 @@ fn interrupted(budget: &Budget, code: &str, started: Instant, progress: &RunProg
         execution,
         cold: progress.cold,
         outcome: outcome(code),
+        error_code: Some(code.to_owned()),
+        error_detail: None,
     }
 }
 
@@ -477,28 +484,60 @@ fn record(
     budget: &Budget,
     started: Instant,
     timed: Timed,
+    trace: &TraceBuffer,
 ) -> Response {
     if timed.response.extensions().get::<CronSkipped>().is_some() {
         return timed.response;
     }
     let now = Instant::now();
-    crate::usage::function_invocation(
-        &state.data_root,
-        &deployment.id,
-        FunctionTiming {
-            name,
-            version: deployment.artifact_version.clone(),
-            budget: budget.deadline().duration_since(started),
-            total: now.duration_since(started),
-            queue: timed.queue,
-            initialization: timed.initialization,
-            execution: timed.execution,
-            cold: timed.cold,
-            timed_out: now >= budget.deadline(),
-            outcome: timed.outcome,
-        },
-    );
-    timed.response
+    let status = timed.response.status().as_u16();
+    trace.set_root_error(timed.error_code.as_deref());
+    let timing = FunctionTiming {
+        name,
+        version: deployment.artifact_version.clone(),
+        budget: budget.deadline().duration_since(started),
+        total: now.duration_since(started),
+        queue: timed.queue,
+        initialization: timed.initialization,
+        execution: timed.execution,
+        cold: timed.cold,
+        timed_out: now >= budget.deadline(),
+        outcome: timed.outcome,
+        error_code: timed.error_code,
+        error_detail: timed.error_detail,
+    };
+    if timed.outcome == FunctionOutcome::Replayed {
+        let _ = trace.push(TraceRecord {
+            parent: Some(0),
+            name: "konae.function.receipt_replay",
+            start_us: 0,
+            duration_us: timed.queue.as_micros().min(u64::MAX as u128) as u64,
+            action_name: None,
+            origin: None,
+            sequence: None,
+            rows_read: None,
+            rows_written: None,
+            reply_bytes: None,
+            sqlite_us: None,
+            error_code: Some(function_data::IDEMPOTENCY_REPLAY_CODE),
+        });
+    }
+    let outcome = match timed.outcome {
+        FunctionOutcome::Ok => "ok",
+        FunctionOutcome::Refused => "refused",
+        FunctionOutcome::Failed => "failed",
+        FunctionOutcome::DeadlineExceeded => "deadline_exceeded",
+        FunctionOutcome::MutationOutcomeUnknown => "mutation_outcome_unknown",
+        FunctionOutcome::Replayed => "replayed",
+    };
+    let data_root = state.data_root.clone();
+    let deployment_id = deployment.id.clone();
+    let local = state.execution_mode.is_test();
+    crate::usage::function_capture(data_root, deployment_id, timing, trace.clone(), local);
+    trace.finish(status, outcome);
+    let mut response = timed.response;
+    trace::attach_response(&mut response, trace);
+    response
 }
 fn declaration(deployment: &Deployment, path: &str) -> Option<(String, Function)> {
     deployment
@@ -614,16 +653,34 @@ pub(super) async fn invoke(
     trigger: Trigger<'_>,
 ) -> Result<Response, Request> {
     let started = Instant::now();
+    let runner_kind = if super::runtime::wasm_selected() {
+        "wasm"
+    } else {
+        "deno"
+    };
+    let mut trace_context = TraceContext::from_headers(request.headers(), false);
+    trace_context.sampled = state
+        .otlp
+        .as_ref()
+        .map(|exporter| exporter.should_sample(&trace_context.trace_id))
+        .unwrap_or(state.execution_mode.is_test());
+    let exporter = state.otlp.clone().filter(|_| trace_context.sampled);
+    let trace = TraceBuffer::new_with_exporter(trace_context, started, runner_kind, exporter);
     let budget = Budget::until(started + state.functions.deadline);
     let _cancel = Cancel(budget.clone());
     let deadline = tokio::time::Instant::from_std(budget.deadline());
-    let admission = if matches!(trigger, Trigger::Http) {
-        match state.functions.admit(&budget) {
+    let early_admission = if matches!(trigger, Trigger::Http)
+        && !crate::is_private(observed)
+        && declaration(observed, request.uri().path())
+            .is_some_and(|(_, function)| function.access == "anonymous")
+    {
+        match state.functions.admit(&observed.id, &budget) {
             Ok(admission) => Some(admission),
-            Err(code) => {
+            Err(code) if code == "queue_full" => {
                 let timed = Timed::refusal(executor_failure(&code), started.elapsed());
-                return Ok(record(state, observed, observed_name, &budget, started, timed));
+                return Ok(record(state, observed, observed_name, &budget, started, timed, &trace));
             }
+            Err(_) => None,
         }
     } else {
         None
@@ -653,14 +710,17 @@ pub(super) async fn invoke(
                 &budget,
                 started,
                 timed,
+                &trace,
             ));
         }
     };
     let Some(deployment) = deployment else {
-        return Ok(match trigger {
-            Trigger::Http => failure(404, "function.not-found", "Function not found."),
-            Trigger::Cron { .. } => skip_cron(),
-        });
+        if matches!(trigger, Trigger::Cron { .. }) {
+            return Ok(skip_cron());
+        }
+        let mut response = failure(404, "function.not-found", "Function not found.");
+        trace::attach_response(&mut response, &trace);
+        return Ok(response);
     };
     let (name, function) = match trigger {
         Trigger::Http => match declaration(&deployment, request.uri().path()) {
@@ -684,7 +744,13 @@ pub(super) async fn invoke(
             (cron.function.clone(), function.clone())
         }
     };
-    let bundle_hash = deployment.server.as_ref().unwrap().hashes[&name].clone();
+    let server_digest = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(deployment.server.as_ref().unwrap())
+                .expect("published metadata serializes")
+        )
+    );
     let operation = request
         .extensions()
         .get::<Operation>()
@@ -718,6 +784,19 @@ pub(super) async fn invoke(
             }
             Trigger::Cron { .. } => None,
         };
+        if request
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok())
+            .is_some_and(|length| length > MAX_FUNCTION_BODY_BYTES)
+        {
+            return Err(failure(
+                413,
+                "body_too_large",
+                "The function request exceeds 100000000 bytes.",
+            ));
+        }
         let headers = [header::ACCEPT, header::CONTENT_TYPE]
             .into_iter()
             .filter_map(|name| {
@@ -784,15 +863,12 @@ pub(super) async fn invoke(
             }
         }
         let cache_key = format!(
-            "{}:{}:{}:{bundle_hash}:{}",
-            deployment.id,
-            name,
-            deployment.artifact_version,
-            konae_functions_executor::protocol::ABI
+            "{}:{}:{server_digest}",
+            deployment.id, deployment.artifact_version
         );
-        let admission = match admission {
+        let admission = match early_admission {
             Some(admission) => admission,
-            None => state.functions.admit(&budget).map_err(|code| executor_failure(&code))?,
+            None => state.functions.admit(&deployment.id, &budget).map_err(|code| executor_failure(&code))?,
         };
         let lease = state
             .functions
@@ -874,15 +950,38 @@ pub(super) async fn invoke(
             let deployment = deployment.clone();
             let worker_budget = budget.clone();
             let name = name.clone();
+            let worker_trace = trace.clone();
+            trace.retain_native();
             let task = tokio::task::spawn_blocking(move || {
+                let _native_trace_completion = NativeTraceCompletion(worker_trace.clone());
                 let budget = worker_budget;
                 let _operation = operation;
                 let _generation = generation;
                 let _held = held;
                 let mut sql_slot = None;
                 let mut sql_guard = None;
-                let bundle = match pinned_bundle(&state, &deployment, &name) {
-                    Ok(directory) => directory,
+                let prepare_started = Instant::now();
+                let bundles_result = pinned_bundle(&state, &deployment, &name);
+                let prepare_us = prepare_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                let _ = worker_trace.push(TraceRecord {
+                    parent: Some(0),
+                    name: "konae.function.prepare",
+                    start_us: worker_trace.elapsed_us().saturating_sub(prepare_us),
+                    duration_us: prepare_us,
+                    action_name: None,
+                    origin: None,
+                    sequence: None,
+                    rows_read: None,
+                    rows_written: None,
+                    reply_bytes: None,
+                    sqlite_us: None,
+                    error_code: bundles_result
+                        .as_ref()
+                        .err()
+                        .map(|_| "function.artifact-changed"),
+                });
+                let bundles = match bundles_result {
+                    Ok(bundles) => bundles,
                     Err(_) => {
                         return Timed::refusal(
                             failure(
@@ -900,10 +999,16 @@ pub(super) async fn invoke(
                 let mut invocation = None;
                 let mut replayed = None;
                 let mut config = Some(config);
+                let mut ipc_sequence = 0u16;
                 let request_body: Arc<dyn konae_functions_executor::RequestBody> = body.clone();
                 let action_body = body.clone();
-                let run = lease.run_stream(&name, &bundle.0, input, request_body, &budget, &mut |operation, args| {
+                let action_trace = worker_trace.clone();
+                let handler_started = Instant::now();
+                let run = lease.run_stream(&name, &bundles, input, request_body, &budget, &mut |operation, args| {
+                    ipc_sequence = ipc_sequence.saturating_add(1);
                     if operation != "action" {
+                        let _ = action_trace.push(TraceRecord { parent: Some(0), name: "konae.action", start_us: action_trace.elapsed_us(), duration_us: 0,
+                            action_name: Some("<unknown>"), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.operation-forbidden".into()) });
                         return Err("function.operation-forbidden".into());
                     }
                     if request_method == "POST" && !action_body.complete() {
@@ -977,9 +1082,11 @@ pub(super) async fn invoke(
                         }
                     }
                     let Some(action) = args["name"].as_str() else {
+                        let _ = action_trace.push(TraceRecord { parent: Some(0), name: "konae.action", start_us: action_trace.elapsed_us(), duration_us: 0,
+                            action_name: Some("<unknown>"), origin: Some("function"), sequence: Some(ipc_sequence), rows_read: None, rows_written: None, reply_bytes: None, sqlite_us: None, error_code: Some("function.input-invalid".into()) });
                         return Err("function.input-invalid".into());
                     };
-                    match invocation.as_mut().unwrap().action(action, args.get("input").unwrap_or(&Value::Null)) {
+                    match invocation.as_mut().unwrap().action_traced(action, args.get("input").unwrap_or(&Value::Null), &action_trace, ipc_sequence) {
                         Ok(answer) => Ok(answer),
                         Err(error) => {
                             let code = error.code.to_owned();
@@ -988,6 +1095,62 @@ pub(super) async fn invoke(
                         }
                     }
                 });
+                let worker_us = handler_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                let init_us = run.initialization.as_micros().min(u64::MAX as u128) as u64;
+                let handler_us = worker_us.saturating_sub(init_us);
+                let _ = action_trace.push(TraceRecord {
+                    parent: Some(0),
+                    name: "konae.function.worker",
+                    start_us: action_trace.elapsed_us().saturating_sub(worker_us),
+                    duration_us: worker_us,
+                    action_name: Some(if run.cold { "cold" } else { "warm" }),
+                    origin: None,
+                    sequence: None,
+                    rows_read: None,
+                    rows_written: None,
+                    reply_bytes: None,
+                    sqlite_us: None,
+                    error_code: None,
+                });
+                let _ = action_trace.push(TraceRecord {
+                    parent: Some(0),
+                    name: "konae.function.handler",
+                    start_us: action_trace.elapsed_us().saturating_sub(handler_us),
+                    duration_us: handler_us,
+                    action_name: None,
+                    origin: None,
+                    sequence: None,
+                    rows_read: None,
+                    rows_written: None,
+                    reply_bytes: None,
+                    sqlite_us: None,
+                    error_code: run
+                        .output
+                        .as_ref()
+                        .err()
+                        .map(|error| konae_functions_executor::error_code(error)),
+                });
+                if run.cold {
+                    let _ = action_trace.push(TraceRecord {
+                        parent: Some(0),
+                        name: "konae.function.init",
+                        start_us: action_trace
+                            .elapsed_us()
+                            .saturating_sub(handler_us)
+                            .saturating_sub(init_us),
+                        duration_us: init_us,
+                        action_name: None,
+                        origin: None,
+                        sequence: None,
+                        rows_read: None,
+                        rows_written: None,
+                        reply_bytes: None,
+                        sqlite_us: None,
+                        error_code: None,
+                    });
+                }
+                let _admission = lease.take_admission();
+                drop(lease);
                 let ingress = body.drain();
                 if let Err(code) = ingress {
                     let (status, message) = match code.as_str() {
@@ -1006,9 +1169,32 @@ pub(super) async fn invoke(
                         execution: began.elapsed().saturating_sub(run.initialization),
                         cold: run.cold,
                         outcome: outcome(&code),
+                        error_code: Some(code.clone()),
+                        error_detail: None,
                     };
                 }
                 if run.output.is_err() && invocation.is_none() && replayed.is_none() {
+                    let error_detail = native_failure
+                        .as_ref()
+                        .map(|error| error.message.clone())
+                        .or_else(|| {
+                            run.output
+                                .as_ref()
+                                .err()
+                                .and_then(konae_functions_executor::error_detail)
+                                .map(str::to_owned)
+                        });
+                    let error_code = native_failure
+                        .as_ref()
+                        .map(|error| error.code.to_owned())
+                        .or_else(|| {
+                            Some(budget.failure_code().map(str::to_owned).unwrap_or_else(|| {
+                                konae_functions_executor::error_code(
+                                    run.output.as_ref().unwrap_err(),
+                                )
+                                .to_owned()
+                            }))
+                        });
                     let (response, result_outcome) = if let Some(error) = native_failure {
                         (
                             failure(error.status, error.code, &error.message),
@@ -1028,6 +1214,8 @@ pub(super) async fn invoke(
                         execution: began.elapsed().saturating_sub(run.initialization),
                         cold: run.cold,
                         outcome: result_outcome,
+                        error_code,
+                        error_detail,
                     };
                 }
                 if replayed.is_none() && invocation.is_none() {
@@ -1094,35 +1282,39 @@ pub(super) async fn invoke(
                         execution: began.elapsed().saturating_sub(run.initialization),
                         cold: run.cold,
                         outcome: FunctionOutcome::Replayed,
+                        error_code: None,
+                        error_detail: None,
                     };
                 }
                 let mut invocation = invocation.unwrap();
+                let mut failure_code = None;
+                let mut failure_detail = None;
                 let (response, result_outcome) = match run.output {
-                    Ok(mut output) => {
-                        output.headers.retain(|(name, _)| {
-                            ["content-type", "location", "retry-after"]
-                                .contains(&name.to_ascii_lowercase().as_str())
-                        });
-                        match invocation.finish(output) {
-                            Ok(output) => {
-                                let outcome = if output.status >= 500 {
-                                    FunctionOutcome::Failed
-                                } else if output.status >= 400 {
-                                    FunctionOutcome::Refused
-                                } else {
-                                    FunctionOutcome::Ok
-                                };
-                                (respond(output), outcome)
-                            }
-                            Err(error) => (
+                    Ok(output) => match invocation.finish(output) {
+                        Ok(output) => {
+                            let outcome = if output.status >= 500 {
+                                FunctionOutcome::Failed
+                            } else if output.status >= 400 {
+                                FunctionOutcome::Refused
+                            } else {
+                                FunctionOutcome::Ok
+                            };
+                            (respond(output), outcome)
+                        }
+                        Err(error) => {
+                            failure_code = Some(error.code.to_owned());
+                            failure_detail = Some(error.message.clone());
+                            (
                                 failure(error.status, error.code, &error.message),
                                 outcome(error.code),
-                            ),
+                            )
                         }
-                    }
+                    },
                     Err(error) => {
                         let _ = invocation.abort();
                         if let Some(error) = native_failure {
+                            failure_code = Some(error.code.to_owned());
+                            failure_detail = Some(error.message.clone());
                             (
                                 failure(error.status, error.code, &error.message),
                                 outcome(error.code),
@@ -1132,6 +1324,9 @@ pub(super) async fn invoke(
                                 budget.failure_code().map(str::to_owned).unwrap_or_else(|| {
                                     konae_functions_executor::error_code(&error).to_owned()
                                 });
+                            failure_code = Some(code.clone());
+                            failure_detail =
+                                konae_functions_executor::error_detail(&error).map(str::to_owned);
                             (executor_failure(&code), outcome(&code))
                         }
                     }
@@ -1144,6 +1339,8 @@ pub(super) async fn invoke(
                     execution: began.elapsed().saturating_sub(run.initialization),
                     cold: run.cold,
                     outcome: result_outcome,
+                    error_code: failure_code,
+                    error_detail: failure_detail,
                 }
             });
             match tokio::time::timeout_at(deadline, task).await {
@@ -1154,38 +1351,68 @@ pub(super) async fn invoke(
                 }
                 _ => {
                     let progress = progress.lock().unwrap_or_else(|error| error.into_inner());
+                    schedule_abort(budget.clone());
                     interrupted(&budget, "deadline_exceeded", started, &progress)
                 }
             }
         }
     };
-    Ok(record(state, &deployment, name, &budget, started, timed))
+    Ok(record(
+        state,
+        &deployment,
+        name,
+        &budget,
+        started,
+        timed,
+        &trace,
+    ))
 }
 
-struct Bundle(PathBuf);
-impl Drop for Bundle {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-fn pinned_bundle(state: &AppState, deployment: &Deployment, name: &str) -> anyhow::Result<Bundle> {
-    let (artifact, metadata) = crate::functions::read_artifact_with_metadata(
-        &crate::layout::server(&state.data_root, &deployment.id),
-    )?
-    .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
+static BUNDLE_CACHE: OnceLock<
+    Mutex<std::collections::HashMap<String, Arc<std::collections::BTreeMap<String, String>>>>,
+> = OnceLock::new();
+
+fn pinned_bundle(
+    state: &AppState,
+    deployment: &Deployment,
+    name: &str,
+) -> anyhow::Result<Arc<std::collections::BTreeMap<String, String>>> {
+    let published = deployment
+        .server
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Missing published metadata"))?;
     anyhow::ensure!(
-        Some(metadata) == deployment.server,
+        published.hashes.contains_key(name),
+        "Missing published bundle hash"
+    );
+    let server_digest = format!("{:x}", Sha256::digest(serde_json::to_vec(published)?));
+    let version_key = format!("{}:{}:", deployment.id, deployment.artifact_version);
+    let cache_key = format!("{version_key}{server_digest}");
+    let server = crate::layout::server(&state.data_root, &deployment.id);
+    let disk_metadata: crate::functions::Published =
+        serde_json::from_slice(&std::fs::read(server.join("manifest.json"))?)?;
+    let disk_digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&disk_metadata)?));
+    anyhow::ensure!(
+        disk_digest == server_digest,
         "Published server artifact changed"
     );
-    let directory = crate::layout::private(&state.data_root, &deployment.id)
-        .join(format!("function-input-{}", uuid::Uuid::new_v4().simple()));
-    let bundle = Bundle(directory);
-    std::fs::create_dir_all(&bundle.0)?;
-    std::fs::write(
-        bundle.0.join(format!("{name}.mjs")),
-        &artifact.bundles[name],
-    )?;
-    Ok(bundle)
+    let cache = BUNDLE_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Some(bundles) = cache.lock().unwrap().get(&cache_key).cloned() {
+        anyhow::ensure!(bundles.contains_key(name), "Missing function bundle");
+        return Ok(bundles);
+    }
+    let (artifact, checked) =
+        crate::functions::read_artifact_with_metadata(&server, Some(published))?
+            .ok_or_else(|| anyhow::anyhow!("Missing server artifact"))?;
+    anyhow::ensure!(&checked == published, "Published server artifact changed");
+    let source = Arc::new(artifact.bundles);
+    let mut cache = cache.lock().unwrap();
+    cache.retain(|key, _| {
+        !key.starts_with(&format!("{}:", deployment.id)) || key.starts_with(&version_key)
+    });
+    cache.insert(cache_key, source.clone());
+    anyhow::ensure!(source.contains_key(name), "Missing function bundle");
+    Ok(source)
 }
 fn respond(output: Output) -> Response {
     let mut response = Response::new(Body::from(output.body));

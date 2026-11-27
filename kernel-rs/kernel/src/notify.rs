@@ -89,7 +89,7 @@ pub(crate) fn pause_exported_intents(path: &std::path::Path) -> anyhow::Result<(
     Ok(())
 }
 
-/// Gives imported pending deliveries to this Kernel after the database replacement commits.
+/// Marks pending deliveries in the staged database ready for the receiving Kernel.
 pub(crate) fn resume_imported_intents(path: &std::path::Path) -> anyhow::Result<()> {
     let connection = rusqlite::Connection::open(path)?;
     if !connection.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='__konae_notify_intents'")?.exists([])? { return Ok(()) }
@@ -255,6 +255,9 @@ pub(crate) async fn handle_intent(state: &AppState, deployment: &Deployment, id:
 /// Starts the notice handler. It receives only ready apps and claims one
 /// durable intent at a time. The mail queue has its own worker and capacity.
 pub fn spawn_worker(state: AppState) {
+    if state.accounts.queue.is_none() {
+        return;
+    }
     tokio::spawn(async move {
         wake_pending(&state).await;
         let mut timers = crate::execution::AppTimers::default();

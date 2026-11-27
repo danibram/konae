@@ -1,11 +1,12 @@
 use crate::WorkerError;
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
 pub enum MemoryPolicy {
     DevelopmentPolling,
     LinuxCgroup { delegated_root: PathBuf },
+    Wasm,
 }
 
 pub(crate) struct Containment {
@@ -15,6 +16,7 @@ impl Containment {
     pub(crate) fn prepare(policy: MemoryPolicy, bytes: usize, generation: &str) -> Result<Self> {
         match policy {
             MemoryPolicy::DevelopmentPolling => Ok(Self { path: None }),
+            MemoryPolicy::Wasm => Ok(Self { path: None }),
             MemoryPolicy::LinuxCgroup { delegated_root } => {
                 Self::cgroup(delegated_root, bytes, generation)
             }
@@ -92,10 +94,34 @@ impl Containment {
         }
         Ok(())
     }
-    pub(crate) fn kill(&self) {
-        if let Some(path) = &self.path {
-            let _ = std::fs::write(path.join("cgroup.kill"), "1");
+    fn kill_path(path: Option<&Path>) -> bool {
+        if let Some(path) = path {
+            // Open without create: a control file that is gone means the group is gone.
+            let written = std::fs::OpenOptions::new()
+                .write(true)
+                .open(path.join("cgroup.kill"))
+                .and_then(|mut control| std::io::Write::write_all(&mut control, b"1"));
+            match written {
+                Ok(()) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => {
+                    eprintln!(
+                        "functions cgroup kill failed for {}: {error}",
+                        path.display()
+                    );
+                    true
+                }
+            }
+        } else {
+            true
         }
+    }
+    pub(crate) fn kill(&self) -> bool {
+        Self::kill_path(self.path.as_deref())
+    }
+    pub(crate) fn kill_handle(&self) -> impl Fn() -> bool + Send + Sync + 'static {
+        let path = self.path.clone();
+        move || Self::kill_path(path.as_deref())
     }
     pub(crate) fn oom_kill_count(&self) -> Option<u64> {
         let path = self.path.as_ref()?.join("memory.events");
@@ -285,5 +311,32 @@ mod tests {
             Containment::parse_oom_kill_count("low 8\nhigh 0\nmax 4\n"),
             None
         );
+    }
+
+    #[test]
+    fn dropping_an_abort_handle_does_not_clean_up_the_worker_cgroup() {
+        let path = std::env::temp_dir().join(format!(
+            "konae-cgroup-handle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("cgroup.kill"), "0").unwrap();
+        let containment = Containment {
+            path: Some(path.clone()),
+        };
+
+        {
+            let kill = containment.kill_handle();
+            assert!(kill());
+        }
+
+        assert!(path.exists());
+        std::fs::remove_file(path.join("cgroup.kill")).unwrap();
+        drop(containment);
+        assert!(!path.exists());
     }
 }

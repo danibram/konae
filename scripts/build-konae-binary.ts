@@ -20,6 +20,8 @@ const embeddedResources = {
   runtime: await readFile(path.join(root, "src/mcp/runtime.js"), "utf8"),
   staticArtifact: await readFile(path.join(root, "src/lib/static-artifact.js"), "utf8"),
   localBuilder: await readFile(path.join(root, "src/lib/local-builder.js"), "utf8"),
+  nodeCompat: await readFile(path.join(root, "src/lib/node-compat.js"), "utf8"),
+  nodeCompatProviders: await readFile(path.join(root, "src/lib/node-compat-providers.js"), "utf8"),
   parserSource: await readFile(path.join(root, "node_modules/@babel/parser/lib/index.js"), "utf8"),
   parserLicense: await readFile(path.join(root, "node_modules/@babel/parser/LICENSE"), "utf8"),
   typeScriptLibs,

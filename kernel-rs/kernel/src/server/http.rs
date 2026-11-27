@@ -25,7 +25,26 @@ pub async fn listen(startup: &Startup, state: AppState, extra: Router<AppState>,
 
 /// Serves the Kernel, and `extra` beside its own routes, on a bound listener.
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState, extra: Router<AppState>) -> std::io::Result<()> {
-    axum::serve(listener, ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(stack(state, extra))).await
+    let exporter = state.otlp.clone();
+    axum::serve(listener, ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(stack(state, extra)))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    if let Some(exporter) = exporter { exporter.shutdown().await; }
+    Ok(())
+}
+
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("register termination signal");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    { let _ = tokio::signal::ctrl_c().await; }
 }
 
 /// The Kernel's whole stack. The isolation headers and the path router wrap

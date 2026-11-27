@@ -1,0 +1,184 @@
+{
+  "cases": [
+    {
+      "case": "bundle contract status maps to the shared contract refusal",
+      "status": "bundle_contract",
+      "code": "function.bundle-contract",
+      "error": "Function orders bundle must be a self-contained ESM module exporting handle.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Rebuild the Server Artifact so each bundle exports handle and has no module imports."
+      }
+    },
+    {
+      "case": "wrong component ABI",
+      "code": "function.wasm-abi",
+      "error": "The function component requires ABI konae-functions-wasm/1.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer and runner that support konae-functions-wasm/1."
+      }
+    },
+    {
+      "case": "component digest mismatch",
+      "code": "function.wasm-digest",
+      "error": "The function component SHA-256 does not match its manifest.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Check the preparer output and its manifest, then prepare the function again."
+      }
+    },
+    {
+      "case": "component import outside runner allowlist",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "wrong_host_signature",
+        "wit": "interface host { op-worker-call: func(args: u32) -> string; }"
+      }
+    },
+    {
+      "case": "component with request Web API imports",
+      "acceptedFixture": {
+        "kind": "request_web_api_imports",
+        "imports": [
+          "konae:worker/host",
+          "konae:worker/crypto",
+          "wasi:cli/stderr@0.2.10",
+          "wasi:cli/stderr@0.2.12",
+          "wasi:clocks/monotonic-clock@0.2.10",
+          "wasi:clocks/monotonic-clock@0.2.12",
+          "wasi:clocks/wall-clock@0.2.10",
+          "wasi:clocks/wall-clock@0.2.12",
+          "wasi:io/error@0.2.10",
+          "wasi:io/error@0.2.12",
+          "wasi:io/poll@0.2.10",
+          "wasi:io/poll@0.2.12",
+          "wasi:io/streams@0.2.10",
+          "wasi:io/streams@0.2.12",
+          "wasi:random/random@0.2.10",
+          "wasi:random/random@0.2.12"
+        ]
+      }
+    },
+    {
+      "case": "component with a wrong crypto result type",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "wrong_crypto_signature",
+        "wit": "interface crypto { digest: func(hash: string, data: list<u8>) -> result<string, string>; }"
+      }
+    },
+    {
+      "case": "component with an extra crypto host function",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "extra_crypto_export",
+        "wit": "interface crypto { extra: func(hash: string, data: list<u8>) -> result<list<u8>, string>; }"
+      }
+    },
+    {
+      "case": "component with an extra interface",
+      "code": "function.wasm-import",
+      "error": "The function component has an import outside the allowed host interface.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits only the host imports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "extra_import",
+        "interface": "wasi:sockets/tcp@0.2.0"
+      }
+    },
+    {
+      "case": "component export outside WIT",
+      "code": "function.wasm-export",
+      "error": "The function component must export the required runner interface with matching types.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Install a preparer that emits the runner exports in the runner WIT."
+      },
+      "fixture": {
+        "kind": "wrong_runner_signature",
+        "wit": "world ipc { export handle: func(input: string, limit: u32) -> u32; export has-shutdown: func() -> bool; export shutdown: func(); export spin: func(); }"
+      }
+    },
+    {
+      "case": "malformed component bytes",
+      "code": "function.wasm-invalid",
+      "error": "The function component is not valid WebAssembly.",
+      "hint": {
+        "fix": "operator",
+        "remedy": "Check the preparer and component packaging, then prepare the function again."
+      },
+      "fixture": {
+        "kind": "malformed_wit",
+        "wit": "package konae:worker; interface host { op-worker-call func(args: string) -> string; }"
+      }
+    },
+    {
+      "case": "unsupported_api",
+      "status": "unsupported_api",
+      "code": "function.wasm-api",
+      "error": "A function uses an API that StarlingMonkey does not support.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Remove the unsupported API from the function bundle."
+      }
+    },
+    {
+      "case": "init_pending",
+      "status": "init_pending",
+      "code": "function.wasm-init-pending",
+      "error": "A function must finish its top-level initialization before it can run.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Make top-level initialization finish before the function handles requests."
+      }
+    },
+    {
+      "case": "init_effect",
+      "status": "init_effect",
+      "code": "function.wasm-init-effect",
+      "error": "A function cannot use timers, fetch, queueMicrotask, Web Crypto or random values during top-level initialization.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Move request effects out of top-level initialization. Use a call action for outbound HTTP."
+      }
+    },
+    {
+      "case": "init_failed",
+      "status": "init_failed",
+      "code": "function.wasm-init",
+      "error": "A function failed during top-level initialization.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Fix the function's top-level initialization error."
+      }
+    },
+    {
+      "case": "build_limit",
+      "status": "build_limit",
+      "code": "function.wasm-build-limit",
+      "error": "Function component preparation exceeded its build limits.",
+      "hint": {
+        "fix": "capsule",
+        "remedy": "Reduce work and memory use during function initialization."
+      }
+    }
+  ]
+}

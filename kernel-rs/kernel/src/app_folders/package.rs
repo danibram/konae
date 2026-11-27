@@ -440,12 +440,13 @@ pub fn snapshot(
 ) -> Result<Vec<(&'static str, PathBuf)>> {
     // Usage queued before the copy is written first, so the copy holds it.
     usage::flush();
+    usage::scrub_legacy_function_details(&folder.join(usage::USAGE_DATABASE))?;
     std::fs::create_dir_all(target)?;
     let mut components = Vec::new();
     if crate::modules::is_on(modules, "actions") || folder.join("database.sqlite").is_file() {
         let database = target.join("database.sqlite");
         copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
-        crate::notify::pause_exported_intents(&database).context("pending notices")?;
+        crate::modules::pause_exported_work(&database).context("pending module work")?;
         components.push((registered_component("database")?, database));
     }
     if folder.join("identity.sqlite").is_file() {
@@ -517,7 +518,13 @@ fn write_files_tar_with_references<R: Read>(
             if directory.is_dir() {
                 for entry in std::fs::read_dir(directory)? {
                     let entry = entry?;
-                    ensure!(!entry.file_name().to_string_lossy().ends_with(".blob"), "The Files directory has blobs but no readable index. Export stopped.");
+                    let name = entry.file_name();
+                    if let Some(id) = name.to_str().and_then(|name| name.strip_suffix(".blob")) {
+                        ensure!(
+                            references.iter().any(|reference| reference.id == id),
+                            "The Files directory has blobs but no readable index. Export stopped."
+                        );
+                    }
                 }
             }
             b"[]".to_vec()
@@ -746,6 +753,7 @@ fn parse_octal(field: &[u8]) -> Result<u64> {
     u64::from_str_radix(text, 8).context("The files component has a damaged header.")
 }
 
+#[cfg(test)]
 pub(crate) fn unpack_files(
     archive: &Path,
     accounts: Option<&Connection>,
@@ -840,10 +848,16 @@ pub(crate) fn unpack_files_with_references(
     }
     let mut additional = HashMap::<String, u64>::new();
     for reference in references {
-        ensure!(files::valid_file_id(&reference.id), "Blob reference {} has an invalid ID.", reference.id);
-        if !expected.contains_key(&reference.id) {
-            ensure!(additional.insert(reference.id.clone(), reference.size).is_none(), "The blob inventory lists {} twice.", reference.id);
+        let id = &reference.id;
+        ensure!(files::valid_file_id(id), "Blob reference {id} has an invalid ID.");
+        if let Some(indexed_size) = expected.get(id) {
+            ensure!(*indexed_size == reference.size, "The inventory and Files index disagree about blob {id}'s size.");
+            continue;
         }
+        ensure!(reference.size <= limits.max_file_bytes, "File {id} exceeds this installation's {} limit per file.", limits.max_file());
+        ensure!(additional.insert(id.clone(), reference.size).is_none(), "The blob inventory lists {id} twice.");
+        total = total.saturating_add(reference.size);
+        ensure!(total <= limits.quota_bytes, "The files exceed this installation's {} file quota.", limits.quota());
     }
     let mut additional_order = additional.keys().cloned().collect::<Vec<_>>();
     additional_order.sort();
@@ -893,7 +907,7 @@ pub(crate) fn unpack_files_with_references(
                 let _ = std::fs::remove_file(&temp);
                 stored?
             }
-            None if index[seen].get("sha256").is_some() => {
+            None if index.get(seen).and_then(|file| file.get("sha256")).is_some() => {
                 let mut hasher = sha2::Sha256::default();
                 let length = std::io::copy(&mut body, &mut hasher)?;
                 verify_digest(&hex::encode(sha2::Digest::finalize(hasher)))?;
@@ -1131,7 +1145,9 @@ pub fn check_components_for_modules(
         None => None,
     };
     if let Some(files) = path("files") {
-        unpack_files(&files, accounts.as_ref(), None, file_limits)?;
+        let staging = files.parent().context("The files component has no staging directory.")?;
+        let references = references_for_archive(&files, database.as_deref(), staging)?;
+        unpack_files_with_references(&files, accounts.as_ref(), None, file_limits, &references)?;
     }
     if let Some(usage) = path("usage") {
         integrity(&usage, "usage")?;
@@ -1192,7 +1208,9 @@ pub async fn install(state: &AppState, package: &InitialPackage, id: &str) -> Re
     tokio::task::spawn_blocking(move || {
         let find = |name: &str| uploads.iter().find(|(c, _)| c.name == name);
         if let Some((content, source)) = find("database") {
-            copy_verified(source, &directory.join("database.sqlite"), content)?;
+            let database = directory.join("database.sqlite");
+            copy_verified(source, &database, content)?;
+            crate::modules::resume_imported_work(&database)?;
         }
         let identity = directory.join("identity.sqlite");
         if let Some((content, source)) = find("identity") {
@@ -1773,6 +1791,11 @@ mod tests {
                 let size = file.metadata()?.len();
                 Ok(Some((size, file)))
             }).unwrap();
+            let limits = file_store::FileLimits::parse(Some("1024"), Some("1024")).unwrap();
+            assert_eq!(unpack_files_with_references(&archive_for_task, None, None, &limits, &references_for_task).unwrap(), 1);
+            let too_small = file_store::FileLimits::parse(Some("1"), Some("1")).unwrap();
+            assert!(unpack_files_with_references(&archive_for_task, None, None, &too_small, &references_for_task)
+                .unwrap_err().to_string().contains("limit per file"));
             let destination = target_root_for_task.join("apps").join("app").join("data").join("files");
             let store = file_store::BlockingFiles::new(target_store_for_task, "app");
             unpack_files_with_references(&archive_for_task, None, Some((&destination, &store)), &Default::default(), &references_for_task).unwrap();
@@ -1780,6 +1803,35 @@ mod tests {
         assert_eq!(target_store.list("app").await.unwrap(), vec![id.clone()]);
         assert_eq!(std::fs::read(target_root.join("apps/app/data/files/index.json")).unwrap(), b"[]");
         assert_eq!(std::fs::read(target_root.join(format!("apps/app/data/files/{id}.blob"))).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn usage_snapshot_scrubs_legacy_function_error_details() {
+        let root = std::env::temp_dir().join(format!("konae-package-usage-{}", Uuid::new_v4()));
+        let folder = root.join("app/data");
+        let target = root.join("snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        let usage = Connection::open(folder.join(usage::USAGE_DATABASE)).unwrap();
+        usage
+            .execute_batch(
+                "CREATE TABLE function_latency(id INTEGER PRIMARY KEY, error_detail TEXT);
+                 INSERT INTO function_latency(error_detail) VALUES('private fixture detail');",
+            )
+            .unwrap();
+        drop(usage);
+        let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
+        let blobs = file_store::BlockingFiles::new(store, "app");
+        let mut modules = crate::modules::defaults();
+        modules.get_mut("actions").unwrap()["on"] = json!(false);
+        let parts = snapshot(&folder, &target, &blobs, &modules).unwrap();
+        assert!(parts.iter().any(|(name, _)| *name == "usage"));
+        let copied = Connection::open(target.join(usage::USAGE_DATABASE)).unwrap();
+        let detail: Option<String> = copied
+            .query_row("SELECT error_detail FROM function_latency", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(detail, None);
+        assert!(!detail.unwrap_or_default().contains("private fixture detail"));
         let _ = std::fs::remove_dir_all(root);
     }
 

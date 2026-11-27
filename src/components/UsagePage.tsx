@@ -166,6 +166,14 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
       </div>
     </section>}
     <FunctionLatency summary={summary.functionLatency} />
+    {summary.functionActionLatency?.series.length ? <section aria-labelledby="function-action-latency-heading">
+      <h2 id="function-action-latency-heading">Action latency</h2>
+      <p className="usage-note">The Kernel records resolved action names and SQLite time. Row values, SQL text and error details are not stored.</p>
+      <div className="ui-table-scroll"><table className="ui-table"><caption>Action and SQLite time percentiles for retained calls.</caption><thead><tr><th scope="col">Action</th><th scope="col">Origin</th><th scope="col">Calls</th><th scope="col">Action latency</th><th scope="col">SQLite time</th><th scope="col">Rows and reply bytes</th><th scope="col">Errors</th></tr></thead>
+        <tbody>{summary.functionActionLatency.series.map((row) => <tr key={`${row.action}/${row.version}/${row.origin}`}><th scope="row">{row.action}<small title={row.version}>{row.version.slice(0, 12)}</small></th><td data-label="Origin">{row.origin}</td><td data-label="Calls">{number.format(row.samples)}</td><td data-label="Action latency">p50 {row.duration.p50Ms.toFixed(2)} ms<small>p95 {row.duration.p95Ms.toFixed(2)} ms</small></td><td data-label="SQLite time">p50 {row.sqlite.p50Ms.toFixed(2)} ms<small>p95 {row.sqlite.p95Ms.toFixed(2)} ms</small></td><td data-label="Rows and reply bytes">{number.format(row.rowsRead)} read, {number.format(row.rowsWritten)} written<small>{number.format(row.replyBytes)} reply bytes</small></td><td data-label="Errors">{Object.entries(row.errors).map(([code, total]) => `${code}: ${number.format(total)}`).join(", ") || "None"}</td></tr>)}</tbody>
+      </table></div>
+      {summary.functionActionLatency.seriesTruncated && <p className="usage-note">Showing the {number.format(summary.functionActionLatency.seriesLimit)} most recently active action groups.</p>}
+    </section> : null}
     {notices.notSent > 0 && <Alert tone="warning" className="usage-error" title={`${number.format(notices.notSent)} email ${notices.notSent === 1 ? "notice was" : "notices were"} not sent`}>{[...new Set(notices.reasons.map((r) => r.label))].map((label) => label[0].toUpperCase() + label.slice(1)).join(". ")}. The actions themselves completed; only the email is missing.{notices.reasons.some((r) => r.reason === "no-transport") && " Whoever runs this installation can connect an email service."}</Alert>}
     {/* Only what makes this period's numbers incomplete stays in view; how they are counted waits in the disclosure. */}
     {incomplete && <section className="usage-coverage" aria-label="Data coverage">

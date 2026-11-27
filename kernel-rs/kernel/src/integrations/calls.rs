@@ -671,6 +671,9 @@ enum Target {
     Outside(SocketAddr),
 }
 
+#[cfg(test)]
+static TEST_IN_PROCESS_TRACEPARENTS: OnceLock<std::sync::Mutex<Vec<String>>> = OnceLock::new();
+
 async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static str, bool)> {
     let host = host_of(url);
     let rules = crate::domain::Rules::of(state);
@@ -732,6 +735,7 @@ fn legacy_connection(data_root: &Path) -> Result<Connection> {
         ("request_body", "TEXT"),
         ("request_headers", "TEXT"),
         ("response_body", "BLOB"),
+        ("traceparent", "TEXT"),
     ] {
         let exists: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('calls') WHERE name = ?1)",
@@ -751,7 +755,7 @@ fn migrate_legacy_calls(data_root: &Path, deployments: &[Deployment]) -> Result<
     for deployment in deployments {
         let mut query = legacy.prepare(
             "SELECT id, action, input, state, attempts, next_attempt_at, leased_until, method, url, status, error, answer,
-                    then_action, then_state, then_message, execution_mode, request_body, request_headers, response_body, created_at, updated_at
+                    then_action, then_state, then_message, execution_mode, request_body, request_headers, response_body, created_at, updated_at, traceparent
              FROM calls WHERE deployment = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = query.query_map([&deployment.id], |row| Ok((
@@ -759,13 +763,13 @@ fn migrate_legacy_calls(data_root: &Path, deployments: &[Deployment]) -> Result<
             row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, Option<i64>>(6)?, row.get::<_, Option<String>>(7)?,
             row.get::<_, Option<String>>(8)?, row.get::<_, Option<i64>>(9)?, row.get::<_, Option<String>>(10)?, row.get::<_, Option<String>>(11)?,
             row.get::<_, Option<String>>(12)?, row.get::<_, Option<String>>(13)?, row.get::<_, Option<String>>(14)?, row.get::<_, String>(15)?,
-            row.get::<_, Option<String>>(16)?, row.get::<_, Option<String>>(17)?, row.get::<_, Option<Vec<u8>>>(18)?, row.get::<_, i64>(19)?, row.get::<_, i64>(20)?,
+            row.get::<_, Option<String>>(16)?, row.get::<_, Option<String>>(17)?, row.get::<_, Option<Vec<u8>>>(18)?, row.get::<_, i64>(19)?, row.get::<_, i64>(20)?, row.get::<_, Option<String>>(21)?,
         )))?.collect::<rusqlite::Result<Vec<_>>>()?;
         drop(query);
         let source: Value = serde_json::from_str(&deployment.actions)?;
         for row in rows {
             let (id, action, input, old_state, attempts, next_at, leased, method, url, status, error, answer, old_then_action, then_state,
-                then_message, mode, request_body, request_headers, response_body, created_at, updated_at) = row;
+                then_message, mode, request_body, request_headers, response_body, created_at, updated_at, traceparent) = row;
             let raw_declaration = source["actions"].get(&action).cloned().unwrap_or_else(|| json!({}));
             let definition = serde_json::from_value::<ActionDefinition>(raw_declaration.clone()).ok();
             let call = definition.as_ref().and_then(|definition| check_kind(&action, definition).ok().flatten());
@@ -778,11 +782,11 @@ fn migrate_legacy_calls(data_root: &Path, deployments: &[Deployment]) -> Result<
             let tx = db.unchecked_transaction()?;
             tx.execute(
                 "INSERT OR IGNORE INTO __konae_calls (id,deployment,action,release,declaration,continuation,input,state,attempts,next_attempt_at,leased_until,
-                    method,url,status,error,answer,then_action,then_state,then_message,execution_mode,request_body,request_headers,response_body,created_at,updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
+                    method,url,status,error,answer,then_action,then_state,then_message,execution_mode,request_body,request_headers,response_body,created_at,updated_at,traceparent)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)",
                 rusqlite::params![id,deployment.id,action,deployment.artifact_version,raw_declaration.to_string(),continuation.map(|value| value.to_string()),input,
                     old_state,attempts,next_at,leased,method,url,status,error,answer,old_then_action,then_state,then_message,mode,
-                    request_body,request_headers,response_body,created_at,updated_at],
+                    request_body,request_headers,response_body,created_at,updated_at,traceparent],
             )?;
             tx.commit()?;
             legacy.execute("DELETE FROM calls WHERE id = ?1 AND deployment = ?2", rusqlite::params![id,deployment.id])?;
@@ -1097,6 +1101,10 @@ pub async fn submit_synthetic_response(state: &AppState, app_id: &str, id: &str,
 /// Queues a call whose caller and inputs `invoke_action` has checked, and
 /// answers `{ callId, queued: true }`.
 pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, input: &Value) -> Response {
+    enqueue_with_traceparent(state, deployment, name, input, None).await
+}
+
+pub async fn enqueue_with_traceparent(state: &AppState, deployment: &Deployment, name: &str, input: &Value, traceparent: Option<&str>) -> Response {
     if let Err(refused) = crate::modules::require_on(&deployment.modules, "calls") { return crate::refusal_error(&refused); }
     let source: Value = match serde_json::from_str(&deployment.actions) {
         Ok(source) => source,
@@ -1121,6 +1129,16 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
     let input = input.clone();
     let limit = per_minute();
     let execution_mode = if state.execution_mode.is_test() { "test" } else { "live" };
+    let traceparent = if execution_mode == "live" && state.otlp.is_some() {
+        traceparent.and_then(|value| {
+            let trace_id = crate::functions::trace::traceparent_id(value)?;
+            let sampled = state.otlp.as_ref().map_or_else(
+                || crate::functions::trace::traceparent_sampled(value).unwrap_or(false),
+                |exporter| exporter.should_sample(&trace_id),
+            );
+            crate::functions::trace::normalize_traceparent(value, sampled)
+        })
+    } else { None };
     let queued = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let db = app_connection(&data_root, &deployment_id)?;
         let at = now();
@@ -1139,9 +1157,9 @@ pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, inpu
         if pending >= MAX_PENDING_PER_APP { return Ok(None); }
         let id = format!("call_{}", Uuid::new_v4().simple());
         db.execute(
-            "INSERT INTO __konae_calls (id, deployment, action, release, declaration, continuation, input, state, attempts, next_attempt_at, execution_mode, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, ?8, ?9, ?8, ?8)",
-            rusqlite::params![id, deployment_id, action, revision, declaration.to_string(), continuation.map(|value| value.to_string()), input.to_string(), at, execution_mode],
+            "INSERT INTO __konae_calls (id, deployment, action, release, declaration, continuation, input, state, attempts, next_attempt_at, execution_mode, traceparent, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, ?8, ?9, ?10, ?8, ?8)",
+            rusqlite::params![id, deployment_id, action, revision, declaration.to_string(), continuation.map(|value| value.to_string()), input.to_string(), at, execution_mode, traceparent],
         )?;
         db.execute(
             "DELETE FROM __konae_calls WHERE deployment = ?1 AND state <> 'pending' AND id NOT IN
@@ -1173,6 +1191,7 @@ struct Claimed {
     input: Value,
     attempts: i64,
     stored_response: Option<StoredResponse>,
+    traceparent: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1191,7 +1210,7 @@ fn claim(data_root: &Path, app_id: &str) -> Result<Vec<Claimed>> {
          WHERE id = (SELECT id FROM __konae_calls WHERE state = 'pending' AND execution_mode = 'live'
            AND next_attempt_at <= ?2 AND (leased_until IS NULL OR leased_until < ?2)
            ORDER BY next_attempt_at, created_at, rowid LIMIT 1)
-         RETURNING id, deployment, action, release, declaration, continuation, input, attempts",
+         RETURNING id, deployment, action, release, declaration, continuation, input, attempts, traceparent",
     )?;
     let rows = statement
         .query_map(rusqlite::params![at + LEASE_MS, at], |row| {
@@ -1205,6 +1224,7 @@ fn claim(data_root: &Path, app_id: &str) -> Result<Vec<Claimed>> {
                 input: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or(json!({})),
                 attempts: row.get(7)?,
                 stored_response: None,
+                traceparent: row.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1218,16 +1238,16 @@ fn claim_recovery(data_root: &Path, app_id: &str) -> Result<Option<Claimed>> {
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let at = now();
     let row = tx.query_row(
-        "SELECT id, deployment, action, release, declaration, continuation, input, attempts, status, error, response_body
+        "SELECT id, deployment, action, release, declaration, continuation, input, attempts, status, error, response_body, traceparent
          FROM __konae_calls WHERE state IN ('delivered','failed') AND then_state='processing'
            AND (leased_until IS NULL OR leased_until < ?1) ORDER BY updated_at, created_at LIMIT 1",
         [at], |row| Ok((
             row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?,
             row.get::<_, String>(4)?, row.get::<_, Option<String>>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?,
-            row.get::<_, Option<i64>>(8)?, row.get::<_, Option<String>>(9)?, row.get::<_, Option<Vec<u8>>>(10)?,
+            row.get::<_, Option<i64>>(8)?, row.get::<_, Option<String>>(9)?, row.get::<_, Option<Vec<u8>>>(10)?, row.get::<_, Option<String>>(11)?,
         )),
     ).optional()?;
-    let Some((id, deployment, action, release, declaration, continuation, input, attempts, status, error, answer)) = row else {
+    let Some((id, deployment, action, release, declaration, continuation, input, attempts, status, error, answer, traceparent)) = row else {
         tx.commit()?;
         return Ok(None);
     };
@@ -1243,6 +1263,7 @@ fn claim_recovery(data_root: &Path, app_id: &str) -> Result<Option<Claimed>> {
         declaration: serde_json::from_str(&declaration).unwrap_or(Value::Null),
         continuation: continuation.and_then(|value| serde_json::from_str(&value).ok()),
         input: serde_json::from_str(&input).unwrap_or(json!({})), attempts,
+        traceparent,
         stored_response: Some(StoredResponse {
             status: status.and_then(|value| u16::try_from(value).ok()),
             error: error.as_deref().and_then(stored_error), answer: answer.unwrap_or_default(),
@@ -1731,7 +1752,7 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
         let extra_headers = request_headers(&call, &job.input);
         let mut attempt = Attempt { method: Some(call.method.clone()), url: Some(url.to_string()), ..Default::default() };
         let mut retry = false;
-        match send(state, &deployment, &call, &url, &body, &extra_headers).await {
+        match send(state, &deployment, &call, &url, &body, &extra_headers, job.traceparent.as_deref()).await {
             Ok((status, answer)) => { attempt.status = Some(status); attempt.answer = answer; }
             Err((kind, retryable)) => { attempt.error = Some(kind); retry = retryable; }
         }
@@ -1776,8 +1797,23 @@ async fn send(
     url: &url::Url,
     body: &[u8],
     extra_headers: &[(String, String)],
+    traceparent: Option<&str>,
 ) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
     let target = target(state, url).await?;
+    send_to_target(state, deployment, call, url, body, extra_headers, traceparent, target).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_to_target(
+    state: &AppState,
+    deployment: &Deployment,
+    call: &Call,
+    url: &url::Url,
+    body: &[u8],
+    extra_headers: &[(String, String)],
+    traceparent: Option<&str>,
+    target: Target,
+) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
     let secret = match &call.auth {
         None => None,
         Some(auth) => {
@@ -1800,6 +1836,12 @@ async fn send(
         }
         (Some(Auth::Key { .. }), Some(secret)) => headers.push(("authorization".into(), format!("Bearer {secret}"))),
         _ => {}
+    }
+    if let Some(traceparent) = traceparent.filter(|_| !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("traceparent"))) {
+        headers.retain(|(name, _)| !name.eq_ignore_ascii_case("traceparent"));
+        if let Some(attempt_traceparent) = crate::functions::trace::child_traceparent(traceparent) {
+            headers.push(("traceparent".into(), attempt_traceparent));
+        }
     }
     match target {
         Target::App(app) => Ok(send_in_process(state, deployment, &app, &call.method, &path, &query, &headers, body).await?),
@@ -1826,6 +1868,14 @@ async fn send_in_process(
     for (name, value) in headers {
         let name = axum::http::HeaderName::from_bytes(name.as_bytes()).map_err(|_| ("invalid-header", false))?;
         map.insert(name, HeaderValue::from_str(value).map_err(|_| ("invalid-header", false))?);
+    }
+    #[cfg(test)]
+    if let Some(value) = map.get("traceparent").and_then(|value| value.to_str().ok()) {
+        TEST_IN_PROCESS_TRACEPARENTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(value.to_owned());
     }
     let response = crate::http::call_route(state, app, method, path, query, body, &map, caller_address(&caller.id)).await;
     let status = response.status().as_u16();
@@ -2500,8 +2550,19 @@ mod tests {
     }
 
     async fn publish_as(state: &AppState, id: &str, actions: Value, schema: &str) -> Result<Deployment, String> {
+        publish_named(state, id, id, id, actions, schema).await
+    }
+
+    async fn publish_named(
+        state: &AppState,
+        id: &str,
+        name: &str,
+        slug: &str,
+        actions: Value,
+        schema: &str,
+    ) -> Result<Deployment, String> {
         let body = json!({
-            "project": {"id": id, "name": id, "slug": id, "manifest": {},
+            "project": {"id": id, "name": name, "slug": slug, "manifest": {},
                 "files": {"actions.json": actions.to_string(), "schema.sql": schema}},
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>app</p>"}}
@@ -2522,6 +2583,116 @@ mod tests {
                 "bindings": [{"source": "input", "key": "status", "type": "number", "nullable": true},
                              {"source": "input", "key": "error", "type": "string", "nullable": true}]}
         }})
+    }
+
+    fn captured_headers(request: &[u8]) -> (std::collections::HashMap<String, String>, Vec<u8>) {
+        let text = String::from_utf8_lossy(request);
+        let (head, body) = text.split_once("\r\n\r\n").unwrap();
+        let headers = head.lines().skip(1).filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.to_ascii_lowercase(), value.trim().to_owned()))
+        }).collect();
+        (headers, body.as_bytes().to_vec())
+    }
+
+    async fn verify_captured_signature(root: &Path, signature: &str, body: &[u8]) {
+        let db = crate::http::secrets_store(root, "caller").unwrap();
+        let request = crate::http::SignedRequest { method: "POST", path: "/hook", query: "", body };
+        let result = crate::http::verify_signature(&db, &request, "synthetic-call-secret", Some(signature), now_ms() / 1000).unwrap();
+        assert_eq!(result, crate::http::SignatureCheck::Valid);
+    }
+
+    #[tokio::test]
+    async fn pending_outbox_trace_context_retries_deliver_signed_requests_with_fresh_children() {
+        let root = std::env::temp_dir().join(format!("konae-call-trace-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let action_json = json!({"version":1,"actions":{
+            "hook.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://hooks.example.net/hook",
+                "bindings":[{"source":"input","key":"message","type":"string"}],"body":{"message":"message"},
+                "auth":{"secret":"hook_secret","header":"X-Signature"}}
+        }});
+        let secrets = crate::http::secrets_store(&root, "caller").unwrap();
+        crate::http::secrets_call(&secrets, "caller", None, "secret_set", &json!({"name":"hook_secret","value":"synthetic-call-secret","use":"call"})).unwrap();
+        let deployment = publish(&state, action_json.clone(), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let action_program: ActionProgram = serde_json::from_str(&deployment.actions).unwrap();
+        let call = declaration("hook.send", &action_program.actions["hook.send"]).unwrap();
+        let url = url::Url::parse("http://hooks.example.net/hook").unwrap();
+        let body = br#"{"message":"synthetic"}"#;
+        let db = app_connection(&root, &deployment.id).unwrap();
+        db.execute(
+            "INSERT INTO __konae_calls (id, deployment, action, input, state, next_attempt_at, traceparent, created_at, updated_at) VALUES ('pending', 'caller', 'hook.send', '{\"message\":\"synthetic\"}', 'pending', 0, ?1, 1, 1)",
+            [parent],
+        ).unwrap();
+        drop(db);
+        let first = claim(&root, &deployment.id).unwrap().pop().unwrap();
+        assert_eq!(first.traceparent.as_deref(), Some(parent));
+        let (address, request) = server(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n".to_vec(), Duration::ZERO).await;
+        let first_answer = send_to_target(&state, &deployment, &call, &url, body, &[], first.traceparent.as_deref(), Target::Outside(address)).await.unwrap();
+        assert_eq!(first_answer.0, 503);
+        let (first_headers, first_body) = captured_headers(&request.await.unwrap());
+        assert_eq!(first_body, body);
+        verify_captured_signature(&root, &first_headers["x-signature"], &first_body).await;
+        let first_attempt = first_headers["traceparent"].clone();
+        assert_eq!(crate::functions::trace::traceparent_id(&first_attempt), crate::functions::trace::traceparent_id(parent));
+        release(&root, &deployment.id, "pending", first.attempts, FIRST_BACKOFF_MS, true, &Attempt { status: Some(503), ..Default::default() }).unwrap();
+        app_connection(&root, &deployment.id).unwrap().execute("UPDATE __konae_calls SET next_attempt_at = 0 WHERE id = 'pending'", []).unwrap();
+        let retry = claim(&root, &deployment.id).unwrap().pop().unwrap();
+        assert_eq!(retry.traceparent, first.traceparent);
+        assert_eq!(retry.attempts, first.attempts + 1);
+        let (address, request) = server(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}".to_vec(), Duration::ZERO).await;
+        assert_eq!(send_to_target(&state, &deployment, &call, &url, body, &[], retry.traceparent.as_deref(), Target::Outside(address)).await.unwrap(), (200, b"{}".to_vec()));
+        let (retry_headers, retry_body) = captured_headers(&request.await.unwrap());
+        verify_captured_signature(&root, &retry_headers["x-signature"], &retry_body).await;
+        let retry_attempt = &retry_headers["traceparent"];
+        assert_eq!(crate::functions::trace::traceparent_id(retry_attempt), crate::functions::trace::traceparent_id(parent));
+        assert_ne!(&first_attempt[36..52], &retry_attempt[36..52]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn declared_in_process_trace_context_route_receives_signed_payload_on_retries() {
+        let root = std::env::temp_dir().join(format!("konae-call-in-process-trace-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let receiver_actions = json!({"version":1,"actions":{
+            "hook.receive":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO received(message) VALUES (?1)",
+                "bindings":[{"source":"input","key":"message","type":"string"}],
+                "http":{"method":"POST","path":"/hooks/signed","signature":{"header":"X-Signature","secret":"hook_secret"},"callers":["signature"]}}
+        }});
+        let receiver_secrets = crate::http::secrets_store(&root, "receiver").unwrap();
+        crate::http::secrets_call(&receiver_secrets, "receiver", None, "secret_set", &json!({"name":"hook_secret","value":"synthetic-call-secret","use":"route"})).unwrap();
+        let receiver = publish_named(&state, "receiver", "Receiver", "receiver", receiver_actions,
+            "CREATE TABLE IF NOT EXISTS received (message TEXT);").await.unwrap();
+        let caller_actions = json!({"version":1,"actions":{
+            "hook.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://receiver.apps.example.org/hooks/signed",
+                "bindings":[{"source":"input","key":"message","type":"string"}],"body":{"message":"message"},
+                "auth":{"secret":"hook_secret","header":"X-Signature"}}
+        }});
+        let caller_secrets = crate::http::secrets_store(&root, "caller").unwrap();
+        crate::http::secrets_call(&caller_secrets, "caller", None, "secret_set", &json!({"name":"hook_secret","value":"synthetic-call-secret","use":"call"})).unwrap();
+        let caller = publish(&state, caller_actions.clone(), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        let action_program: ActionProgram = serde_json::from_str(&caller.actions).unwrap();
+        let call = declaration("hook.send", &action_program.actions["hook.send"]).unwrap();
+        let url = call.url.clone();
+        let body = br#"{"message":"synthetic"}"#;
+        TEST_IN_PROCESS_TRACEPARENTS.get_or_init(Default::default).lock().unwrap().clear();
+        for _ in 0..2 {
+            let answer = send_to_target(&state, &caller, &call, &url, body, &[], Some(parent), Target::App(receiver.clone())).await.unwrap();
+            assert_eq!(answer.0, 200);
+        }
+        assert_eq!(send_to_target(&state, &caller, &call, &url, body, &[], None, Target::App(receiver.clone())).await.unwrap().0, 200);
+        let observed = TEST_IN_PROCESS_TRACEPARENTS.get_or_init(Default::default).lock().unwrap().clone();
+        assert_eq!(observed.len(), 2);
+        assert!(observed.iter().all(|header| crate::functions::trace::traceparent_id(header) == crate::functions::trace::traceparent_id(parent)));
+        assert_ne!(&observed[0][36..52], &observed[1][36..52]);
+        let db = Connection::open(crate::layout::database(&root, &receiver.id)).unwrap();
+        let received = db.query_row("SELECT group_concat(message, ',') FROM received", [], |row| row.get::<_, String>(0)).unwrap();
+        assert_eq!(received, "synthetic,synthetic,synthetic");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

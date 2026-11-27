@@ -69,6 +69,20 @@ test("a published static app exports without actions.json", async () => {
   expect(paths).not.toContain("notes/app/actions.json");
 });
 
+test("a published function app export selects the StarlingMonkey runner in Compose", async () => {
+  const functionFolder = createTar([
+    { path: SETTINGS_FILE, contents: JSON.stringify(settings) },
+    { path: "app/actions.json", contents: JSON.stringify({ version: 1, actions: {} }) },
+    { path: "app/functions.json", contents: JSON.stringify({ version: 1, functions: { hello: { entry: "functions/hello.js", methods: ["GET"], mount: "/api/hello", access: "anonymous", actions: [] } } }) },
+    { path: "dist/index.html", contents: "published artifact" },
+    { path: "server/manifest.json", contents: "{}" },
+  ]);
+  const functionMcp = { ...mcp, download: async (_transfer: Transfer) => functionFolder } as never;
+  const result = await createProjectExport(draft, "app_1", { mcp: functionMcp, build: async () => { throw Error("published export must not build the draft"); } });
+  const compose = readTar(new Uint8Array(await result.blob.arrayBuffer())).find((entry) => entry.path === "notes/compose.yaml")!;
+  expect(new TextDecoder().decode(compose.contents)).toContain("KONAE_FUNCTIONS_RUNNER_KIND: ${KONAE_FUNCTIONS_RUNNER_KIND:-wasm}");
+});
+
 test("a draft is built for its export, and a draft that does not build says why", async () => {
   const build = async () => { throw Error("index.html references missing.png, but the Capsule holds no missing.png."); };
   await expect(createProjectExport(draft, undefined, { mcp, build })).rejects.toThrow("missing.png");

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS calls (
   request_body TEXT,
   request_headers TEXT,
   response_body BLOB,
+  traceparent TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

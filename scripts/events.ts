@@ -3,15 +3,18 @@ import type { McpClient } from "../src/mcp/client";
 import { usageRange, type UsageSummary } from "../src/lib/usage";
 import { whatHappened, type Call, type Notice, type Signal, type Sources } from "../src/lib/what-happened";
 
+type FunctionTrace = { at: number; traceId: string; spanId: string; runnerKind: "deno" | "wasm"; status: number; outcome: string; truncated: boolean; spans: { parent: number | null; name: string; startUs: number; durationUs: number; action?: string | null; origin?: string | null; sequence?: number | null; rowsRead?: number | null; rowsWritten?: number | null; replyBytes?: number | null; sqliteUs?: number | null; errorCode?: string | null }[] };
+
 export type AppEvent = {
   id: string;
   at: number;
-  kind: "mail" | "notice" | "call" | "scheduled" | "route" | "signal";
+  kind: "mail" | "notice" | "call" | "scheduled" | "route" | "signal" | "function";
   title: string;
   detail?: string;
   outcome: string;
   fix?: string;
   mail?: { to: string; purpose: string; action?: string; subject?: string; text?: string; link?: string };
+  waterfall?: FunctionTrace["spans"];
 };
 
 type MailboxLine = { to?: string; purpose?: string; scope?: string; action?: string; subject?: string; text?: string; link?: string; expiresAt?: number };
@@ -35,7 +38,7 @@ export function mailEvents(mailbox: string, deploymentId: string, seen = new Map
   return events;
 }
 
-export type ReadRecord = (range: { from: string; to: string }) => Promise<Sources>;
+export type ReadRecord = (range: { from: string; to: string }) => Promise<Sources & { functionTraces?: FunctionTrace[] }>;
 export type LocalTestControls = {
   status(): Promise<unknown>;
   calls(): Promise<unknown>;
@@ -74,10 +77,17 @@ export function deploymentRecord(client: Pick<McpClient, "call">, deploymentId: 
 export async function kernelEvents(read: ReadRecord, days = 7, mailboxShowsDelivered = false): Promise<AppEvent[]> {
   const record = await read(usageRange(days));
   const notices = mailboxShowsDelivered ? record.notices.filter((notice) => notice.state !== "delivered") : record.notices;
-  return whatHappened({ ...record, notices }).map((entry) => ({
+  const events = whatHappened({ ...record, notices }).map((entry) => ({
     id: entry.id, at: entry.at, kind: entry.kind, title: entry.title, detail: entry.detail, outcome: entry.outcome.words,
     ...(entry.outcome.fix ? { fix: entry.outcome.fix.what } : {}),
   }));
+  for (const trace of record.functionTraces ?? []) {
+    const actions = trace.spans.filter((span) => span.name === "konae.action").length;
+    events.push({ id: `function:${trace.traceId}:${trace.spanId}`, at: trace.at, kind: "function",
+      title: `Function ${trace.runnerKind} · HTTP ${trace.status} · ${actions} actions`, detail: `Trace ${trace.traceId}`,
+      outcome: `${trace.outcome}${trace.truncated ? " · waterfall truncated" : ""}`, waterfall: trace.spans });
+  }
+  return events;
 }
 
 export async function readEvents(read: ReadRecord, deploymentId: string, options: { mailbox?: string; days?: number; seen?: Map<number, number> } = {}): Promise<AppEvent[]> {
@@ -88,6 +98,7 @@ export async function readEvents(read: ReadRecord, deploymentId: string, options
 
 export function formatEvent(event: AppEvent): string {
   const lines = [`${new Date(event.at).toISOString().slice(11, 19)}  ${event.kind.padEnd(9)} ${event.title}${event.detail ? `  (${event.detail})` : ""}`, `          ${event.outcome}${event.fix ? ` ${event.fix}` : ""}`];
+  if (event.waterfall) for (const span of event.waterfall) lines.push(`          ${span.startUs} µs +${span.durationUs} µs ${span.name}${span.action ? ` ${span.action}` : ""}${span.errorCode ? ` ${span.errorCode}` : ""}`);
   if (event.mail?.text) lines.push(...event.mail.text.trim().split("\n").map((line) => `          | ${line}`));
   return lines.join("\n");
 }
@@ -139,7 +150,7 @@ export const EVENTS_PAGE = `<!doctype html>
   <p class="empty" id="empty" hidden>Nothing yet. Call an action that notifies, calls another service or records a Signal, and it shows here.</p>
 </main>
 <script>
-  const kinds = ["all", "mail", "notice", "call", "scheduled", "route", "signal"];
+  const kinds = ["all", "mail", "notice", "call", "scheduled", "route", "signal", "function"];
   let shown = "all"; let events = [];
   const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
   const filters = document.getElementById("filters");
@@ -167,6 +178,12 @@ export const EVENTS_PAGE = `<!doctype html>
         if (p.childNodes.length) item.append(p);
       }
       if (event.mail && event.mail.text) item.append(el("pre", "", event.mail.text.trim()));
+      if (event.waterfall) {
+        const disclosure = el("details"); disclosure.append(el("summary", "", "Invocation waterfall"));
+        const spans = el("ol");
+        for (const span of event.waterfall) spans.append(el("li", "", span.startUs + " µs +" + span.durationUs + " µs " + span.name + (span.action ? " · " + span.action : "") + (span.errorCode ? " · " + span.errorCode : "")));
+        disclosure.append(spans); item.append(disclosure);
+      }
       return item;
     }));
     document.getElementById("empty").hidden = rows.length > 0;

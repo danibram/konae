@@ -44,6 +44,19 @@ pub async fn admin_database(state: &AppState, id: &str, body: &[u8]) -> Response
     if !matches!(operation, "list-backups" | "restore-backup") {
         if let Err(refused) = modules::require_on(&deployment.modules, "actions") { return refusal_error(&refused); }
     }
+    let _backup_prepared_pin = if operation == "restore-backup" {
+        match crate::app_data::prepare_backup(
+            state,
+            &deployment.id,
+            body.get("backupId").and_then(Value::as_str).unwrap_or(""),
+        ).await {
+            Ok(pin) => Some(pin),
+            Err(failure) => return match crate::refusal::of(&failure) {
+                Some(refused) => refusal_error(refused),
+                None => error(StatusCode::BAD_REQUEST, &failure.to_string()),
+            },
+        }
+    } else { None };
     let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;
     let _release_guard = named_lock(state, &format!("publish:{}", deployment.id), operation == "restore-backup").await;
     let path = database_path(&state, &deployment.id);

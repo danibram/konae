@@ -645,7 +645,7 @@ describe("konae CLI", () => {
   });
 
   test("a local Kernel passes the explicit functions runner policy and drops other Konae settings", async () => {
-    const names = ["KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP", "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID", "KONAE_SETUP_KEY", "KONAE_KERNEL_BIN"] as const;
+    const names = ["KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_RUNNER_KIND", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP", "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID", "KONAE_FUNCTIONS_PREPARER", "KONAE_FUNCTIONS_WASM_CACHE", "KONAE_FUNCTIONS_WASM_CACHE_BYTES", "KONAE_OTLP_TRACES_ENDPOINT", "KONAE_OTLP_TRACES_HEADERS", "KONAE_OTLP_TRACES_SAMPLE_RATE", "KONAE_STARLING_CACHE", "KONAE_STARLING_BUILDER", "KONAE_SETUP_KEY", "KONAE_KERNEL_BIN"] as const;
     const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
     const fake = path.join(directory, "kernel");
     await writeFile(fake, `#!${process.execPath}\nconsole.log(JSON.stringify({executionTest: 1}));\n`);
@@ -653,20 +653,38 @@ describe("konae CLI", () => {
     try {
       process.env.KONAE_KERNEL_BIN = fake;
       process.env.KONAE_FUNCTIONS_RUNNER = "/tmp/functions-runner";
+      process.env.KONAE_FUNCTIONS_RUNNER_KIND = "wasm";
       process.env.KONAE_FUNCTIONS_DEVELOPMENT = "1";
       process.env.KONAE_FUNCTIONS_CGROUP = "/tmp/functions-cgroup";
       process.env.KONAE_FUNCTIONS_UID = "20002";
       process.env.KONAE_FUNCTIONS_GID = "20002";
+      process.env.KONAE_FUNCTIONS_PREPARER = "/tmp/functions-prepare";
+      process.env.KONAE_FUNCTIONS_WASM_CACHE = "/tmp/functions-cache";
+      process.env.KONAE_FUNCTIONS_WASM_CACHE_BYTES = "4294967296";
+      process.env.KONAE_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:4318/v1/traces";
+      process.env.KONAE_OTLP_TRACES_HEADERS = '{"x-tenant":"local-test"}';
+      process.env.KONAE_OTLP_TRACES_SAMPLE_RATE = "0.5";
+      process.env.KONAE_STARLING_CACHE = "/tmp/old-starling-cache";
+      process.env.KONAE_STARLING_BUILDER = "/tmp/old-starling-builder";
       process.env.KONAE_SETUP_KEY = "must-not-pass";
       const settings = await initLocal(path.join(directory, "functions-app"), { name: "Functions probe" });
       const local = await localKernel(path.join(directory, "functions-app"), settings);
-      expect(Object.fromEntries(names.slice(0, 5).map((name) => [name, local.env[name]]))).toEqual({
+      expect(Object.fromEntries(names.slice(0, 6).map((name) => [name, local.env[name]]))).toEqual({
         KONAE_FUNCTIONS_RUNNER: "/tmp/functions-runner",
+        KONAE_FUNCTIONS_RUNNER_KIND: "wasm",
         KONAE_FUNCTIONS_DEVELOPMENT: "1",
         KONAE_FUNCTIONS_CGROUP: "/tmp/functions-cgroup",
         KONAE_FUNCTIONS_UID: "20002",
         KONAE_FUNCTIONS_GID: "20002",
       });
+      expect(local.env.KONAE_FUNCTIONS_PREPARER).toBe("/tmp/functions-prepare");
+      expect(local.env.KONAE_FUNCTIONS_WASM_CACHE).toBe("/tmp/functions-cache");
+      expect(local.env.KONAE_FUNCTIONS_WASM_CACHE_BYTES).toBe("4294967296");
+      expect(local.env.KONAE_OTLP_TRACES_ENDPOINT).toBe("http://127.0.0.1:4318/v1/traces");
+      expect(local.env.KONAE_OTLP_TRACES_HEADERS).toBe('{"x-tenant":"local-test"}');
+      expect(local.env.KONAE_OTLP_TRACES_SAMPLE_RATE).toBe("0.5");
+      expect("KONAE_STARLING_CACHE" in local.env).toBe(false);
+      expect("KONAE_STARLING_BUILDER" in local.env).toBe(false);
       expect("KONAE_SETUP_KEY" in local.env).toBe(false);
     } finally {
       for (const [name, value] of Object.entries(saved)) {

@@ -209,7 +209,7 @@ async fn import_incoming(
     confirmation: Option<&str>,
     sources: bool,
 ) -> Result<Outcome> {
-    let _transfer_hold = crate::notify::TransferHold::begin(&state.data_root, &deployment.id)?;
+    let transfer_hold = crate::notify::TransferHold::begin(&state.data_root, &deployment.id)?;
     let change = plan(state, incoming.database.as_deref(), target)?;
     if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
         return Ok(Outcome::NeedsConfirmation(change));
@@ -222,8 +222,12 @@ async fn import_incoming(
     }
     let backup = backup_held(state, deployment, "Before import", &holds).await?;
     let applied = replace_held(state, deployment, incoming, Some((target, confirmation))).await;
+    drop(transfer_hold);
     match applied {
-        Ok(change) => Ok(Outcome::Imported { backup, change }),
+        Ok(change) => {
+            crate::modules::wake_durable_work(state, &deployment.id).await;
+            Ok(Outcome::Imported { backup, change })
+        }
         Err(error_value) => Err(error_value.context(format!("The import stopped. Backup {} holds the app as it was before.", backup["id"].as_str().unwrap_or_default()))),
     }
 }
@@ -335,6 +339,7 @@ async fn restore_source_release(state: &AppState, current: &Deployment, backup: 
     let artifact: BuildArtifact = serde_json::from_value(release["artifact"].clone())?;
     let files = artifact::decode(&artifact).map_err(anyhow::Error::msg)?;
     let server: Option<crate::functions::ServerArtifact> = serde_json::from_value(release["serverArtifact"].clone())?;
+    let prepared_functions = crate::functions::prepare_artifact(state, server.as_ref()).await?;
     let mut settings: Settings = serde_json::from_value(release["settings"].clone())?;
     let installed: Installed = serde_json::from_value(release["installed"].clone())?;
     ensure!(settings.id == current.id, "The backup belongs to another app.");
@@ -371,6 +376,7 @@ async fn restore_source_release(state: &AppState, current: &Deployment, backup: 
         recorded.put_back().await; staged.put_back().await; remove_staged_dist(state, &current.id, &version).await; return Err(error.into());
     }
     state.deployments.write().await.insert(restored.hostname.clone(), restored.clone());
+    state.functions.retain_prepared(&restored.id, prepared_functions);
     http::routes_published(&restored);
     staged.finish().await; remove_stale_dist(state, &current.id).await;
     Ok(())
@@ -437,8 +443,8 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
             None => None,
         };
         if let Some(database) = database {
+            crate::modules::resume_imported_work(&database)?;
             replace_database_file(&database, &live.join("database.sqlite"))?;
-            crate::notify::resume_imported_intents(&live.join("database.sqlite"))?;
         }
         if let Some(staged) = identity {
             replace_database_file(&staged, &live.join("identity.sqlite"))?;

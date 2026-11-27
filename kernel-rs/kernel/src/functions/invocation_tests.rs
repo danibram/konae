@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -10,6 +11,10 @@ struct Fixture {
     path: PathBuf,
     program: Arc<ActionProgram>,
     function: Function,
+}
+fn fingerprint(method: &str, path: &str, body: &[u8], headers: &[(String, String)]) -> String {
+    let digest: [u8; 32] = Sha256::digest(body).into();
+    request_fingerprint_v3(method, path, body.len(), &digest, headers).unwrap()
 }
 impl Fixture {
     fn new() -> Self {
@@ -59,8 +64,7 @@ impl Fixture {
             method: method.into(),
             path: "/orders/1?view=short".into(),
             body_len: body.len(),
-            fingerprint: request_fingerprint(method, "/orders/1?view=short", body, &headers)
-                .unwrap(),
+            fingerprint: fingerprint(method, "/orders/1?view=short", body, &headers),
             headers,
             idempotency_key: Some(key.into()),
         }
@@ -73,8 +77,7 @@ impl Fixture {
     }
     fn refresh(config: &mut InvocationConfig, body: &[u8]) {
         config.body_len = body.len();
-        config.fingerprint =
-            request_fingerprint(&config.method, &config.path, body, &config.headers).unwrap();
+        config.fingerprint = fingerprint(&config.method, &config.path, body, &config.headers);
     }
     fn state(&self) -> (i64, i64, i64) {
         let db = Connection::open(&self.path).unwrap();
@@ -114,7 +117,7 @@ fn output(status: u16) -> Output {
         status,
         headers: vec![
             ("content-type".into(), "application/json".into()),
-            ("set-cookie".into(), "seen=1; Path=/; HttpOnly".into()),
+            ("x-app-test".into(), "seen=1".into()),
         ],
         body: if status == 204 {
             String::new()
@@ -180,7 +183,11 @@ fn legacy_response_receipt_is_read_without_migration_or_response_replay() {
     let mut invocation = fixture.run("legacy");
     change(&mut invocation);
     invocation.finish(output(201)).unwrap();
-    let legacy_response = serde_json::to_string(&output(201)).unwrap();
+    let mut legacy = output(201);
+    legacy
+        .headers
+        .push(("set-cookie".into(), "seen=1; Path=/; HttpOnly".into()));
+    let legacy_response = serde_json::to_string(&legacy).unwrap();
     let db = Connection::open(&fixture.path).unwrap();
     db.execute(
         "UPDATE __konae_function_receipts SET response_json=?1 WHERE idempotency_key='legacy'",
@@ -522,6 +529,13 @@ fn invalid_output_does_not_commit() {
             },
         ),
         (
+            "reserved-header",
+            Output {
+                headers: vec![("set-cookie".into(), "test".into())],
+                ..output(200)
+            },
+        ),
+        (
             "size",
             Output {
                 body: "x".repeat(MAX_RESPONSE_BYTES),
@@ -534,6 +548,25 @@ fn invalid_output_does_not_commit() {
         assert!(invocation.finish(bad).is_err());
         assert_eq!(fixture.state(), (2, 0, 0));
         assert_eq!(fixture.receipts(), 0);
+    }
+}
+
+#[test]
+fn platform_response_headers_are_refused() {
+    for name in [
+        "Content-Security-Policy",
+        "content-security-policy-report-only",
+        "Content-Security-Policy-Test",
+        "Set-Cookie",
+        "service-worker-allowed",
+        "Clear-Site-Data",
+    ] {
+        let response = Output {
+            headers: vec![(name.into(), "test".into())],
+            ..output(200)
+        };
+        let error = validate_output(&response).unwrap_err();
+        assert_eq!(error.code, "function.output-invalid", "{name}");
     }
 }
 

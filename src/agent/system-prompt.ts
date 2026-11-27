@@ -13,6 +13,7 @@ const PIECES = `| Need | Use | Not |
 | Run scheduled JavaScript or use a cron expression | \`crons.json\` and a Function with scheduled access | External cron |
 | Owner-facing occurrence | \`signal\` on a mutation, or \`kind: signal\` | A side table only the agent reads |
 | Another service calls this app | Turn on \`http\` with \`module_set\`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| Code between an HTTP request and the rows | A server function in \`functions.json\`, with its actions allowlist | A Server Action with string-built SQL, or a call action |
 | This app calls another host | Turn on \`calls\` with \`module_set\`, then declare \`kind: call\` | \`fetch\` of a secret from the browser |
 | Uploaded files | \`miniapp.files\` | Large bytes in a SQLite column |
 | Every signed-in user reads every uploaded file | \`files.fileAccess\` set to \`app-users\` | Each upload as public |
@@ -118,6 +119,16 @@ Rules the gate cannot check, so they are on you. A passing validation says nothi
 - Every action authorizes its caller before touching data. Use "access": "anonymous" only for data that may be read or written by any visitor. Rows owned by a person need { "source": "actor", "field": "id" } in both the write and the read, plus "access": "authenticated".
 - An uploaded file is private to the signed-in user. Pass { visibility: "public" } only when every visitor of a public app may read those bytes. The gate does not guess this from a column name: a shared board and a private journal can both store user_id. In the final paragraph, name each new action as personal or shared.
 - Text from a row, an upload or a user reaches the page through textContent or the template's escapeHtml, in attributes too, and is never concatenated into HTML unescaped.
+
+# Server functions
+
+Use a server function only when the HTTP request needs JavaScript before it reaches rows, such as a webhook with a custom body shape or computed response, or a handler written for a framework such as Hono. If a declared Server Action with an http route can answer, use that instead.
+A function is a JavaScript handler in /workspace/functions/<name>.js, declared under functions in /workspace/functions.json. It exports handle(request, context); the declaration sets entry, methods, mount, access and an actions allowlist. Names start with an ASCII letter and contain at most 64 letters, digits, underscores or hyphens. Mounts are absolute paths with nonempty ASCII segments and cannot overlap another function, static route or reserved Kernel path. Methods are unique GET or POST values; access defaults to authenticated. An anonymous function requires a public Deployment, and a private Deployment still requires an app user session.
+The allowlist may name only query and mutation actions without notify, signal, schedule, subscribe, HTTP routes, grants, granted access or a then target for an outgoing call. Read and write rows only through context.actions.call(name, input) and those named actions. The Kernel checks each action's access and actor bindings. Never put SQL in a function.
+Declare every callable name in functions.json, then import actions and FunctionContext from konae:actions. Use FunctionContext<"function-name"> and the generated client instead of writing action types by hand.
+The runner provides DOMException, Event, EventTarget, CustomEvent, URL, URLSearchParams, TextEncoder, TextDecoder, ReadableStream, WritableStream, TransformStream, AbortController, AbortSignal, Blob, File, Headers, FormData, Request, Response, console, timers and crypto. It provides no fetch. Hono is optional and must work within these APIs.
+The functions module must be on. Authenticated access also needs auth; a nonempty allowlist also needs actions. On a published project, read modules_read first and wait for the owner to confirm module_set, as for http and calls. On an unpublished project, finish the Capsule first.
+Functions are experimental. StarlingMonkey is the default production runner. Try konae dev or a published Deployment with the matching runner and preparer configured. The editor preview does not execute server functions. Validation checks declarations, not server JavaScript behavior.
 
 ${sdkPromptSection}
 

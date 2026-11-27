@@ -165,8 +165,69 @@ pub fn check_data_versions(versions: &BTreeMap<String, u64>) -> Result<()> {
     Ok(())
 }
 
+type CheckPending = fn(&rusqlite::Connection) -> Result<()>;
+type PrepareTransfer = fn(&std::path::Path) -> Result<()>;
+
+struct DurableWork {
+    resource: crate::execution::WorkResource,
+    start: fn(crate::AppState),
+    check_pending: Option<CheckPending>,
+    pause_export: Option<PrepareTransfer>,
+    resume_import: Option<PrepareTransfer>,
+}
+
+const DURABLE_WORK: &[DurableWork] = &[
+    DurableWork {
+        resource: crate::execution::WorkResource::Calls,
+        start: crate::calls::spawn_worker,
+        check_pending: Some(crate::calls::check_pending_continuations_on_connection),
+        pause_export: None,
+        resume_import: None,
+    },
+    DurableWork {
+        resource: crate::execution::WorkResource::Notices,
+        start: crate::notify::spawn_worker,
+        check_pending: None,
+        pause_export: Some(crate::notify::pause_exported_intents),
+        resume_import: Some(crate::notify::resume_imported_intents),
+    },
+];
+
+pub(crate) fn work_resources() -> impl Iterator<Item = crate::execution::WorkResource> {
+    DURABLE_WORK.iter().map(|module| module.resource)
+}
+
+pub(crate) fn start_durable_work(state: &crate::AppState) {
+    for module in DURABLE_WORK {
+        (module.start)(state.clone());
+    }
+}
+
+pub(crate) async fn wake_durable_work(state: &crate::AppState, app: &str) {
+    for resource in work_resources() {
+        state.dispatcher.wake(resource, app).await;
+    }
+}
+
+pub(crate) fn pause_exported_work(database: &std::path::Path) -> Result<()> {
+    for pause in DURABLE_WORK.iter().filter_map(|module| module.pause_export) {
+        pause(database)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn resume_imported_work(database: &std::path::Path) -> Result<()> {
+    for resume in DURABLE_WORK.iter().filter_map(|module| module.resume_import) {
+        resume(database)?;
+    }
+    Ok(())
+}
+
 pub fn check_pending_work(connection: &rusqlite::Connection) -> Result<()> {
-    crate::calls::check_pending_continuations_on_connection(connection)
+    for check in DURABLE_WORK.iter().filter_map(|module| module.check_pending) {
+        check(connection)?;
+    }
+    Ok(())
 }
 
 pub fn has_migration(module: &str, migration: &str) -> bool {

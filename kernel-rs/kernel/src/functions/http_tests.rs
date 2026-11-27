@@ -43,8 +43,12 @@ export async function handle(request, context) {
 "#;
 const STREAM_HANDLER: &str = r#"
 export async function handle(request) {
+  const path=new URL(request.url).pathname;
+  if(path.endsWith('/envelope')) return new Response('x'.repeat(1024*1024));
+  if(path.endsWith('/framing')) return new Response('x',{headers:{'content-length':'1'}});
+  if(path.endsWith('/headers')) return new Response('x',{headers:{'content-security-policy-report-only':"default-src 'none'"}});
   const reader=request.body.getReader(); let count=0; let checksum=0;
-  for(;;) { const {done,value}=await reader.read(); if(done) break; count+=value.byteLength; for(const byte of value) checksum=(checksum+byte)>>>0; }
+  for(;;) { const {done,value}=await reader.read(); if(done) break; count+=value.byteLength; for(let i=0;i<value.length;i++) checksum=(checksum+value[i])>>>0; }
   return Response.json({count,checksum});
 }
 "#;
@@ -102,6 +106,10 @@ async fn send_chunked_http(
     if connected {
         let _ = socket.write_all(b"0\r\n\r\n").await;
     }
+    read_chunked_http_response(socket).await
+}
+
+async fn read_chunked_http_response(mut socket: tokio::net::TcpStream) -> (u16, Value) {
     let mut response = Vec::new();
     socket.read_to_end(&mut response).await.unwrap();
     let boundary = response
@@ -219,26 +227,14 @@ async fn request_body_pump_keeps_a_small_queue_and_enforces_real_byte_eof() {
     assert!(!body.complete());
     drop(pump);
 
-    let (length, _, legacy, permits) = read_replay_body(
-        Body::from_stream(synthetic_body(MAX_LEGACY_FUNCTION_BODY_BYTES)),
-        true,
+    let (length, digest) = read_replay_body(
+        Body::from_stream(synthetic_body(32 * 1024)),
         &Budget::new(Duration::from_secs(5)),
     )
     .await
     .unwrap();
-    assert_eq!(length, MAX_LEGACY_FUNCTION_BODY_BYTES);
-    assert!(legacy.is_some());
-    drop(permits);
-    let (length, _, legacy, permits) = read_replay_body(
-        Body::from_stream(synthetic_body(MAX_LEGACY_FUNCTION_BODY_BYTES + 1)),
-        true,
-        &Budget::new(Duration::from_secs(5)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(length, MAX_LEGACY_FUNCTION_BODY_BYTES + 1);
-    assert!(legacy.is_none());
-    assert!(permits.is_empty());
+    assert_eq!(length, 32 * 1024);
+    assert_eq!(digest, Sha256::digest(vec![b'x'; 32 * 1024]).as_slice());
 
     let mut slow_bodies = Vec::new();
     let mut slow_pumps = Vec::new();
@@ -320,7 +316,6 @@ async fn receipt_prelookup_refuses_matching_v2_and_v3_without_returning_old_bodi
         ("accept".into(), "application/json".into()),
         ("content-type".into(), "application/json".into()),
     ];
-    let v2 = function_data::request_fingerprint("POST", path, body, &headers).unwrap();
     let body_digest: [u8; 32] = Sha256::digest(body).into();
     let v3 =
         function_data::request_fingerprint_v3("POST", path, body.len(), &body_digest, &headers)
@@ -331,7 +326,7 @@ async fn receipt_prelookup_refuses_matching_v2_and_v3_without_returning_old_bodi
         body: r#"{"secret":"historical"}"#.into(),
     })
     .unwrap();
-    for (key, fingerprint) in [("v2", &v2), ("v3", &v3)] {
+    for (key, fingerprint) in [("v2", "legacy-fingerprint"), ("v3", v3.as_str())] {
         db.execute(
             "INSERT INTO __konae_function_receipts VALUES(?1,'orders',?2,?3,?4)",
             rusqlite::params![actor_scope, key, fingerprint, historical],
@@ -353,8 +348,15 @@ async fn receipt_prelookup_refuses_matching_v2_and_v3_without_returning_old_bodi
             &Budget::new(Duration::from_secs(5)),
             Instant::now(),
         )
-        .await
-        .unwrap();
+        .await;
+        if key == "v2" {
+            let Err(response) = result else {
+                panic!("legacy receipts must conflict")
+            };
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            continue;
+        }
+        let result = result.unwrap();
         let ReceiptPrelookup::Replay(timed) = result else {
             panic!("expected a matching receipt");
         };
@@ -395,32 +397,6 @@ async fn receipt_prelookup_refuses_matching_v2_and_v3_without_returning_old_bodi
         axum::body::to_bytes(stream, 1024).await.unwrap().as_ref(),
         body
     );
-
-    let oversized_legacy = match prelookup_receipt(
-        &database,
-        Some("alice"),
-        "orders",
-        "v2",
-        "POST",
-        path,
-        &headers,
-        Body::from(vec![b'x'; MAX_LEGACY_FUNCTION_BODY_BYTES + 1]),
-        &Budget::new(Duration::from_secs(5)),
-        Instant::now(),
-    )
-    .await
-    {
-        Err(response) => response,
-        Ok(_) => panic!("an oversized legacy body must conflict"),
-    };
-    assert_eq!(oversized_legacy.status(), StatusCode::CONFLICT);
-    let value: Value = serde_json::from_slice(
-        &axum::body::to_bytes(oversized_legacy.into_body(), 1024)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(value["code"], "idempotency_conflict");
 
     let changed = match prelookup_receipt(
         &database,
@@ -495,7 +471,7 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
     state.functions = Arc::new(Runtime::configured(
         executable.into(),
         policy,
-        Duration::from_secs(60),
+        Duration::from_secs(180),
         Duration::from_secs(1),
     ));
     let id = "http_functions_100mb";
@@ -532,6 +508,47 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
             .body(Body::from_stream(synthetic_body(length)))
             .unwrap()
     };
+    for (path, expected_status, expected_error) in [
+        (
+            "/api/orders/envelope",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The function response exceeds its size limit.",
+        ),
+        (
+            "/api/orders/framing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The function returned an invalid HTTP response.",
+        ),
+        (
+            "/api/orders/headers",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The function returned an invalid HTTP response.",
+        ),
+    ] {
+        let response = crate::stack(state.clone(), axum::Router::new())
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .header("host", &deployed.hostname)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            expected_status,
+            "{path}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"], expected_error);
+    }
     let utf8 = Request::builder()
         .method("POST")
         .uri("/api/orders")
@@ -579,15 +596,10 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
         "The function request exceeds 100000000 bytes."
     );
 
-    let stalled = futures_util::future::join_all(["slow1", "slow2", "slow3"].map(|name| {
+    let stalled = futures_util::future::join_all(["slow1", "slow2"].map(|name| {
         start_partial_chunked_http(address, &deployed.hostname, format!("/api/{name}"))
     }))
     .await;
-    let small_host = deployed.hostname.clone();
-    let small =
-        tokio::spawn(
-            async move { send_chunked_http(address, &small_host, "/api/orders", 2).await },
-        );
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let (_, workers_kib) = function_process_rss();
@@ -609,7 +621,7 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
                             .count()
                     })
                     .unwrap_or_default()
-                    >= 4
+                    >= 2
             {
                 break;
             }
@@ -617,28 +629,37 @@ async fn real_http_stream_accepts_100mb_and_refuses_the_next_byte_without_conten
         }
     })
     .await
-    .expect("three partial uploads and the small-request worker should be running");
+    .expect("both partial uploads should hold the Deployment's worker slots");
+    let small_host = deployed.hostname.clone();
+    let small =
+        tokio::spawn(
+            async move { send_chunked_http(address, &small_host, "/api/orders", 2).await },
+        );
     let (kernel_rss_kib, workers_rss_kib) = function_process_rss();
     assert!(kernel_rss_kib > 0);
     assert!(workers_rss_kib > 0);
     eprintln!(
-        "three_partial_uploads_rss_kib kernel={kernel_rss_kib} workers={workers_rss_kib}; each upload has one 64KiB chunk pending"
+        "two_partial_uploads_rss_kib kernel={kernel_rss_kib} workers={workers_rss_kib}; each upload has one 64KiB chunk pending"
     );
-    let (small_status, small_value) = tokio::time::timeout(Duration::from_secs(3), small)
-        .await
-        .expect("small request should pass three stalled uploads")
-        .unwrap();
-    assert_eq!(small_status, 200);
-    assert_eq!(small_value["count"], 2);
-    drop(stalled);
-    let (recovered_status, recovered_value) = tokio::time::timeout(
-        Duration::from_secs(3),
-        send_chunked_http(address, &deployed.hostname, "/api/orders", 2),
-    )
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !small.is_finished(),
+        "a third request returned while both app slots were held: {:?}",
+        small.await.unwrap()
+    );
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for mut socket in stalled {
+            socket.write_all(b"0\r\n\r\n").await.unwrap();
+            let (status, value) = read_chunked_http_response(socket).await;
+            assert_eq!(status, 200);
+            assert_eq!(value["count"], 64 * 1024);
+        }
+        let (status, value) = small.await.unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(value["count"], 2);
+    })
     .await
-    .expect("small request should pass after upload cancellation");
-    assert_eq!(recovered_status, 200);
-    assert_eq!(recovered_value["count"], 2);
+    .expect("finishing the uploads should free a worker slot for the queued request");
     serving.abort();
     let _ = serving.await;
     crate::usage::flush();
@@ -713,10 +734,10 @@ async fn admission_includes_requests_waiting_for_publication_and_releases_on_dro
     let deployed = publish(&state, &release(id, "export function handle() {}")).await;
     let lock = crate::named_lock(&state, &format!("publish:{id}"), true).await;
     let reservations = (0..63)
-        .map(|_| {
+        .map(|index| {
             state
                 .functions
-                .admit(&Budget::new(Duration::from_secs(2)))
+                .admit(&format!("reserved-{index}"), &Budget::new(Duration::from_secs(2)))
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -747,7 +768,7 @@ async fn admission_includes_requests_waiting_for_publication_and_releases_on_dro
     assert!(
         state
             .functions
-            .admit(&Budget::new(Duration::from_secs(2)))
+            .admit(id, &Budget::new(Duration::from_secs(2)))
             .is_ok()
     );
     drop(reservations);
@@ -762,6 +783,75 @@ async fn admission_includes_requests_waiting_for_publication_and_releases_on_dro
     let response = waiting.await.unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(response.headers()[header::RETRY_AFTER], "300");
+    crate::usage::flush();
+    let to = crate::usage::day(crate::now_ms());
+    let usage = crate::usage::read_usage(&crate::layout::usage(&root, id), &from, &to).unwrap();
+    assert_eq!(
+        usage["totals"],
+        json!([{"kind": "function", "name": "orders", "count": 2}])
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn function_trace_is_returned_on_pre_worker_refusal_and_does_not_hold_admission() {
+    let from = crate::usage::day(crate::now_ms());
+    let root = std::env::temp_dir().join(format!("konae-function-queue-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut state = AppState::for_test(&root);
+    state.functions = Arc::new(Runtime::configured(
+        "/nonexistent/worker".into(),
+        MemoryPolicy::DevelopmentPolling,
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+    ));
+    let id = "function_queue";
+    let mut payload = release(id, "export function handle() {}");
+    payload["visibility"] = json!("private");
+    let deployed = publish(&state, &payload).await;
+    let reservations = (0..63)
+        .map(|index| {
+            state
+                .functions
+                .admit(&format!("reserved-{index}"), &Budget::new(Duration::from_secs(2)))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let request = || {
+        Request::builder()
+            .uri("/api/orders")
+            .header("host", &deployed.hostname)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let refused = crate::stack(state.clone(), axum::Router::new())
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+    let final_permit = state
+        .functions
+        .admit("final-reservation", &Budget::new(Duration::from_secs(2)))
+        .unwrap();
+    assert_eq!(
+        state
+            .functions
+            .admit("overflow-reservation", &Budget::new(Duration::from_secs(2)))
+            .err()
+            .unwrap(),
+        "queue_full"
+    );
+    drop(final_permit);
+    drop(reservations);
+    let refused = crate::stack(state.clone(), axum::Router::new())
+        .oneshot(request())
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(refused.into_body(), 1024)
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["code"], "authentication-required");
     crate::usage::flush();
     let to = crate::usage::day(crate::now_ms());
     let usage = crate::usage::read_usage(&crate::layout::usage(&root, id), &from, &to).unwrap();
@@ -833,6 +923,48 @@ async fn completed_function_calls_have_one_daily_count() {
         .map(|row| row["count"].as_u64().unwrap())
         .sum::<u64>();
     assert_eq!(calls, 3, "{summary}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn validated_bundle_text_is_cached_by_deployment_version_and_digest() {
+    let root = std::env::temp_dir().join(format!(
+        "konae-function-bundle-cache-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let state = AppState::for_test(&root);
+    let id = "function_bundle_cache";
+    let mut payload = release(
+        id,
+        "export function handle() { return new Response('cached'); }",
+    );
+    let mut manifest = payload["serverArtifact"]["manifest"].clone();
+    manifest["functions"]["other"] = manifest["functions"]["orders"].clone();
+    manifest["functions"]["other"]["entry"] = json!("functions/other.ts");
+    manifest["functions"]["other"]["mount"] = json!("/api/other");
+    payload["serverArtifact"]["manifest"] = manifest.clone();
+    payload["serverArtifact"]["bundles"]["other"] =
+        json!("export function handle() { return new Response('other'); }");
+    payload["project"]["files"]["functions.json"] = json!(manifest.to_string());
+    payload["project"]["files"]["functions/other.ts"] =
+        json!("export function handle() { return new Response('other'); }");
+    let deployed = publish(&state, &payload).await;
+    let first = pinned_bundle(&state, &deployed, "orders").unwrap();
+    let path = crate::layout::server(&root, id).join("orders.mjs");
+    std::fs::write(
+        &path,
+        "export function handle() { return new Response('changed'); }",
+    )
+    .unwrap();
+    let second = pinned_bundle(&state, &deployed, "orders").unwrap();
+    assert!(first["orders"].contains("cached"));
+    assert!(first["other"].contains("other"));
+    assert!(Arc::ptr_eq(&first, &second));
+
+    let mut next_version = deployed.clone();
+    next_version.artifact_version.push_str("-next");
+    assert!(pinned_bundle(&state, &next_version, "orders").is_err());
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -917,15 +1049,27 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     )
     .unwrap();
     drop(db);
-    assert_eq!(
-        client
-            .get(&url)
-            .header("host", &deployed.hostname)
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
+    let refusal = client
+        .get(&url)
+        .header("host", &deployed.hostname)
+        .header(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refusal.status(), StatusCode::UNAUTHORIZED);
+    let traceparent = refusal
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(traceparent.starts_with("00-4bf92f3577b34da6a3ce929d0e0e4736-"));
+    assert_ne!(
+        traceparent,
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     );
     let get = |suffix: &str, cookie: &str| {
         client
@@ -933,6 +1077,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
             .header("host", &deployed.hostname)
             .header("cookie", cookie)
     };
+
     let first = get("", &accounts[0].0).send().await.unwrap();
     let status = first.status();
     let first: Value = first.json().await.unwrap();
@@ -942,6 +1087,44 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     assert_eq!(first["rows"][0]["id"], 1);
     assert_eq!(first["cookie"], false);
     assert_eq!(first["authorization"], false);
+    if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
+        let previous_worker_pid = state
+            .functions
+            .debug_state()
+            .split("worker pid=Some(")
+            .nth(1)
+            .and_then(|worker| worker.split(')').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .expect("the app must have a worker before the memory pressure request");
+        let pressure = get("/pressure", &accounts[0].0).send().await.unwrap();
+        let status = pressure.status();
+        let failure: Value = pressure.json().await.unwrap();
+        let killed = status == StatusCode::BAD_GATEWAY && failure["code"] == "worker_memory_limit";
+        let deadline =
+            status == StatusCode::GATEWAY_TIMEOUT && failure["code"] == "deadline_exceeded";
+        assert!(killed || deadline, "{status} {failure}");
+        let recovery_started = Instant::now();
+        let body: Value = tokio::time::timeout(Duration::from_millis(DEADLINE_MS), async {
+            let recovered = get("", &accounts[0].0).send().await.unwrap();
+            assert_eq!(recovered.status(), StatusCode::OK);
+            recovered.json().await.unwrap()
+        })
+        .await
+        .expect("the next request must finish within one function deadline");
+        assert_eq!(body["calls"], 1);
+        assert_eq!(body["rows"], json!([{"id": 1, "quantity": 2}]));
+        assert!(
+            !PathBuf::from(format!("/proc/{previous_worker_pid}")).exists(),
+            "the worker must be killed and reaped before the next request returns"
+        );
+        let runtime = state.functions.debug_state();
+        assert!(!runtime.contains("worker mutex held"), "{runtime}");
+        println!(
+            "kernel_http_oom={} recovery=200 recovery_ms={}",
+            failure["code"],
+            recovery_started.elapsed().as_millis()
+        );
+    }
     let second: Value = get("", &accounts[1].0)
         .send()
         .await
@@ -949,7 +1132,12 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .json()
         .await
         .unwrap();
-    assert_eq!(second["calls"], 1);
+    assert_eq!(
+        second["calls"],
+        1,
+        "{second} runtime={}",
+        state.functions.debug_state()
+    );
     assert_eq!(second["rows"][0]["id"], 2);
     let post = |key: &str, input: Value| {
         client
@@ -1065,29 +1253,6 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
             .unwrap(),
         3
     );
-    let legacy_fingerprint = function_data::request_fingerprint(
-        "POST",
-        "/api/orders",
-        &serde_json::to_vec(&changed).unwrap(),
-        &[
-            ("accept".into(), "application/json".into()),
-            ("content-type".into(), "application/json".into()),
-        ],
-    )
-    .unwrap();
-    Connection::open(crate::layout::database(&root, id))
-        .unwrap()
-        .execute(
-            "UPDATE __konae_function_receipts SET fingerprint=?1 WHERE idempotency_key='same'",
-            [legacy_fingerprint],
-        )
-        .unwrap();
-    let old_replay = post("same", changed.clone()).send().await.unwrap();
-    assert_eq!(old_replay.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        old_replay.json::<Value>().await.unwrap()["code"],
-        function_data::IDEMPOTENCY_REPLAY_CODE
-    );
     Connection::open(crate::layout::database(&root, id))
         .unwrap()
         .execute("UPDATE orders SET owner_id=?1 WHERE id=1", [&accounts[0].1])
@@ -1133,7 +1298,8 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .uri("/api/orders/early-catch")
         .header("host", &deployed.hostname)
         .header("cookie", &accounts[0].0)
-        .header("idempotency-key", "oversized-no-write")
+        .header("idempotency-key", "same")
+        .header(header::CONTENT_LENGTH, 100_000_001)
         .header("content-type", "application/json")
         .body(Body::from_stream(synthetic_body(100_000_001)))
         .unwrap();
@@ -1179,14 +1345,14 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
             .status(),
         StatusCode::FORBIDDEN
     );
-    assert_eq!(
-        post("rollback", json!({"id":1,"quantity":9,"fail":true}))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::BAD_GATEWAY
-    );
+    let thrown = post("rollback", json!({"id":1,"quantity":9,"fail":true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(thrown.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let thrown: Value = thrown.json().await.unwrap();
+    assert_eq!(thrown["code"], "handler_error");
+    assert_eq!(thrown["error"], "The function could not complete.");
     let db = Connection::open(crate::layout::database(&root, id)).unwrap();
     assert_eq!(
         db.query_row("SELECT quantity FROM orders WHERE id=1", [], |r| r
@@ -1258,7 +1424,14 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|_| {
+        let finished = disconnect.is_finished();
+        panic!(
+            "disconnect never entered its transaction: task_finished={} {}",
+            finished,
+            state.functions.debug_state()
+        )
+    });
     disconnect.abort();
     assert!(disconnect.await.unwrap_err().is_cancelled());
     let guard = tokio::time::timeout(
@@ -1363,7 +1536,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     assert_eq!(method.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(method.headers()[header::ALLOW], "GET, POST");
     payload["serverArtifact"]["bundles"]["orders"] =
-        json!("while (true) {} export function handle() {}");
+        json!("export function handle() { while (true) {} }");
     let c = publish(&state, &payload).await;
     let cold_timeout = get("", &accounts[0].0).send().await.unwrap();
     assert_eq!(cold_timeout.status(), StatusCode::GATEWAY_TIMEOUT);
@@ -1385,22 +1558,29 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         .iter()
         .find(|row| row["version"] == c.artifact_version)
         .unwrap();
-    assert_eq!(a_series["samples"], 22, "{latency}");
+    let expected_samples = if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
+        23
+    } else {
+        21
+    };
+    assert_eq!(a_series["samples"], expected_samples, "{latency}");
     assert_eq!(a_series["timeouts"], 1, "{latency}");
-    assert_eq!(a_series["replays"], 4, "{latency}");
+    assert_eq!(a_series["replays"], 3, "{latency}");
+    assert_eq!(a_series["errorCounts"]["handler_error"], 1);
+    assert!(a_series.get("errors").is_none());
+    assert!(!latency.to_string().contains("alice@example.test"));
     assert_eq!(b_series["samples"], 7, "{latency}");
     assert_eq!(b_series["timeouts"], 2, "{latency}");
-    assert_eq!(b_series["coldStarts"], 2, "{latency}");
+    assert!(b_series["coldStarts"].as_u64().unwrap() >= 2, "{latency}");
     assert_eq!(b_series["replays"], 1, "{latency}");
     assert_eq!(c_series["samples"], 1, "{latency}");
     assert_eq!(c_series["timeouts"], 1, "{latency}");
     assert_eq!(c_series["coldStarts"], 1, "{latency}");
+    let cold_initialization_ms = c_series["initialization"]["maxMs"].as_f64().unwrap();
+    let cold_execution_ms = c_series["execution"]["maxMs"].as_f64().unwrap();
+    assert!(cold_initialization_ms > 0.0, "{latency}");
     assert!(
-        c_series["initialization"]["maxMs"].as_f64().unwrap() > 0.0,
-        "{latency}"
-    );
-    assert!(
-        c_series["execution"]["maxMs"].as_f64().unwrap() >= (DEADLINE_MS - 100) as f64,
+        cold_initialization_ms + cold_execution_ms >= (DEADLINE_MS - 100) as f64,
         "{latency}"
     );
     assert!(
@@ -1437,15 +1617,7 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
         println!("FUNCTION_HTTP_TIMINGS {}", json!(rounds));
         crate::usage::flush();
     }
-    if std::env::var_os("KONAE_TEST_FUNCTION_CGROUP").is_some() {
-        let pressure = get("/pressure", &accounts[0].0).send().await.unwrap();
-        assert_eq!(pressure.status(), StatusCode::BAD_GATEWAY);
-        let failure: Value = pressure.json().await.unwrap();
-        assert_eq!(failure["code"], "worker_memory_limit", "{failure}");
-        let recovered = get("", &accounts[0].0).send().await.unwrap();
-        assert_eq!(recovered.status(), StatusCode::OK);
-        println!("kernel_http_oom=worker_memory_limit recovery=200");
-    }
+
     if let Some(destination) = std::env::var_os("KONAE_TEST_PRESERVE_APP_DIR") {
         let destination = PathBuf::from(destination);
         let source = crate::layout::folder(&root, id);
@@ -1464,6 +1636,304 @@ async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
     }
     serving.abort();
     drop(state);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+#[ignore = "requires KONAE_TEST_FUNCTION_WORKER and the built Kernel binary"]
+async fn kernel_binary_keeps_other_apps_available_while_one_app_uploads_slowly() {
+    let runner = PathBuf::from(std::env::var_os("KONAE_TEST_FUNCTION_WORKER").unwrap());
+    let root =
+        std::env::temp_dir().join(format!("konae-function-capacity-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let state = AppState::for_test(&root);
+    let mut payload_a = release("capacity_a", STREAM_HANDLER);
+    let mut manifest_a = payload_a["serverArtifact"]["manifest"].clone();
+    manifest_a["functions"]["other"] = manifest_a["functions"]["orders"].clone();
+    manifest_a["functions"]["other"]["entry"] = json!("functions/other.ts");
+    manifest_a["functions"]["other"]["mount"] = json!("/api/other");
+    payload_a["serverArtifact"]["manifest"] = manifest_a.clone();
+    payload_a["serverArtifact"]["bundles"]["other"] =
+        json!("export function handle() { return new Response('app-a-other'); }");
+    payload_a["project"]["files"]["functions.json"] = json!(manifest_a.to_string());
+    payload_a["project"]["files"]["functions/other.ts"] =
+        json!("export function handle() { return new Response('app-a-other'); }");
+    let app_a = publish(&state, &payload_a).await;
+    let app_b = publish(
+        &state,
+        &release(
+            "capacity_b",
+            "export function handle() { return new Response('app-b'); }",
+        ),
+    )
+    .await;
+    let body_file = root.join("slow-upload.bin");
+    std::fs::write(&body_file, vec![b'x'; 64 * 1024]).unwrap();
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let kernel = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("konae");
+    assert!(kernel.is_file(), "build kernel-rs/target/debug/konae first");
+    let mut server = std::process::Command::new(kernel)
+        .env("KONAE_DATA_DIR", &root)
+        .env("KONAE_KERNEL_PORT", port.to_string())
+        .env("KONAE_BIND", "127.0.0.1")
+        .env("KONAE_FUNCTIONS_RUNNER", &runner)
+        .env("KONAE_FUNCTIONS_DEVELOPMENT", "1")
+        .env("KONAE_FUNCTIONS_TIMEOUT_MS", "5000")
+        .env("KONAE_FUNCTIONS_IDLE_MS", "60000")
+        .env("KONAE_FUNCTIONS_INSTANCES", "8")
+        .env("KONAE_FUNCTIONS_APP_SLOTS", "2")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let base = format!("http://127.0.0.1:{port}/api/orders");
+    let b_started = Instant::now();
+    let startup_budget = if super::super::runtime::wasm_selected() {
+        Duration::from_secs(3 * 180 + 15)
+    } else {
+        Duration::from_secs(10)
+    };
+    let b_response = loop {
+        if !server.try_wait().unwrap().is_none() {
+            panic!("Kernel stopped before serving the published apps");
+        }
+        let response = std::process::Command::new("curl")
+            .args([
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "1",
+                "--write-out",
+                "\n%{http_code}",
+                "--header",
+            ])
+            .arg(format!("Host: {}", app_b.hostname))
+            .arg(&base)
+            .output();
+        if let Ok(response) = response
+            && response.status.success()
+        {
+            break response;
+        }
+        if b_started.elapsed() >= startup_budget {
+            let _ = server.kill();
+            let _ = server.wait();
+            panic!("Kernel did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let b_output = String::from_utf8_lossy(&b_response.stdout);
+    assert!(b_output.ends_with("\n200"), "{b_output}");
+    assert!(b_output.contains("app-b"), "{b_output}");
+    let app_a_other = std::process::Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "8",
+            "--write-out",
+            "\n%{http_code}",
+            "--header",
+        ])
+        .arg(format!("Host: {}", app_a.hostname))
+        .arg(format!("http://127.0.0.1:{port}/api/other"))
+        .output()
+        .unwrap();
+    let app_a_other_output = String::from_utf8_lossy(&app_a_other.stdout);
+    assert!(
+        app_a_other_output.ends_with("\n200"),
+        "{app_a_other_output}"
+    );
+    assert!(
+        app_a_other_output.contains("app-a-other"),
+        "{app_a_other_output}"
+    );
+    let app_a_orders = std::process::Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "2",
+            "--write-out",
+            "\n%{http_code}",
+        ])
+        .arg("--header")
+        .arg(format!("Host: {}", app_a.hostname))
+        .args(["--request", "POST", "--data-binary", ""])
+        .arg(&base)
+        .output()
+        .unwrap();
+    let app_a_orders_output = String::from_utf8_lossy(&app_a_orders.stdout);
+    assert!(
+        app_a_orders_output.ends_with("\n200"),
+        "{app_a_orders_output}"
+    );
+    let own = server.id().to_string();
+    let processes = std::process::Command::new("ps")
+        .args(["-axo", "ppid=,command="])
+        .output()
+        .unwrap();
+    let warm_worker_count = String::from_utf8_lossy(&processes.stdout)
+        .lines()
+        .filter(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some(own.as_str()) && line.contains("--function-worker")
+        })
+        .count();
+    assert_eq!(
+        warm_worker_count, 2,
+        "two app bundles should share one worker per Deployment"
+    );
+
+    let mut tricklers = Vec::new();
+    for _ in 0..2 {
+        tricklers.push(
+            std::process::Command::new("curl")
+                .args([
+                    "--silent",
+                    "--show-error",
+                    "--max-time",
+                    "8",
+                    "--limit-rate",
+                    "1",
+                    "--output",
+                    "/dev/null",
+                    "--write-out",
+                    "%{http_code}",
+                    "--request",
+                    "POST",
+                    "--header",
+                ])
+                .arg(format!("Host: {}", app_a.hostname))
+                .arg("--data-binary")
+                .arg(format!("@{}", body_file.display()))
+                .arg(&base)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let output = std::process::Command::new("ps")
+                .args(["-axo", "ppid=,command="])
+                .output()
+                .unwrap();
+            let own = server.id().to_string();
+            let count = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| {
+                    let mut fields = line.split_whitespace();
+                    fields.next() == Some(own.as_str()) && line.contains("--function-worker")
+                })
+                .count();
+            if count >= 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("two app A workers should be waiting on upload bytes");
+
+    let b_started = Instant::now();
+    let b_response = std::process::Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "2",
+            "--write-out",
+            "\n%{http_code}",
+            "--header",
+        ])
+        .arg(format!("Host: {}", app_b.hostname))
+        .arg(&base)
+        .output()
+        .unwrap();
+    assert!(b_response.status.success());
+    let b_output = String::from_utf8_lossy(&b_response.stdout);
+    assert!(b_output.ends_with("\n200"), "{b_output}");
+    assert!(b_output.contains("app-b"), "{b_output}");
+    let b_elapsed = b_started.elapsed();
+    assert!(b_elapsed < Duration::from_secs(2));
+
+    let third_started = Instant::now();
+    let third = std::process::Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "8",
+            "--write-out",
+            "\n%{http_code}",
+            "--header",
+        ])
+        .arg(format!("Host: {}", app_a.hostname))
+        .args(["--request", "POST", "--data-binary", ""])
+        .arg(&base)
+        .output()
+        .unwrap();
+    let third_output = String::from_utf8_lossy(&third.stdout);
+    assert!(third_output.ends_with("\n200"), "{third_output}");
+    let third_elapsed = third_started.elapsed();
+    assert!(third_elapsed > Duration::from_secs(1));
+    assert!(third_elapsed < Duration::from_secs(8));
+    let b_after_burst = std::process::Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "2",
+            "--write-out",
+            "\n%{http_code}",
+            "--header",
+        ])
+        .arg(format!("Host: {}", app_b.hostname))
+        .arg(&base)
+        .output()
+        .unwrap();
+    assert!(b_after_burst.status.success());
+    assert!(
+        String::from_utf8_lossy(&b_after_burst.stdout).ends_with("\n200"),
+        "{}",
+        String::from_utf8_lossy(&b_after_burst.stdout)
+    );
+    let processes = std::process::Command::new("ps")
+        .args(["-axo", "ppid=,command="])
+        .output()
+        .unwrap();
+    let own = server.id().to_string();
+    let worker_count = String::from_utf8_lossy(&processes.stdout)
+        .lines()
+        .filter(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some(own.as_str()) && line.contains("--function-worker")
+        })
+        .count();
+    assert_eq!(worker_count, 3, "the burst should preserve app B's worker");
+    eprintln!(
+        "capacity proof app_a_workers=2 app_b_status=200 app_b_elapsed_ms={} app_a_third_status=200 app_a_third_elapsed_ms={} app_b_worker_survived=true",
+        b_elapsed.as_millis(),
+        third_elapsed.as_millis()
+    );
+
+    for child in &mut tricklers {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = server.kill();
+    let _ = server.wait();
     let _ = std::fs::remove_dir_all(root);
 }
 

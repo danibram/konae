@@ -39,6 +39,13 @@ pub struct AppState {
     pub functions: Arc<functions::runtime::Runtime>,
     /// Shared fair wake-up queues for module-owned durable work.
     pub dispatcher: Arc<execution::Dispatcher>,
+    pub otlp: Option<functions::otlp::Exporter>,
+}
+
+impl AppState {
+    pub async fn shutdown_exporters(&self) {
+        if let Some(exporter) = &self.otlp { exporter.shutdown().await; }
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -65,6 +72,7 @@ impl AppState {
             audit: None,
             functions: Arc::new(functions::runtime::Runtime::disabled()),
             dispatcher: Arc::new(execution::Dispatcher::default()),
+            otlp: None,
         }
     }
 }

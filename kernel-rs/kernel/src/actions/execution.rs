@@ -24,6 +24,7 @@ pub struct Ran {
     pub answer: Value,
     pub rows: Vec<serde_json::Map<String, Value>>,
     pub notify_intent: Option<String>,
+    pub sqlite: std::time::Duration,
 }
 
 impl Ran {
@@ -79,10 +80,13 @@ async fn run_action_holding(
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         if action.kind == "query" {
-            run_query(&path, &action, params).map(|rows| Ran {
+            let connection = app_db::open(&path)?;
+            let started = std::time::Instant::now();
+            run_query_on_connection(&connection, &action, params).map(|rows| Ran {
                 answer: Value::from(rows),
                 rows: Vec::new(),
                 notify_intent: None,
+                sqlite: started.elapsed(),
             })
         } else {
             run_mutation(&path, &action, params, notify_context)
@@ -137,6 +141,7 @@ pub fn run_mutation_on_connection(
     action: &ActionDefinition,
     params: Vec<SqlValue>,
 ) -> Result<Ran> {
+    let sqlite_started = std::time::Instant::now();
     let columns = action
         .notify
         .as_ref()
@@ -185,6 +190,7 @@ pub fn run_mutation_on_connection(
         answer: json!({"changes": changes, "lastInsertId": last_insert_id}),
         rows,
         notify_intent: None,
+        sqlite: sqlite_started.elapsed(),
     })
 }
 

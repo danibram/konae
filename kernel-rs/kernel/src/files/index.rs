@@ -54,11 +54,15 @@ pub(super) async fn read_file_index(directory: &Path) -> Result<Vec<Value>, Resp
 }
 
 /// The refusal when one more file of `size` bytes would not fit.
-pub(super) fn file_room(state: &AppState, files: &[Value], size: u64) -> Option<Response> {
-    let used = files
-        .iter()
-        .filter_map(|file| file["size"].as_u64())
-        .sum::<u64>();
+pub(super) async fn file_room(state: &AppState, app: &str, files: &[Value], size: u64) -> Option<Response> {
+    let root = state.data_root.clone();
+    let app = app.to_owned();
+    let inventory = tokio::task::spawn_blocking(move || crate::modules::blob_references(&root, &app)).await;
+    let used = match inventory {
+        Ok(Ok(references)) => references.iter().fold(0u64, |total, reference| total.saturating_add(reference.size)),
+        Ok(Err(failure)) => return Some(error(StatusCode::INTERNAL_SERVER_ERROR, &failure.to_string())),
+        Err(failure) => return Some(error(StatusCode::INTERNAL_SERVER_ERROR, &failure.to_string())),
+    };
     if used.saturating_add(size) > state.files.limits.quota_bytes {
         return Some(error(StatusCode::PAYLOAD_TOO_LARGE, &state.files.limits.quota_reached()));
     }

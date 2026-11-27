@@ -43,7 +43,9 @@ impl MutationOutcomeState {
 struct Shared {
     deadline: Instant,
     cancelled: AtomicBool,
+    abort_requested: AtomicBool,
     mutation: AtomicU8,
+    abort: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     wait: Mutex<()>,
     wake: Condvar,
 }
@@ -60,7 +62,9 @@ impl Budget {
             shared: Arc::new(Shared {
                 deadline,
                 cancelled: AtomicBool::new(false),
+                abort_requested: AtomicBool::new(false),
                 mutation: AtomicU8::new(0),
+                abort: Mutex::new(None),
                 wait: Mutex::new(()),
                 wake: Condvar::new(),
             }),
@@ -95,6 +99,37 @@ impl Budget {
         self.shared.cancelled.store(true, Ordering::SeqCst);
         self.shared.wake.notify_all();
         self.mutation_outcome()
+    }
+    pub fn abort(&self) -> MutationOutcomeState {
+        let handler = {
+            let mut abort = self.shared.abort.lock().unwrap();
+            self.shared.abort_requested.store(true, Ordering::SeqCst);
+            abort.take()
+        };
+        let outcome = self.cancel();
+        if let Some(handler) = handler {
+            handler();
+        }
+        outcome
+    }
+    /// Forgets the abort handler. The executor calls it when an invocation ends with the worker
+    /// back in a known state, so a later abort does not kill a worker that already answered.
+    pub fn clear_abort_handler(&self) {
+        *self.shared.abort.lock().unwrap() = None;
+    }
+    pub fn register_abort_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
+        let invoke_now = {
+            let mut abort = self.shared.abort.lock().unwrap();
+            if self.shared.abort_requested.load(Ordering::SeqCst) {
+                true
+            } else {
+                *abort = Some(handler.clone());
+                false
+            }
+        };
+        if invoke_now {
+            handler();
+        }
     }
     pub fn mutation_outcome(&self) -> MutationOutcomeState {
         match self.shared.mutation.load(Ordering::SeqCst) {
@@ -148,5 +183,57 @@ impl crate::ExecutionBudget for Budget {
     }
     fn is_cancelled(&self) -> bool {
         self.shared.cancelled.load(Ordering::SeqCst)
+    }
+    fn register_abort_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
+        Budget::register_abort_handler(self, handler);
+    }
+    fn clear_abort_handler(&self) {
+        Budget::clear_abort_handler(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn abort_runs_the_registered_handler_once() {
+        let budget = Budget::new(Duration::from_secs(1));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        budget.register_abort_handler(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        assert_eq!(budget.abort(), MutationOutcomeState::Clean);
+        assert_eq!(budget.failure_code(), Some("cancelled"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn ordinary_cancellation_does_not_run_the_abort_handler() {
+        let budget = Budget::new(Duration::from_secs(1));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        budget.register_abort_handler(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        budget.cancel();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn registering_after_abort_runs_the_handler() {
+        let budget = Budget::new(Duration::from_secs(1));
+        let calls = Arc::new(AtomicUsize::new(0));
+        assert_eq!(budget.abort(), MutationOutcomeState::Clean);
+
+        let observed = calls.clone();
+        budget.register_abort_handler(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

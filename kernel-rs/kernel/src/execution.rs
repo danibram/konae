@@ -18,25 +18,32 @@ struct ReadyQueue {
 
 /// Fair, coalescing wake-up queues shared by module handlers. Calls and notices
 /// have separate queues so either worker can keep its own turn order.
-#[derive(Default)]
 pub struct Dispatcher {
-    queues: [tokio::sync::Mutex<ReadyQueue>; 2],
-    changed: [tokio::sync::Notify; 2],
+    queues: std::collections::HashMap<WorkResource, WorkQueue>,
+}
+
+#[derive(Default)]
+struct WorkQueue {
+    ready: tokio::sync::Mutex<ReadyQueue>,
+    changed: tokio::sync::Notify,
+}
+
+impl Default for Dispatcher {
+    fn default() -> Self {
+        let queues = crate::modules::work_resources()
+            .map(|resource| (resource, WorkQueue::default()))
+            .collect();
+        Self { queues }
+    }
 }
 
 impl Dispatcher {
-    fn index(resource: WorkResource) -> usize {
-        match resource {
-            WorkResource::Calls => 0,
-            WorkResource::Notices => 1,
-        }
-    }
 
     /// Adds one ready app. Repeated signals coalesce by app ID.
     /// Callers use IDs from a Deployment loaded or validated by the Kernel.
     pub(crate) async fn wake(&self, resource: WorkResource, app: impl Into<String>) {
-        let index = Self::index(resource);
-        let mut queue = self.queues[index].lock().await;
+        let work = &self.queues[&resource];
+        let mut queue = work.ready.lock().await;
         let app = app.into();
         if queue.queued.contains(&app) {
             return;
@@ -44,16 +51,16 @@ impl Dispatcher {
         queue.queued.insert(app.clone());
         queue.apps.push_back(app);
         drop(queue);
-        self.changed[index].notify_one();
+        work.changed.notify_one();
     }
 
     /// Takes the next app and waits when that resource has no ready work.
     pub(crate) async fn next(&self, resource: WorkResource) -> String {
-        let index = Self::index(resource);
+        let work = &self.queues[&resource];
         loop {
-            let notified = self.changed[index].notified();
+            let notified = work.changed.notified();
             {
-                let mut queue = self.queues[index].lock().await;
+                let mut queue = work.ready.lock().await;
                 if let Some(app) = queue.apps.pop_front() {
                     queue.queued.remove(&app);
                     return app;

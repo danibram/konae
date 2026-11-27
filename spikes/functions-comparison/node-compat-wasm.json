@@ -1,0 +1,48 @@
+{
+  "cold_first_request_ms": {
+    "zod": 358.911917,
+    "hono": 16.629583,
+    "dateFns": 15.429916,
+    "uuid": 14.568333,
+    "nanoid": 14.191667,
+    "jose": 45.736167,
+    "bufferEvents": 14.3625,
+    "stream": 15.693542,
+    "createHash": 17.0315,
+    "dependencyMode": 14.029167,
+    "web": 19.055792,
+    "modules": 14.185625,
+    "bareBuiltin": 14.128541,
+    "npmProcess": 13.961917,
+    "commonJsEvents": 14.073958,
+    "dynamicBuiltin": 14.10975,
+    "reexportBuiltin": 13.880875,
+    "typeOnlyBuiltin": 13.961792
+  },
+  "read_route": {
+    "path": "/api/zod",
+    "count": 200,
+    "p50_ms": 5.554584,
+    "p95_ms": 6.322459,
+    "mean_ms": 5.70562191
+  },
+  "rss_rest": {
+    "kernel_kib": 48240,
+    "workers_kib": [
+      117376
+    ],
+    "workers_total_kib": 117376
+  },
+  "rss_peak_sampled_during_load": {
+    "kernel_kib": 48240,
+    "workers_kib": [
+      125824
+    ],
+    "workers_total_kib": 125824
+  },
+  "rss_samples": 1417,
+  "load_concurrency": 1,
+  "spacing_ms": 500.0,
+  "write_route": null,
+  "measurementWindowUtc": "2026-11-24 13:00-13:59 UTC"
+}

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS __konae_calls (
   request_body TEXT,
   request_headers TEXT,
   response_body BLOB,
+  traceparent TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

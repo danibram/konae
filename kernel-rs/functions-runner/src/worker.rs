@@ -7,6 +7,7 @@ use konae_functions_executor::{
 };
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     io::{self, Read},
     sync::{
         Arc, Mutex,
@@ -103,6 +104,7 @@ pub struct ChildBridge {
     active: Mutex<Option<ActiveInvocation>>,
     sequence: AtomicU64,
     cancelled: AtomicBool,
+    operation_cancelled: AtomicBool,
     error: Mutex<Option<String>>,
     output: Mutex<io::Stdout>,
     replies: Mutex<mpsc::Receiver<ParentMessage>>,
@@ -117,6 +119,7 @@ impl ChildBridge {
         self.sequence.store(0, Ordering::SeqCst);
         self.body_sequence.store(0, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
+        self.operation_cancelled.store(false, Ordering::SeqCst);
         self.clear_error();
         *active = Some(ActiveInvocation {
             capability,
@@ -170,15 +173,17 @@ impl ChildBridge {
 
     fn cancel(&self, capability: &Capability) {
         let mut active = self.active.lock().unwrap();
-        let Some(invocation) = active
-            .as_mut()
-            .filter(|active| &active.capability == capability)
-        else {
+        if !active
+            .as_ref()
+            .is_some_and(|active| &active.capability == capability)
+        {
             return;
-        };
+        }
         self.cancelled.store(true, Ordering::SeqCst);
         self.record_error("cancelled");
-        invocation.watchdog.arm();
+        if !self.operation_cancelled.load(Ordering::SeqCst) {
+            active.as_mut().unwrap().watchdog.arm();
+        }
     }
 
     fn is_active(&self, capability: &Capability) -> bool {
@@ -370,15 +375,14 @@ pub fn worker_main() -> Result<()> {
 
     let ParentMessage::Init {
         abi,
-        function,
-        source,
+        bundles,
         generation,
         limits,
     } = protocol::read(&mut input)?
     else {
         return Err(anyhow!("init_required"));
     };
-    if let Err(code) = validate_init(&abi, &limits, &source) {
+    if let Err(code) = validate_init(&abi, &limits, &bundles) {
         return worker_start_failure(code);
     }
 
@@ -388,6 +392,7 @@ pub fn worker_main() -> Result<()> {
         active: Mutex::new(None),
         sequence: AtomicU64::new(0),
         cancelled: AtomicBool::new(false),
+        operation_cancelled: AtomicBool::new(false),
         error: Mutex::new(None),
         output: Mutex::new(io::stdout()),
         replies: Mutex::new(reply_rx),
@@ -402,6 +407,19 @@ pub fn worker_main() -> Result<()> {
                 Err(_) => std::process::exit(70),
             };
             match message {
+                ParentMessage::OperationResult { ref result, .. }
+                    if matches!(
+                        result,
+                        Err(code) if code == "cancelled" || code == "deadline_exceeded"
+                    ) =>
+                {
+                    reader_bridge
+                        .operation_cancelled
+                        .store(true, Ordering::SeqCst);
+                    if reply_tx.try_send(message).is_err() {
+                        std::process::exit(70);
+                    }
+                }
                 ParentMessage::OperationResult { .. } | ParentMessage::BodyChunk { .. } => {
                     if reply_tx.try_send(message).is_err() {
                         std::process::exit(70);
@@ -425,6 +443,7 @@ pub fn worker_main() -> Result<()> {
     bridge.send(&ChildMessage::Ready {
         abi: protocol::ABI.into(),
         generation: generation.clone(),
+        engine: Some(protocol::EngineKind::Deno),
     })?;
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -433,10 +452,22 @@ pub fn worker_main() -> Result<()> {
 
     while let Ok(command) = command_rx.recv() {
         match command {
-            ParentMessage::Invoke { capability, input } => {
+            ParentMessage::Invoke {
+                capability,
+                function,
+                input,
+            } => {
                 if capability.generation != generation {
                     return Err(anyhow!("generation_mismatch"));
                 }
+                let Some(source) = bundles.get(&function) else {
+                    send_invocation_result(
+                        &bridge,
+                        capability,
+                        Err(anyhow!("invalid_function_name")),
+                    )?;
+                    continue;
+                };
                 drop(last_runtime.take());
                 bridge.begin(capability.clone());
                 let (result, completed_runtime) = match executor.block_on(Runtime::new(
@@ -464,6 +495,7 @@ pub fn worker_main() -> Result<()> {
                 if capability.generation != generation {
                     return Err(anyhow!("generation_mismatch"));
                 }
+                let (function, source) = bundles.iter().next().expect("validated bundle map");
                 drop(last_runtime.take());
                 bridge.begin(capability.clone());
                 let result = executor.block_on(async {
@@ -508,12 +540,14 @@ fn send_invocation_result(
             code: bridge
                 .error()
                 .unwrap_or_else(|| error_code(&error).to_owned()),
+            detail: executor::error_detail(&error).map(str::to_owned),
         },
         _ => ChildMessage::Failure {
             capability: Some(capability),
             code: bridge
                 .error()
                 .unwrap_or_else(|| "worker_execution_failed".into()),
+            detail: None,
         },
     };
     bridge.send(&reply)?;
@@ -526,16 +560,33 @@ fn worker_start_failure(code: &str) -> Result<()> {
         &ChildMessage::Failure {
             capability: None,
             code: code.into(),
+            detail: None,
         },
     );
     Err(executor::WorkerError::new(code).into())
 }
 
-fn validate_init(abi: &str, limits: &WorkerLimits, source: &str) -> Result<(), &'static str> {
+fn validate_init(
+    abi: &str,
+    limits: &WorkerLimits,
+    bundles: &BTreeMap<String, String>,
+) -> Result<(), &'static str> {
     if abi != protocol::ABI {
         return Err("worker_protocol_mismatch");
     }
-    if !limits.validate() || source.len() > protocol::MAX_SOURCE_BYTES {
+    let total = bundles.values().map(String::len).sum::<usize>();
+    if !limits.validate()
+        || bundles.is_empty()
+        || total > protocol::MAX_SOURCE_BYTES
+        || bundles.iter().any(|(name, source)| {
+            name.is_empty()
+                || name.len() > 64
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                || source.len() > 1024 * 1024
+        })
+    {
         return Err("invalid_init");
     }
     Ok(())

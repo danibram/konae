@@ -1,4 +1,4 @@
-import { sdkContract, type SdkCall, type SdkContract, type SdkError, type SdkModule } from "./contract";
+import { internalKernelModules, sdkContract, type SdkCall, type SdkContract, type SdkError, type SdkModule } from "./contract";
 
 /** The checked-in files `bun run sdk:render` writes, relative to the repository root. */
 export const renderedPaths = {
@@ -218,7 +218,7 @@ export function renderAll(contract: SdkContract = sdkContract): Record<string, s
     [renderedPaths.prompt]: renderPromptModule(contract),
     [renderedPaths.guide]: renderPlatformGuide(contract),
     [renderedPaths.docs]: renderDocs(contract),
-    [renderedPaths.modules]: `${JSON.stringify({ modules: Object.fromEntries(contract.modules.map((module) => [module.name, {
+    [renderedPaths.modules]: `${JSON.stringify({ modules: { ...Object.fromEntries(contract.modules.map((module) => [module.name, {
       summary: module.summary,
       switch: module.switch,
       options: module.options,
@@ -226,6 +226,7 @@ export function renderAll(contract: SdkContract = sdkContract): Record<string, s
       agentRule: module.agentRule,
       requires: module.requires,
       uses: module.uses,
-    }])) }, null, 2)}\n`,
+      ...(module.data ? { data: module.data } : {}),
+    }])), ...internalKernelModules } }, null, 2)}\n`,
   };
 }

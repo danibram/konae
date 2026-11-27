@@ -1,4 +1,5 @@
 import type { ActionContract, ContractAction, ContractColumn, ContractInput, ContractOutput } from "./action-contract";
+import type { FunctionsManifest } from "../kernel/functions";
 
 export const ACTION_TYPES_FILE = "actions.d.ts";
 
@@ -36,6 +37,41 @@ export function renderActionTypes(contract: ActionContract): string {
   return lines.join("\n");
 }
 
+export function renderFunctionContextTypes(contract: ActionContract, manifest: FunctionsManifest): string {
+  const actions = new Map(contract.actions.map((action) => [action.name, action]));
+  const lines = [
+    "// Generated from functions.json, actions.json and schema.sql. Do not edit.",
+    "",
+    'declare module "konae:actions" {',
+    "  export interface FunctionActionsByName {",
+    ...Object.entries(manifest.functions).map(([functionName, definition]) => {
+      const callable = definition.actions.flatMap((name) => {
+        const action = actions.get(name);
+        return action && callableFromPage(action) ? [action] : [];
+      });
+      const argumentBranches = callable.map((action) => `Name extends ${JSON.stringify(action.name)} ? ${inputArgumentType(action.inputs)} : `).join("") + "never";
+      const outputBranches = callable.map((action) => `Name extends ${JSON.stringify(action.name)} ? ${outputType(action.output)} : `).join("") + "never";
+      const call = callable.length
+        ? `call<Name extends ${callable.map((action) => JSON.stringify(action.name)).join(" | ")}>(name: Name, ...input: ${argumentBranches}): Promise<${outputBranches}>;`
+        : 'call(name: never): Promise<never>;';
+      return `    ${JSON.stringify(functionName)}: { ${call} };`;
+    }),
+    "  }",
+    "  export type FunctionContext<Name extends keyof FunctionActionsByName> = {",
+    "    readonly actor: { readonly userId: string | null };",
+    "    readonly actions: FunctionActionsByName[Name];",
+    "  };",
+    "  export function actions<Name extends keyof FunctionActionsByName>(context: FunctionContext<Name>): FunctionContext<Name>[\"actions\"];",
+    "}",
+    "",
+  ];
+  return lines.join("\n");
+}
+
+function inputArgumentType(inputs: ContractInput[]): string {
+  return inputs.length === 0 ? "[input?: Record<string, never>]" : `[input: ${inputType(inputs)}]`;
+}
+
 function callableFromPage(action: ContractAction): boolean {
   return action.access !== "scheduled" && !action.schedule && !action.thenOf && action.http?.onlyDoor !== "always";
 }
@@ -44,7 +80,7 @@ function inputType(inputs: ContractInput[]): string {
   if (inputs.length === 0) return "Record<string, never>";
   const scalar = { string: "string", number: "number", boolean: "boolean" } as const;
   return `{ ${inputs.map((input) => input.required
-    ? `${JSON.stringify(input.key)}: ${scalar[input.type]}`
+    ? `${JSON.stringify(input.key)}: ${scalar[input.type]}${input.nullable ? " | null" : ""}`
     : `${JSON.stringify(input.key)}?: ${scalar[input.type]}${input.nullable ? " | null" : ""}`).join("; ")} }`;
 }
 

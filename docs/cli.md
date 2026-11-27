@@ -1,6 +1,8 @@
 # CLI
 
-The compiled `konae` command creates an app folder, runs it locally, publishes it and moves it. Build it with `bun run scripts/build-konae-binary.ts`; the script writes `out/konae-<version>-<os>-<arch>`. Copy that binary to a directory on PATH. The published v0.8.0 release has four Kernel downloads and `SHA256SUMS`, but no CLI downloads. The CLI downloads the Kernel matching its version and checks its SHA-256 against `SHA256SUMS`. Only macOS arm64 CLI execution was verified, and its binary requires macOS 13.0. The other CLI platforms and release workflow remain unverified.
+The compiled `konae` command creates app folders, runs them locally, publishes them, and moves them between installations.
+
+Download the CLI for your platform from a [Konae release](https://github.com/danibram/konae/releases) and copy it to a directory on PATH. To build it from a checkout, run `bun run scripts/build-konae-binary.ts`. The script writes `out/konae-<version>-<os>-<arch>`. The CLI downloads the Kernel matching its version and checks its SHA-256 against `SHA256SUMS`.
 
 Three things carry the name `konae`.
 

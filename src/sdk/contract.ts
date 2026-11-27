@@ -52,6 +52,14 @@ export type SdkDeclaration = {
   limits?: string[];
 };
 
+export type KernelModuleData = {
+  version: number;
+  components: string[];
+  reserved?: string[];
+  migrations?: string[];
+  objects?: "file-index";
+};
+
 export type SdkModule = {
   name: string;
   title: string;
@@ -62,6 +70,7 @@ export type SdkModule = {
   agentRule: "after-owner-confirms" | "never";
   requires: string[];
   uses: string[];
+  data?: KernelModuleData;
   calls: SdkCall[];
   declarations: SdkDeclaration[];
   notes: string[];
@@ -107,6 +116,19 @@ const unreadable: SdkError = { message: "File not found.", when: "the file does 
 const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is the path files.url returns for the file. The Kernel serves JavaScript, HTML, XML and SVG types as application/octet-stream";
 const storedShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }, where url is the path files.url returns for the new file";
 
+export const internalKernelModules = {
+  usage: {
+    summary: "Per-app usage records.",
+    switch: false,
+    options: [],
+    permission: "publish",
+    agentRule: "never",
+    requires: [],
+    uses: [],
+    data: { version: 1, components: ["usage"] },
+  },
+} satisfies Record<string, Pick<SdkModule, "summary" | "switch" | "options" | "permission" | "agentRule" | "requires" | "uses" | "data">>;
+
 export const sdkContract = {
   version: 1,
   global: "miniapp",
@@ -128,6 +150,7 @@ export const sdkContract = {
   modules: [
     {
       name: "auth",
+      data: {"version": 1, "components": ["identity"]},
       title: "App accounts",
       summary: "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
       switch: true, options: [
@@ -204,6 +227,7 @@ export const sdkContract = {
     },
     {
       name: "actions",
+      data: {"version": 2, "reserved": ["__konae_schema_state", "__konae_schema_history", "__konae_notify_intents"], "components": ["database"], "migrations": ["schema-transforms", "notify-intents"]},
       title: "Data and actions",
       summary: "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
       switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: [], uses: ["actions.json", "schema.sql", "miniapp.actions"],
@@ -391,6 +415,7 @@ export const sdkContract = {
     },
     {
       name: "files",
+      data: {"version": 1, "components": ["files"], "objects": "file-index"},
       title: "File storage",
       summary: "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
       switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader", default: null, label: "Who can read every file", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: ["auth"], uses: ["miniapp.files"],
@@ -516,6 +541,7 @@ export const sdkContract = {
     },
     {
       name: "calls",
+      data: {"version": 1, "components": ["database"], "reserved": ["__konae_calls"], "migrations": ["calls-app-outbox"]},
       title: "Outgoing calls",
       summary: "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
       switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: ["actions"], uses: ["actions.json kind=call"],
@@ -690,6 +716,7 @@ export const sdkContract = {
     },
     {
       name: "functions",
+      data: {"version": 1, "components": ["database"], "reserved": ["__konae_function_receipts"], "migrations": ["function-receipts"]},
       title: "Server functions",
       summary: "Run bundled JavaScript handlers on the Kernel with verified identity and named Server Actions.",
       switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: [],
@@ -704,12 +731,12 @@ export const sdkContract = {
         { message: "This request was already processed. Check its current state through an authorized read.", when: "the same actor retries an already processed request with the same key and fingerprint; code idempotency_replay (409)", source: "kernel", status: 409 },
         { message: "The function request exceeds 100000000 bytes.", when: "the request body exceeds the decimal 100 MB limit (413)", source: "kernel" },
         { message: "worker_protocol_mismatch", when: "the private Kernel and runner IPC versions differ; restart with a matching pair (503)", source: "kernel" },
-      ], summary: "Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Use access scheduled for a cron target and omit mount and methods. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. Request.signal reports cancellation." },
+      ], summary: "Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Use access scheduled for a cron target and omit mount and methods. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. The Kernel can end an invocation at its deadline without delivering an abort event to Request.signal." },
       { file: "crons.json", key: "crons", limits: ["32 jobs per app", "Five numeric fields in UTC with minute precision", "One attempt per job and matching minute"], errors: [
         { message: "Server Artifact manifest does not match crons.json.", when: "the source and built cron declarations differ", source: "kernel" },
       ],
         summary: 'Declare { "version": 1, "crons": { "cleanup": { "cron": "0 8 * * 1-5", "function": "cleanup" } } }. The target names a Function with access scheduled in functions.json. The Kernel calls it with an empty POST and no app user. It passes the job ID and scheduled time in milliseconds as cron and scheduledAt query parameters. Use access scheduled on Server Actions reserved for scheduled Functions. Run a job in local test mode with konae test schedule cron:<id>.' }],
-      notes: ["A release with cron jobs enables Functions and, when a cron target names Server Actions, Actions. This applies to the first release and to updates. For HTTP Functions in an app without cron jobs, enable Functions in App settings or in the local konae.json. Authenticated functions require auth. A nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.", "For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Operators configure a paired runner; functions remain experimental. Worker processes start on demand and may stay warm until their idle timeout. Each request evaluates the bundle in a fresh V8 isolate.", "A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.", "The action allowlist accepts only queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.", "The private Kernel-runner protocol is konae-functions-ipc/2; the published bundle ABI remains konae-functions/1. Upgrade the Kernel and runner together and restart the service. Server bundles travel in server/, separate from the public dist/. An optional shutdown(signal) can release resources when the worker retires. The runner calls it in the last completed isolate if one is available."],
+      notes: ["A release with cron jobs enables Functions and, when a cron target names Server Actions, Actions. This applies to the first release and to updates. For HTTP Functions in an app without cron jobs, enable Functions in App settings or in the local konae.json. Authenticated functions require auth. A nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.", "For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Functions remain experimental. StarlingMonkey is the default runner. Operators can select deno_core. Workers start on demand and may stay warm until their idle timeout. Each request gets fresh JavaScript state.", "A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.", "The action allowlist accepts only queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.", "The Kernel and runner speak konae-functions-ipc/3. Published bundles use konae-functions/1. Upgrade the Kernel, runner, and preparer together and restart the service. The app folder carries private bundles in server/. The optional shutdown(signal) hook runs in the last completed request's JavaScript state when that state is available."],
     },
   ],
 } as const satisfies SdkContract;

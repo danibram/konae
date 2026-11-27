@@ -1,0 +1,27 @@
+{
+  "app": "/tmp/konae-kaminando-split/app",
+  "functionCount": 4,
+  "buildMsSum": 70.805875,
+  "results": [
+    {
+      "name": "patients",
+      "buildMs": 30.548417,
+      "bundleBytes": 90576
+    },
+    {
+      "name": "dashboard",
+      "buildMs": 13.117833,
+      "bundleBytes": 82567
+    },
+    {
+      "name": "profiles",
+      "buildMs": 14.983667,
+      "bundleBytes": 82361
+    },
+    {
+      "name": "files",
+      "buildMs": 12.155958,
+      "bundleBytes": 83110
+    }
+  ]
+}

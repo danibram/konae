@@ -142,7 +142,7 @@ Functions requires Actions when its declaration invokes actions. Documents requi
 | --- | --- | --- |
 | Module registry | `modules.json` and the compiled registry own module settings, reserved table names, state versions and export components. Schema migration and SQL authorization consult registered names. | A module registers its tables, version, migration and export components once. |
 | Execution and transactions | `execution::Context` carries app, release, actor or job, typed job authority, allowed operations and limits. Actions, Functions, schedules and Calls continuations use the same authority checks. Typed effects prepare receipts and Notify intents on the app transaction's connection. | New in-process handlers receive the context and connection-owned services without depending on a JavaScript engine. |
-| Background execution | The bounded in-process dispatcher admits work per app and resource, rotates app turns and recovers committed work at startup, import and maintenance resume. Calls and Notify use real handlers. | A module adds a handler and keeps its own durable record, retry policy and transport adapter. |
+| Background execution | The compiled registry starts the Calls and Notify workers. The dispatcher gives ready apps turns by resource. Import and maintenance resume wake all registered handlers. | A module registers its handler and keeps its durable records, retry policy and transport adapter. |
 | Publication and lifecycle | The publisher checks pending Calls against the candidate schema before activation. Static GET captures bytes and ETag under the lock for the same release, including rollback. | A module declares retained inputs and compatibility checks before adding a data migration. |
 | Export and import | Registered reserved names and export components keep internal state known to schema migration, SQL authorization and portable packages, including when Actions is off. | New module state joins the registered inventory and the existing package path. |
 
@@ -180,7 +180,7 @@ Register modules explicitly when compiling the Kernel. Ordinary app logic uses A
 | --- | --- |
 | Settings, internal tables and portable format | `modules.json`, with validation cases and the module's migration code |
 | Rows and effects in one commit | `TransactionEffect::prepare` on the supplied app connection |
-| Work after the response | A module handler, durable app records and a dispatcher resource |
+| Work after the response | A handler in the compiled registry, durable app records and a dispatcher resource |
 | Stored bytes | A blob-reference provider in `modules`; Files keeps its own download ACL |
 | Retained SQL requirements | A compatibility hook called by `modules::check_pending_work` inside the candidate schema transaction |
 
@@ -198,13 +198,13 @@ flowchart TB
     FX["functions-executor crate<br/>Rust supervisor and IPC"]
   end
   subgraph child["On-demand child process"]
-    RUNNER["deno_core Functions runner<br/>source: kernel-rs/functions-runner"]
+    RUNNER["Functions runner<br/>StarlingMonkey or deno_core"]
   end
   OWN -->|"the editor host"| KO
   RUN -->|"each app's own host"| KE
   KO -->|"calls the library"| KE
   KE -->|"supervisor API"| FX
-  FX -->|"spawn, then bounded IPC/2"| RUNNER
+  FX -->|"spawn, then bounded IPC/3"| RUNNER
   subgraph data["One data directory"]
     OWNERS[("owners.sqlite<br/>mcp.sqlite")]
     APPS[("apps/#lt;id#gt;/<br/>one app folder per app")]
@@ -221,7 +221,7 @@ An installation has a main server process and one data directory. Functions may 
 
 ## Kernel, Konae and the functions executor
 
-The Cargo workspace under `kernel-rs` contains the Kernel, Konae, the backup library, and the Functions executor. The JavaScript runner has its own Cargo workspace and lockfile. The Kernel owns identity, authorization, SQLite, and request admission. The executor supervises workers and sends bounded IPC/2 messages to the runner ([ADR-0018](./adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md), [ADR-0019](./adr/0019-functions-stream-request-bodies-with-bounded-ipc.md)).
+The Cargo workspace under `kernel-rs` contains the Kernel, Konae, the backup library, and the Functions executor. Each runner and the preparer have their own Cargo workspace and lockfile. The Kernel owns identity, authorization, SQLite, and request admission. The executor supervises workers and sends bounded IPC/3 messages. StarlingMonkey is the default runner. The Kernel uses its preparer before serving a published bundle. [ADR-0020](./adr/0020-wasm-functions-runner.md)
 
 ```text
 kernel-rs/
@@ -229,12 +229,14 @@ kernel-rs/
 ├── konae/               the Konae binary, which links the Kernel
 ├── backup/              snapshot and copy formats and storage
 ├── functions-executor/  worker supervision and the IPC protocol
-└── functions-runner/    the deno_core worker binary
+├── functions-runner/    the deno_core worker binary
+├── functions-runner-wasm/ the StarlingMonkey worker binary
+└── functions-prepare/   the StarlingMonkey component preparer
 ```
 
 `kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, and applies the schema change `app/schema.sql` asks of `data/database.sqlite` when actions is on. It serves Server Actions, app accounts, files, schedules, notices, HTTP routes, functions, calls and Usage according to each app's modules. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `server/operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
 
-The Functions interface, actor binding, action allowlist, replay behavior and export boundary are documented in [Server functions](./functions.md). Current evidence and isolated candidates are separated in [Functions research](./architecture/functions-research.md).
+The Functions interface, actor binding, action allowlist, replay behavior, and export boundary are documented in [Server functions](./functions.md). [Functions research](./architecture/functions-research.md) records earlier experiments.
 
 `konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics, the project list and, when `KONAE_EDITOR_DIR` names it, the built editor on the editor host. It runs the same installation commands, and adds `owner-code-*` and `owner-account-*` commands that admit and suspend owners.
 
@@ -399,7 +401,7 @@ Export and import temporarily hold the app in maintenance and synchronize its ma
 
 With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation's bucket, and `data/files/index.json` in the app folder still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). SQLite, sources and `dist/` stay local. With `KONAE_COPY_S3=1`, copies go to `copies/` in the same bucket and carry their own file bytes, so a copy restores a file deleted after it was made.
 
-The module inventory enumerates blob IDs and sizes from each registered provider. Export, import, copy, cleanup and `files-migrate` use that inventory regardless of the Files switch. A failed inventory read stops cleanup before deletion. An archive can carry a module's private blob without adding it to the Files index or granting access through Files.
+The module inventory enumerates unique blob IDs and sizes from each registered provider. Export, import preflight, restore, copy, quota checks, cleanup and `files-migrate` use that inventory regardless of the Files switch. A failed inventory read stops cleanup before deletion. An archive can carry a module's private blob without adding it to the Files index or granting access through Files.
 
 Documents and file intake will register their own references and access rules. They must count incoming bytes and compute SHA-256 while staging, then check the shared quota under the app lock when committing a reference. Their immutable records, retained render resources and transfer acknowledgements remain work for those modules.
 

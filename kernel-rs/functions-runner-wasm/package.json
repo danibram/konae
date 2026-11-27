@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "dependencies": {
+    "web-streams-polyfill": "4.5.1",
+    "whatwg-url-without-unicode": "8.0.0-3"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}
