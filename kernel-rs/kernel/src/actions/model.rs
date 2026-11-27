@@ -39,6 +39,9 @@ pub struct ActionDefinition {
     pub schedule: Option<Value>,
 
     #[serde(default)]
+    pub issue: Option<crate::documents::IssueDeclaration>,
+
+    #[serde(default)]
     pub subscribe: Option<Value>,
 
 

@@ -4,7 +4,7 @@
   "repository": "https://github.com/danibram/konae",
   "nav": [
     { "section": "Start", "pages": [{ "page": "README.md", "label": "Overview" }, "concepts.md"] },
-    { "section": "Build", "pages": ["capsule.md", "server-actions.md", "functions.md", "gate-and-kernel.md", "accounts-and-access.md"] },
+    { "section": "Build", "pages": ["capsule.md", "server-actions.md", "documents.md", "functions.md", "gate-and-kernel.md", "accounts-and-access.md"] },
     { "section": "Guides", "pages": [
       "guides/first-app-from-the-editor.md",
       "guides/edit-files-with-the-cli.md",

@@ -38,6 +38,15 @@ export function sourcesUseCalls(sources: Iterable<string> | Record<string, strin
   return actionEntries(sources).some((action) => action && typeof action === "object" && (action as { kind?: unknown }).kind === "call");
 }
 
+export function sourcesUseDocuments(sources: Iterable<string> | Record<string, string>): boolean {
+  const entries = Symbol.iterator in Object(sources) ? Array.from(sources as Iterable<string>).map((source) => ["", source] as const) : Object.entries(sources as Record<string, string>);
+  return entries.some(([name, source]) => {
+    if (name !== "actions.json") return false;
+    try { return Object.values(JSON.parse(source)?.actions ?? {}).some((action) => action && typeof action === "object" && "issue" in action); }
+    catch { return true; }
+  });
+}
+
 export function sdkRequired(modules: Record<string, { on?: boolean }> | undefined, sources: Iterable<string> | Record<string, string>, visibility?: string): boolean {
   const sourceFiles = Symbol.iterator in Object(sources) ? undefined : sources as Record<string, string>;
   const files = sourceFiles ? Object.values(sourceFiles) : Array.from(sources as Iterable<string>);

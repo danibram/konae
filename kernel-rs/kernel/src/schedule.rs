@@ -214,7 +214,7 @@ pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name
     let permit = state.guards.statement_permit(&deployment.id).await.map_err(|_| anyhow::anyhow!("Scheduled operation could not acquire an app and installation SQL slot."))?;
     let outcome = if action.notify.is_some() {
         super::run_action_in_slot_with_notify(folder.join("database.sqlite"), action, parameters(action, at), permit,
-            super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.to_owned(), input: json!({}), account: None, actor_id: None, at }).await
+            super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.to_owned(), input: json!({}), account: None, actor_id: None, at, documents_rule: None }).await
     } else { super::run_action_in_slot(folder.join("database.sqlite"), action, parameters(action, at), permit).await };
     let key_value = format!("{} (manual test)", schedule.key());
     let slot = at as i64;
@@ -329,7 +329,7 @@ async fn run_due(
         };
         let outcome = if action.notify.is_some() {
             super::run_action_in_slot_with_notify(folder.join("database.sqlite"), action, parameters(action, at), permit,
-                super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.clone(), input: json!({}), account: None, actor_id: None, at }).await
+                super::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.clone(), input: json!({}), account: None, actor_id: None, at, documents_rule: None }).await
         } else { super::run_action_in_slot(folder.join("database.sqlite"), action, parameters(action, at), permit).await };
         let (ran, error) = match outcome {
             Ok(ran) => (Some(ran), None),

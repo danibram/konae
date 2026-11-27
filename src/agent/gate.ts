@@ -8,7 +8,7 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange, moduleCheckOrder } from "../lib/module-state";
-import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "../lib/module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseDocuments, sourcesUseFiles, sourcesUseHttp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
@@ -89,7 +89,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const SQL = await this.loadSql();
     const schemaSource = files["schema.sql"] ?? "";
     const filesCall = sourcesUseFiles(Object.values(files));
-    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files) };
+    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files), documents: sourcesUseDocuments(files) };
     for (const module of moduleCheckOrder) {
       if (!used[module as keyof typeof used]) continue;
       const state = modules?.[module];
@@ -320,6 +320,8 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
 
     const refused = notifyColumnsRefusal(db, action);
     if (refused) errors.push({ stage, message: refused.message, detail: refused.message, code: refused.code, hint: hintOf(refused.code) });
+    const documentRefused = documentsSnapshotRefusal(db, action);
+    if (documentRefused) errors.push({ stage, message: documentRefused.message, detail: documentRefused.message, code: documentRefused.code, hint: hintOf(documentRefused.code) });
 
     if (stage !== "actions") continue;
 
@@ -353,6 +355,20 @@ export function notifyColumnsRefusal(db: Database, action: ServerActionDefinitio
     // Falls through to the refusal.
   }
   return notifyColumnRefusal(action.name);
+}
+
+export function documentsSnapshotRefusal(db: Database, action: ServerActionDefinition) {
+  const columns = action.issue?.snapshot ?? [];
+  if (!columns.length) return undefined;
+  try {
+    const statement = db.prepare(notifyReturningStatement(action.statement, columns));
+    const returned = statement.getColumnNames().length;
+    statement.free();
+    if (returned === columns.length) return undefined;
+  } catch {
+    // The shared refusal tells the author which declaration to correct.
+  }
+  return { code: "documents.snapshot-column-unknown", message: `Action ${action.name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation.` };
 }
 
 function divergence(fresh: Database, clone: Database): string[] {

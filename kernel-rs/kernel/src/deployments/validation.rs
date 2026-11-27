@@ -75,6 +75,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let uses_actions = crate::modules::named_sources_use_actions(action_files.iter().copied());
     let uses_http = crate::modules::sources_use_http(action_files.iter().copied());
     let uses_calls = crate::modules::sources_use_calls(action_files.iter().copied());
+    let uses_documents = crate::modules::sources_use_documents(action_files.iter().copied());
     crate::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
     crate::calls::check_connects(&input.project.manifest)?;
     let artifact = crate::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
@@ -112,7 +113,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         manifest.check_modules(&candidate_modules)?;
     }
     for module in crate::modules::release_use_order() {
-        let used = match module.as_str() { "files" => uses_files, "actions" => uses_actions, "http" => uses_http, "calls" => uses_calls, _ => false };
+        let used = match module.as_str() { "files" => uses_files, "actions" => uses_actions, "http" => uses_http, "calls" => uses_calls, "documents" => uses_documents, _ => false };
         if used { crate::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
     }
     let program = crate::action_shape::read(actions_source)?;

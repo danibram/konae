@@ -165,6 +165,7 @@ fn action(kind: &str, statement: &str, bindings: Vec<ActionBinding>) -> ActionDe
         guard: None,
         notify: None,
         schedule: None,
+        issue: None,
         subscribe: None,
         call: Default::default(),
         extra: Default::default(),
@@ -507,6 +508,68 @@ async fn private_apps_refuse_anonymous_actions_without_a_session() {
         deployment.manifest = json!({"visibility": "public"});
     }
     assert_eq!(call(state.clone()).await, StatusCode::OK);
+    let _ = tokio::fs::remove_dir_all(root).await;
+}
+
+#[tokio::test]
+async fn a_server_action_renders_a_pdf_and_the_named_rule_separates_accounts() {
+    let root = std::env::temp_dir().join(format!("konae-documents-http-{}", Uuid::new_v4()));
+    let (state, headers) = login_test_state(&root, "public").await;
+    let deployment = state.deployments.read().await.values().next().unwrap().clone();
+    let source = json!({"version":1,"actions":{
+        "documents.issue":{"kind":"mutation","access":"authenticated","statement":"UPDATE invoices SET issued=1 WHERE id=?","bindings":[{"source":"input","key":"id","type":"string"}],"issue":{"key":"id","download":"documents.read","snapshot":["id","total"],"template":"#set page(paper: \"a4\")\n#text(issue.id)\n#text(str(issue.total))","resources":{},"typstVersion":"0.14.2"}},
+        "documents.read":{"kind":"query","access":"authenticated","statement":"SELECT id FROM invoices WHERE id=? AND owner_id=? LIMIT 1","bindings":[{"source":"input","key":"issueKey","type":"string"},{"source":"actor","field":"id"}]}
+    }}).to_string();
+    {
+        let mut deployments = state.deployments.write().await;
+        let active = deployments.get_mut(&deployment.hostname).unwrap();
+        active.actions = source;
+        active.modules.get_mut("documents").unwrap()["on"] = json!(true);
+        active.modules.get_mut("files").unwrap()["on"] = json!(false);
+    }
+    let database = database_path(&state, &deployment.id);
+    initialize_database(&database).unwrap();
+    Connection::open(&database).unwrap().execute_batch("CREATE TABLE invoices(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, total INTEGER NOT NULL, issued INTEGER NOT NULL DEFAULT 0); INSERT INTO invoices VALUES('invoice-17','account-a',1700,0);").unwrap();
+    let (alice, alice_id) = signed_in(&state, &deployment.id, &headers, "alice@example.test");
+    let (bob, _) = signed_in(&state, &deployment.id, &headers, "bob@example.test");
+    Connection::open(&database).unwrap().execute("UPDATE invoices SET owner_id=?1 WHERE id='invoice-17'", [&alice_id]).unwrap();
+    documents::spawn_worker(state.clone());
+    let issued = invoke_action(State(state.clone()), AxumPath("documents.issue".into()), alice.clone(), Json(json!({"id":"invoice-17"}))).await;
+    assert_eq!(issued.status(), StatusCode::OK, "{}", String::from_utf8_lossy(&axum::body::to_bytes(issued.into_body(), 100_000).await.unwrap()));
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let ready = Connection::open(&database).unwrap().query_row("SELECT EXISTS(SELECT 1 FROM __konae_documents WHERE issue_key='invoice-17' AND state='ready')", [], |row| row.get::<_,bool>(0)).unwrap_or(false);
+            if ready { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }).await.expect("the local Typst worker renders the issue");
+    let rule_json: String = Connection::open(&database).unwrap().query_row("SELECT read_rule_json FROM __konae_documents WHERE issue_key='invoice-17'", [], |row| row.get(0)).unwrap();
+    let rule: ActionDefinition = serde_json::from_str(&rule_json).unwrap();
+    let params = resolve_bindings(&rule, &json!({"issueKey":"invoice-17"}), Some(&alice_id)).unwrap();
+    assert_eq!(run_query(&database, &rule, params).unwrap().len(), 1, "the frozen read rule must find the issue for its owner");
+    let app = documents::routes().with_state(state.clone());
+    let host = deployment.hostname.clone();
+    let state_for_get = state.clone();
+    let get = |headers: HeaderMap| {
+        let app = app.clone();
+        let host = host.clone();
+        let state = state_for_get.clone();
+        async move {
+            use tower::ServiceExt;
+            let request = Request::builder().uri("/_konae/documents/invoice-17").header(header::HOST,host)
+                .header(header::COOKIE, headers.get(header::COOKIE).unwrap().clone()).body(Body::empty()).unwrap();
+            assert!(crate::deployment_for(&state, request.headers()).await.is_some(), "request host: {:?}", request.headers().get(header::HOST));
+            app.oneshot(request).await.unwrap()
+        }
+    };
+    let pdf = get(alice).await;
+    let pdf_status = pdf.status();
+    let pdf_headers = pdf.headers().clone();
+    let bytes = axum::body::to_bytes(pdf.into_body(), crate::documents::MAX_PDF_BYTES as usize).await.unwrap();
+    assert_eq!(pdf_status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+    assert_eq!(pdf_headers[header::CONTENT_TYPE], "application/pdf");
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert_eq!(get(bob).await.status(), StatusCode::NOT_FOUND);
     let _ = tokio::fs::remove_dir_all(root).await;
 }
 
@@ -1113,7 +1176,7 @@ fn a_mutation_reads_back_its_changed_rows_for_the_notice_only() {
     ).unwrap();
     let ran = run_mutation(&path, definition, vec![SqlValue::Integer(9)], Some(notify::MutationContext {
         app: "test-app".into(), release: "release-1".into(), action: "tasks.remind".into(), input: json!({"source":"test"}),
-        account: Some("account-1".into()), actor_id: Some("actor-1".into()), at: 9,
+        account: Some("account-1".into()), actor_id: Some("actor-1".into()), at: 9, documents_rule: None,
     })).unwrap();
     assert_eq!(ran.answer, json!({"changes": 2, "lastInsertId": 0}));
     let mut rows: Vec<Value> = ran.rows.iter().cloned().map(Value::Object).collect();
@@ -1164,7 +1227,7 @@ fn notify_intent_capture_failure_rolls_back_the_mutation_and_leaves_no_intent() 
     })).unwrap();
     let outcome = run_mutation(&path, &action, Vec::new(), Some(notify::MutationContext {
         app:"capture-app".into(), release:"release-2".into(), action:"items.create".into(), input:json!({}),
-        account:None, actor_id:None, at:10,
+        account:None, actor_id:None, at:10, documents_rule: None,
     }));
     assert!(outcome.is_err());
     let db = Connection::open(&path).unwrap();
@@ -3332,7 +3395,7 @@ fn notify_refuses_an_oversized_returning_row_and_rolls_back() {
     .unwrap();
     let (outcome, converted) = converted_after(|| run_mutation(&path, &definition, Vec::new(), Some(notify::MutationContext {
         app: "test-app".into(), release: "release-1".into(), action: "items.insert".into(), input: json!({}),
-        account: None, actor_id: None, at: 1,
+        account: None, actor_id: None, at: 1, documents_rule: None,
     })));
     assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
     assert_eq!(

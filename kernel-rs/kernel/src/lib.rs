@@ -30,6 +30,7 @@ pub mod app_data;
 pub mod app_folders;
 pub mod copies;
 pub mod deployments;
+pub mod documents;
 pub mod execution;
 pub mod file_store;
 pub mod files;

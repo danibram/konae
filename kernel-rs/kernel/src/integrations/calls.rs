@@ -2033,7 +2033,7 @@ async fn run_then(
     let action = mutation.clone();
     let notify_context = crate::notify::MutationContext {
         app: deployment.id.clone(), release: identity.release.to_owned(), action: then.action.clone(),
-        input: values.clone(), account: None, actor_id: None, at: crate::now_ms(),
+        input: values.clone(), account: None, actor_id: None, at: crate::now_ms(), documents_rule: None,
     };
     let operation = {
         let _guard = action_lock(state, &deployment.id, &mutation.kind).await;
