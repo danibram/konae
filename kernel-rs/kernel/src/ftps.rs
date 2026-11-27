@@ -123,6 +123,21 @@ struct StagedFile {
     file: Option<tokio::fs::File>,
 }
 
+impl StagedFile {
+    fn create(staging: &Path) -> std::io::Result<Self> {
+        std::fs::create_dir_all(staging)?;
+        let path = staging.join(format!("{}.part", Uuid::new_v4()));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            file: Some(tokio::fs::File::from_std(file)),
+        })
+    }
+}
+
 impl Drop for StagedFile {
     fn drop(&mut self) {
         drop(self.file.take());
@@ -156,20 +171,12 @@ async fn stage(
     staging: &Path,
     max_bytes: u64,
 ) -> std::result::Result<(StagedFile, u64), FsError> {
-    tokio::fs::create_dir_all(staging)
+    let staging = staging.to_owned();
+    // The open task owns cleanup even if the transfer stops before it receives the file.
+    let mut staged = tokio::task::spawn_blocking(move || StagedFile::create(&staging))
         .await
+        .map_err(|error| FsError::Local(format!("Could not open FTPS staging file: {error}")))?
         .map_err(file_error)?;
-    let path = staging.join(format!("{}.part", Uuid::new_v4()));
-    let file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .await
-        .map_err(file_error)?;
-    let mut staged = StagedFile {
-        path,
-        file: Some(file),
-    };
     let mut total = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
