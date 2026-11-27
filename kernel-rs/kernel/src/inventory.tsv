@@ -69,3 +69,6 @@ both	auxiliary	SQLite -wal|-shm|-journal	auxiliary	optional	SQLite creates sidec
 both	auxiliary	atomic sibling	auxiliary	optional	Atomic record, index and blob writers create a temporary sibling before rename.	Omit unfinished files beside a known destination.	Use the committed destination.	samples
 both	files	.{uuid}.import-{uuid}	file	optional	Package install stages one uploaded object before placing it in the active file store.	Omit partial imports.	Recover committed indexed bytes.	files
 both	private	maintenance.tmp-{simple}	file	optional	The maintenance command writes a sibling before replacing the marker.	Omit unfinished marker writes.	Use maintenance.json.	recovery
+both	root	ftps.json	file	optional	The operator binds FTPS credentials to declared app sources.	Keep credentials in operator custody outside app exports and copies.	Configure the listener again after a move.	profiles
+both	root	certs	tree	optional	The operator provisions TLS certificates and keys for FTPS.	Keep keys in operator custody outside app exports and copies.	Provision certificate files before enabling FTPS.	profiles
+both	module	documents	module	optional	Issue actions and the local renderer write app records and private PDF blobs.	Capture immutable issue inputs, attempts and referenced PDFs.	Restore access rules and resume pending renders with the required Typst version.	contracts

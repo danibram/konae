@@ -405,7 +405,7 @@ export function documentsSnapshotRefusal(db: Database, action: ServerActionDefin
   } catch {
     // The shared refusal tells the author which declaration to correct.
   }
-  return { code: "documents.snapshot-column-unknown", message: `Action ${action.name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation.` };
+  return { code: "documents.snapshot-column-unknown" as const, message: `Action ${action.name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation.` };
 }
 
 function divergence(fresh: Database, clone: Database): string[] {

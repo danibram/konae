@@ -28,7 +28,7 @@ use crate::{AppState, Deployment};
 
 const SETTINGS_FILE: &str = "ftps.json";
 const DEFAULT_MAX_UPLOAD_BYTES: u64 = 16 * 1024 * 1024;
-const STAGING_DIR: &str = ".konae/ftps/staging";
+const STAGING_DIR: &str = "transfers/ftps";
 const MAX_SESSIONS: usize = 32;
 const MAX_RELATIVE_PATH_BYTES: usize = 1024;
 

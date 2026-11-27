@@ -78,6 +78,29 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(SCHEMA)
 }
 
+pub(crate) fn check_snapshot_columns(
+    connection: &Connection,
+    name: &str,
+    action: &crate::ActionDefinition,
+) -> Result<()> {
+    let Some(issue) = &action.issue else {
+        return Ok(());
+    };
+    let sql = crate::notify::with_returning(&action.statement, &issue.snapshot);
+    if connection
+        .prepare(&sql)
+        .is_ok_and(|statement| statement.column_count() == issue.snapshot.len())
+    {
+        return Ok(());
+    }
+    anyhow::bail!(crate::refusal::refuse(
+        "documents.snapshot-column-unknown",
+        format!(
+            "Action {name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation."
+        ),
+    ));
+}
+
 pub fn routes() -> Router<crate::AppState> {
     Router::new().route("/_konae/documents/{key}", get(download))
 }

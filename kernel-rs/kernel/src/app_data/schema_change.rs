@@ -136,6 +136,7 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
         }
         drop(statement);
         notify::check_columns(&transaction, name, action)?;
+        crate::documents::check_snapshot_columns(&transaction, name, action)?;
     }
     crate::modules::check_pending_work(&transaction)?;
     if let Mode::Apply(confirmation) = mode {
@@ -224,17 +225,13 @@ pub fn apply_with_transforms(
     anyhow::ensure!(final_fingerprint == super::schema_transform::fingerprint_schema(schema).map_err(anyhow::Error::new)?, "schema transformation chain did not produce schema.sql");
     transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)?;
     for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
-        let columns = action.issue.as_ref().map(|issue| issue.snapshot.clone()).unwrap_or_default();
-        let statement_text = if columns.is_empty() { action.statement.clone() } else { crate::notify::with_returning(&action.statement, &columns) };
-        let statement = transaction.prepare(&statement_text).map_err(|error| anyhow::anyhow!("action {name} does not match the deployed schema: {error}"))?;
-        if !columns.is_empty() && statement.column_count() != columns.len() {
-            anyhow::bail!(crate::refusal::refuse("documents.snapshot-column-unknown", format!("Action {name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation.")));
-        }
-        if action.kind == "mutation" && action.issue.is_none() && statement.column_count() > 0 {
+        let statement = transaction.prepare(&action.statement).map_err(|error| anyhow::anyhow!("action {name} does not match the deployed schema: {error}"))?;
+        if action.kind == "mutation" && statement.column_count() > 0 {
             anyhow::bail!("Action {name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.");
         }
         drop(statement);
         notify::check_columns(&transaction, name, action)?;
+        crate::documents::check_snapshot_columns(&transaction, name, action)?;
     }
     crate::modules::check_pending_work(&transaction)?;
     let violations: i64 = transaction.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get(0))?;

@@ -12,6 +12,7 @@
   "documents.issue-key-invalid": { "fix": "capsule", "remedy": "Use a string input for the issue key on an authenticated mutation." },
   "documents.download-rule-invalid": { "fix": "capsule", "remedy": "Name an authenticated query that binds the issue key and the app user." },
   "documents.snapshot-invalid": { "fix": "capsule", "remedy": "Name the columns the mutation must freeze for the document." },
+  "documents.snapshot-column-unknown": { "fix": "capsule", "remedy": "Use snapshot columns from the table the mutation changes." },
   "documents.template-invalid": { "fix": "capsule", "remedy": "Supply a Typst 0.14.2 template of at most 64 KiB." },
   "documents.resources-invalid": { "fix": "capsule", "remedy": "Use relative resource paths and values of at most 256 KiB." },
   "call.then-scheduled": { "fix": "capsule", "remedy": "Choose a then action without scheduled access." },
