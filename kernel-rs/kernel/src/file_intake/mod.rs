@@ -4,6 +4,18 @@ mod worker;
 pub use accept::DECLARATION_FILE;
 pub use accept::{AcceptOutcome, accept_staged, validate_consumers, validate_declaration};
 
+pub(crate) fn pin_declaration(
+    manifest: &mut serde_json::Value,
+    source: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(source) = source {
+        manifest["fileIntake"] = serde_json::from_str(source)?;
+    } else if let Some(object) = manifest.as_object_mut() {
+        object.remove("fileIntake");
+    }
+    Ok(())
+}
+
 pub fn blob_references(database: &std::path::Path) -> anyhow::Result<Vec<(String, u64)>> {
     if !database.is_file() {
         return Ok(Vec::new());

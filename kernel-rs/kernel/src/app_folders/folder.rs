@@ -120,6 +120,13 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     };
     let mut manifest = if candidate_sources || rebuilt { settings.manifest.clone() } else { released.as_ref().map(|snapshot| snapshot.manifest.clone()).unwrap_or_else(|| settings.manifest.clone()) };
     manifest = crate::sources::manifest_without_runtime(&manifest);
+    let intake_source = if candidate_sources || rebuilt || fresh_sources {
+        let source = optional_text(&sources.join(crate::file_intake::DECLARATION_FILE)).await?;
+        crate::file_intake::pin_declaration(&mut manifest, source.as_deref())?;
+        source
+    } else {
+        None
+    };
     let visibility = if candidate_sources || rebuilt { settings.visibility.as_str() } else { released.as_ref().map(|snapshot| snapshot.visibility.as_str()).unwrap_or(&settings.visibility) };
     if let Some(object) = manifest.as_object_mut() {
         object.insert("visibility".into(), Value::String(visibility.to_owned()));
@@ -137,6 +144,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
                 files.insert("actions.json".to_owned(), actions.clone());
                 files.insert("schema.sql".to_owned(), schema.clone());
                 if let Some(document) = &schema_transforms { files.insert("schema-transforms.json".to_owned(), document.clone()); }
+                if let Some(source) = intake_source { files.insert(crate::file_intake::DECLARATION_FILE.to_owned(), source); }
                 if candidate_sources || rebuilt || fresh_sources {
                     let function_source = optional_text(&sources.join("functions.json")).await?;
                     let cron_source = optional_text(&sources.join("crons.json")).await?;
@@ -230,6 +238,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     state.functions.retain_prepared(id, prepared);
     crate::http::routes_published(&deployment);
     state.functions.release_changed(id, &deployment.artifact_version).await;
+    crate::modules::wake_durable_work(state, id).await;
     Ok(deployment)
 }
 

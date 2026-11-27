@@ -200,13 +200,9 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
     let mut manifest = input.project.manifest;
     let legacy_file_access = manifest["fileAccess"] == "app-users";
     manifest["visibility"] = Value::String(input.visibility.clone());
-    if let Some(raw) = input.project.files.get(crate::file_intake::DECLARATION_FILE) {
-        manifest["fileIntake"] = match serde_json::from_str(raw) {
-            Ok(value) => value,
-            Err(error_value) => return error(StatusCode::BAD_REQUEST, &error_value.to_string()),
-        };
-    } else if let Some(object) = manifest.as_object_mut() {
-        object.remove("fileIntake");
+    let intake = input.project.files.get(crate::file_intake::DECLARATION_FILE).map(String::as_str);
+    if let Err(error_value) = crate::file_intake::pin_declaration(&mut manifest, intake) {
+        return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
     let deployment = Deployment {
