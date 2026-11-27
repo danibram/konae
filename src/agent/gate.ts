@@ -11,6 +11,7 @@ import { checkModuleChange, moduleCheckOrder } from "../lib/module-state";
 import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp, sourcesUseMcp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
+import { validateFileIntake, validateFileIntakeConsumers, type FileIntakeDeclaration } from "../kernel/file-intake";
 import { isEncoded } from "../lib/source-files";
 import type {
   CapsuleFiles,
@@ -88,8 +89,23 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     }
     const SQL = await this.loadSql();
     const schemaSource = files["schema.sql"] ?? "";
+    let intakeDeclaration: FileIntakeDeclaration | undefined;
+    if (files["file-intake.json"] !== undefined) {
+      try {
+        intakeDeclaration = validateFileIntake(JSON.parse(files["file-intake.json"]));
+      } catch (error) {
+        return failure({ stage: "actions", message: describe(error), detail: "Declare version 1 sources and consumers in file-intake.json, then name a declared mutation action." }, ["sources"]);
+      }
+    }
     const filesCall = sourcesUseFiles(Object.values(files));
-    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files), mcp: sourcesUseMcp(files) };
+    const used = {
+      files: filesCall,
+      actions: sourcesUseActions(files),
+      http: sourcesUseHttp(files),
+      calls: sourcesUseCalls(files),
+      mcp: sourcesUseMcp(files),
+      "file-intake": intakeDeclaration !== undefined,
+    };
     for (const module of moduleCheckOrder) {
       if (!used[module as keyof typeof used]) continue;
       const state = modules?.[module];
@@ -97,7 +113,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
     const actionsState = modules?.actions;
-    for (const module of ["http", "calls", "mcp"] as const) {
+    for (const module of ["http", "calls", "mcp", "file-intake"] as const) {
       const state = modules?.[module];
       if (state?.on === true) {
         const required = checkModuleChange({ rule: "requires", module, required: "actions", requiredState: actionsState });
@@ -196,6 +212,13 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         if (usesMcp && modules?.mcp && modules.mcp.on !== true) {
           const message = "Module mcp is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.";
           errors.push({ stage: "actions", message, detail: message, code: "module.off", hint: hintOf("module.off") });
+        }
+      }
+      if (program && intakeDeclaration) {
+        try {
+          validateFileIntakeConsumers(intakeDeclaration, program.actions);
+        } catch (error) {
+          errors.push({ stage: "actions", message: describe(error), detail: "Name an existing mutation action and provide only its declared input fields." });
         }
       }
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;

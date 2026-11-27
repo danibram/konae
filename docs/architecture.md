@@ -279,6 +279,8 @@ A dependency follows a declared operation. A Function that calls a Server Action
 | Receive a file | One FTPS listener maps each credential to one app and source. Intake stages the bytes, then commits the version and a pending change before acknowledging the transfer. A new path records a creation. Replacing its contents records an update. Each event identifies the source, path and immutable version. The source declares how to recognize a retransmission after a lost acknowledgement. |
 | Process a file | The app declares a consumer for the source. The dispatcher can redeliver after a crash. The consumer reads that version and records its result once per version and consumer. A JavaScript parser would require a narrowly scoped Function input for those bytes. Intake and Documents themselves both work with Functions off. |
 
+File intake v1 implements the source and consumer records with reserved app tables, immutable shared-store blobs and a declared Actions mutation. The mutation receives version metadata and fixed app input, not bytes or host access. See [File intake v1](file-intake.md) for declarations, replay and local acceptance.
+
 Keep module records in Kernel-controlled tables. When a mutation promises an effect, give the module a typed way to append its record to that mutation's transaction. App SQL must have no direct write access to those tables. After a move, existing PDFs remain readable and pending work resumes once its required renderer is available. New device uploads resume once the operator binds the FTPS source.
 
 ### Compatibility across Kernel versions
@@ -305,7 +307,7 @@ A self-hosted installation starts one serving process. Its Rust code uses Tokio 
 
 Use the existing dispatcher for durable work. Each module keeps its own job records and decides when work is complete. Give ready apps turns and bound concurrent jobs by app and installation. Functions already has both limits and scheduled Functions use the same runner. Keep the current cron order within an app.
 
-Documents is the first new consumer. Its handler sends a local Typst process the frozen input, template and assets for one render attempt. The Kernel remains the sole writer of the app folder. It checks the result and commits it only while that attempt is current. A retry keeps the same emission ID. File intake can use the same dispatcher for pending consumers. MCP reads continue through the app's Actions.
+Documents is the first external renderer. Its handler sends a local Typst process the frozen input, template and assets for one render attempt. The Kernel remains the sole writer of the app folder. It checks the result and commits it only while that attempt is current. A retry keeps the same emission ID. File intake v1 uses the shared dispatcher for pending Actions consumers. MCP reads continue through the app's Actions.
 
 Check this design by filling one app's render slots while another serves reads. Measure read latency and render wait time. Stop a render process mid-job, then check that a retry produces one PDF and that a late result cannot replace it. If render capacity later limits an installation, a remote worker can take the same render inputs and return the result to the owning Kernel. If contention comes from the app's database or its total load, [move the app to its own Kernel](#when-one-app-needs-its-own-kernel).
 

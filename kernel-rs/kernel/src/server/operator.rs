@@ -34,6 +34,7 @@ pub fn usage() -> &'static str {
   kernel test status [--app <id>]
   kernel test schedule <action|cron:id> [--app <id>]
   kernel test calls [--app <id>]
+  kernel test intake <source> --path <relative-path> --file <completed-file> [--delivery-key <key>] [--app <id>]
   kernel test reply <call id> [--app <id>]   reads response JSON from standard input
   kernel test reset-effects [--app <id>]   retires pending work after a stopped local reset
   kernel queues preflight|migrate|rollback <backup>   migrate legacy queues while consumers are stopped
@@ -203,6 +204,17 @@ async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Resu
         Some("calls") => {
             ensure!(words.rest().is_empty(), "{}", usage());
             Ok(json!({"calls": crate::calls::list_test_calls_for_app(state, id).await?}))
+        }
+        Some("intake") => {
+            let source = words.required("a declared source ID")?;
+            let relative_path = words.required_option("path")?;
+            let staged = words.required_option("file")?;
+            let delivery_key = words.option("delivery-key")?;
+            ensure!(words.rest().is_empty(), "{}", usage());
+            let deployment = served(state, id).await?;
+            ensure!(crate::modules::is_on(&deployment.modules, "file-intake"), "Turn on the file-intake module before accepting files.");
+            let accepted = crate::file_intake::accept_staged(state, &deployment, &source, std::path::Path::new(&staged), &relative_path, delivery_key.as_deref()).await?;
+            Ok(serde_json::to_value(accepted)?)
         }
         Some("reply") => {
             let call = words.required("the captured call's ID")?;

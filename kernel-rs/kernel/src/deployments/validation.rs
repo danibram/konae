@@ -75,6 +75,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let uses_actions = crate::modules::named_sources_use_actions(action_files.iter().copied());
     let uses_http = crate::modules::sources_use_http(action_files.iter().copied());
     let uses_calls = crate::modules::sources_use_calls(action_files.iter().copied());
+    let intake_source = input.project.files.get(crate::file_intake::DECLARATION_FILE);
     crate::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
     crate::calls::check_connects(&input.project.manifest)?;
     let artifact = crate::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
@@ -103,6 +104,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         && initial_modules.is_none_or(|modules| !modules.contains_key("actions")) && uses_actions {
         candidate_modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
     }
+    if intake_source.is_some() { crate::modules::require_on(&candidate_modules, "file-intake").map_err(anyhow::Error::new)?; }
     if first_release
         && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
         && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {
@@ -121,6 +123,10 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         candidate_modules.get_mut("mcp").expect("mcp is switchable")["on"] = json!(true);
     }
     if uses_mcp { crate::modules::require_on(&candidate_modules, "mcp").map_err(anyhow::Error::new)?; }
+    if let Some(raw) = intake_source {
+        let declaration = crate::file_intake::validate_declaration(raw)?;
+        crate::file_intake::validate_consumers(&declaration, &program)?;
+    }
     if input.visibility != "public" && !crate::modules::is_on(&candidate_modules, "auth") {
         return Err(anyhow::Error::new(crate::modules::check_private_auth(false).unwrap_err()));
     }

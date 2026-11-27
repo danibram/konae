@@ -32,6 +32,7 @@ pub mod copies;
 pub mod deployments;
 pub mod execution;
 pub mod file_store;
+pub mod file_intake;
 pub mod files;
 pub mod functions;
 pub mod guard;

@@ -81,11 +81,12 @@ bun run konae -- test --dir ./my-app status
 bun run konae -- test --dir ./my-app calls
 bun run konae -- test --dir ./my-app schedule <action>
 bun run konae -- test --dir ./my-app schedule cron:<id>
+bun run konae -- test --dir ./my-app intake <source> --path incoming/photo.jpg --file /tmp/photo.jpg [--delivery-key camera-00042]
 bun run konae -- test --dir ./my-app reply <call-id> --stdin
 bun run konae -- test --dir ./my-app scenario tests/payments.json
 ```
 
-These commands require a local `dev` Kernel with test controls. `status` reports the mode and paused schedules, including cron jobs. `calls` lists calls awaiting a reply, calls waiting for retry backoff with `nextAttemptAt`, and continuations whose outcome was interrupted. `schedule <action>` runs one scheduled mutation. `schedule cron:<id>` runs the job in `app/crons.json` through the configured Functions runner.
+These commands require a local `dev` Kernel with test controls. `status` reports the mode and paused schedules, including cron jobs. `calls` lists calls awaiting a reply, calls waiting for retry backoff with `nextAttemptAt`, and continuations whose outcome was interrupted. `schedule <action>` runs one scheduled mutation. `schedule cron:<id>` runs the job in `app/crons.json` through the configured Functions runner. `intake` accepts a completed local file through the declared source and returns after the version and consumer jobs commit.
 
 `reply` reads JSON from stdin or `--file`. A response names the `responseNumber` shown by `calls` and supplies either an HTTP `status` with a JSON `body`, or a transport `error`:
 

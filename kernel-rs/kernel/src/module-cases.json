@@ -25,5 +25,5 @@
   {"case":"a route in use cannot turn off http","rule":"in-use-action","module":"http","action":"hooks.receive","code":"module.in-use","error":"Module http is in use by action hooks.receive, which declares an HTTP route. Remove its route before turning it off."},
   {"case":"a call in use cannot turn off calls","rule":"in-use-action","module":"calls","action":"notify.send","code":"module.in-use","error":"Module calls is in use by action notify.send, which sends an outgoing call. Remove its call before turning it off."},
   {"case":"declared MCP tools keep their module on","rule":"in-use","module":"mcp","used":true,"code":"module.in-use","error":"Module mcp is in use by the published app. Remove its use before turning it off."},
-  {"case":"module checks use one release order","rule":"release-order","order":["files","actions","http","calls","mcp"],"error":null}
+  {"case":"module checks use one release order","rule":"release-order","order":["files","actions","http","calls","mcp","file-intake"],"error":null}
 ]

@@ -10,6 +10,7 @@ use std::time::Instant;
 pub enum WorkResource {
     Calls,
     Notices,
+    FileIntake,
 }
 
 #[derive(Default)]

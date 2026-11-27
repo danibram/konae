@@ -90,7 +90,7 @@ describe("validation gate", () => {
   test("module use refusals follow the shared release check order", async () => {
     const cases = JSON.parse(readFileSync(path.resolve(import.meta.dir, "../../kernel-rs/kernel/src/module-cases.json"), "utf8")) as Array<{ rule: string; order?: string[] }>;
     const order = cases.find((item) => item.rule === "release-order")?.order;
-    expect(order).toEqual(["files", "actions", "http", "calls", "mcp"]);
+    expect(order).toEqual(["files", "actions", "http", "calls", "mcp", "file-intake"]);
     const files = capsule({
       "app.js": "await miniapp.files.list();",
       "actions.json": JSON.stringify({ version: 1, actions: { "hooks.receive": { kind: "mutation", http: { method: "POST", path: "/hooks" } } } }),
