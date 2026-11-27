@@ -87,12 +87,7 @@ pub struct BlobReference {
 
 /// Reads every registered module's blob references, regardless of its on/off setting.
 pub fn blob_references(root: &std::path::Path, app: &str) -> Result<Vec<BlobReference>> {
-    collect_blob_references(
-        data_registry().iter().filter_map(|(module, data)| data.objects.map(|provider| (module.as_str(), provider))),
-        |provider| match provider {
-            BlobInventoryProvider::FileIndex => crate::file_store::file_index_references(root, app),
-        },
-    )
+    blob_references_in_data_dir(&crate::layout::data(root, app))
 }
 
 fn collect_blob_references<'a, P>(
@@ -135,12 +130,11 @@ pub fn blob_references_in_data_dir(directory: &std::path::Path) -> Result<Vec<Bl
     )
 }
 
+/// Reads the Files index when the caller has only an extracted Files directory.
 pub fn blob_references_in_files_dir(directory: &std::path::Path) -> Result<Vec<BlobReference>> {
     collect_blob_references(
-        data_registry().iter().filter_map(|(module, data)| data.objects.map(|provider| (module.as_str(), provider))),
-        |provider| match provider {
-            BlobInventoryProvider::FileIndex => crate::file_store::file_index_references_in(directory),
-        },
+        [("files", directory)],
+        crate::file_store::file_index_references_in,
     )
 }
 

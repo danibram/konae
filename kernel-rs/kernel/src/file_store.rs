@@ -622,10 +622,6 @@ pub async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<
     }
 }
 
-pub(crate) fn file_index_references(data_root: &Path, deployment: &str) -> Result<Vec<(String, u64)>> {
-    file_index_references_in(&crate::layout::files(data_root, deployment))
-}
-
 pub(crate) fn file_index_references_in(directory: &Path) -> Result<Vec<(String, u64)>> {
     let path = directory.join("index.json");
     let bytes = match std::fs::read(&path) {
