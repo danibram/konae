@@ -453,25 +453,6 @@ struct Batch {
     function_traces: Vec<(u64, Value)>,
 }
 
-#[derive(PartialEq, Eq, Hash)]
-struct ExecutionKey {
-    day: u64,
-    name: String,
-    origin: String,
-    outcome: String,
-}
-
-impl Batch {
-    fn count(&mut self, at: u64, kind: &'static str, name: String) {
-        *self.counts.entry((at / DAY_MS, kind, name)).or_default() += 1;
-    }
-
-    fn record_function(&mut self, at: u64, timing: FunctionTiming) {
-        self.count(at, "function", timing.name.clone());
-        self.function_timings.push((at, timing));
-    }
-}
-
 struct PendingFunctionTrace {
     folder: PathBuf,
     at: u64,
