@@ -4,7 +4,7 @@ Documents renders a Typst PDF after a Server Action mutation commits. The issue 
 
 Turn on `documents`, `actions` and `auth` in the app's module settings. Files and Functions can stay off. The Documents module requires Actions and Auth.
 
-Declare an authenticated mutation with one string input for the stable issue key. Name the columns its `RETURNING` clause must freeze, a Typst template, and the authenticated query that decides who can download the PDF.
+Declare an authenticated mutation with one string input for the stable issue key. Issue documents through the app's Server Actions. Functions, Call continuations and File intake consumers refuse actions that declare a document issue. Name the columns its `RETURNING` clause must freeze, a Typst template, and the authenticated query that decides who can download the PDF.
 
 ```json
 {
@@ -42,6 +42,6 @@ The Kernel serves a ready PDF at `/_konae/documents/<issue-key>`. It runs the pi
 
 The Konae and standalone Kernel images include Typst 0.14.2. For a native installation, put that version of `typst` on the Kernel's `PATH` or set `KONAE_DOCUMENTS_TYPST_BIN` to its executable path. Startup checks the executable and version when a served app has Documents enabled.
 
-Each render has a 30 second wall clock deadline and a 30 second CPU limit. The Kernel caps Typst memory at 1 GiB with an address-space limit on Linux and RSS polling on macOS. Each render also allows at most 2 MiB of frozen input, 64 KiB of renderer logs and a 10 MiB PDF. The app's shared Files per-file limit and total quota apply to the stored PDF. The renderer writes into a private temporary folder and Typst can read only from that folder. The Kernel stores the template, resources, issue snapshot, named read query, release ID and Typst version with the issue.
+Tokio admits two renders per installation and one per app. An app can queue up to 1,000 unfinished issues. Each render has a 30 second wall clock deadline and a 30 second CPU limit. The Kernel caps Typst memory at 1 GiB with an address-space limit on Linux and RSS polling on macOS. Each render also allows at most 2 MiB of frozen input, 64 KiB of renderer logs and a 10 MiB PDF. The app's shared Files per-file limit and total quota apply to the stored PDF. The Kernel supplies the render inputs in a private temporary folder and sets it as Typst's project root. The Kernel stores the template, resources, issue snapshot, named read query, release ID and Typst version with the issue.
 
 Export the app folder and import it on another Kernel to move issued PDFs and pending renders. The destination needs the same Typst version before it can resume render work.

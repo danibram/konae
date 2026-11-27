@@ -11,7 +11,7 @@ use axum::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -20,6 +20,7 @@ pub const MAX_PDF_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_RENDER_LOG_BYTES: usize = 64 * 1024;
 pub const RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const DEFAULT_TYPST_VERSION: &str = "0.14.2";
+const MAX_PENDING_PER_APP: u64 = 1_000;
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS __konae_documents (issue_key TEXT PRIMARY KEY, release TEXT NOT NULL, read_rule_json TEXT NOT NULL, snapshot_json TEXT NOT NULL, template TEXT NOT NULL, resources_json TEXT NOT NULL, typst_version TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','rendering','ready','failed','paused')), attempt INTEGER NOT NULL DEFAULT 0, attempt_token TEXT, pdf_blob TEXT, pdf_size INTEGER, error TEXT, created_at INTEGER NOT NULL) WITHOUT ROWID; CREATE INDEX IF NOT EXISTS __konae_documents_pending ON __konae_documents(state,created_at,issue_key);";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,8 +43,9 @@ pub struct IssueEffect {
 impl crate::execution::TransactionEffect for IssueEffect {
     fn prepare(&self, db: &Connection) -> rusqlite::Result<()> {
         ensure_schema(db)?;
-        let input = serde_json::to_string(&self.input)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let encode = |error| rusqlite::Error::ToSqlConversionFailure(Box::new(error));
+        let snapshot = serde_json::to_string(&self.input.snapshot).map_err(encode)?;
+        let resources = serde_json::to_string(&self.input.resources).map_err(encode)?;
         let existing: Option<(String,String,String,String,String,String)> = db.query_row(
             "SELECT release,read_rule_json,snapshot_json,template,resources_json,typst_version FROM __konae_documents WHERE issue_key=?1",
             [&self.key], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional()?;
@@ -51,9 +53,9 @@ impl crate::execution::TransactionEffect for IssueEffect {
             let immutable = (
                 self.release.clone(),
                 self.read_rule_json.clone(),
-                serde_json::to_string(&self.input.snapshot).unwrap_or_default(),
+                snapshot.clone(),
                 self.input.template.clone(),
-                serde_json::to_string(&self.input.resources).unwrap_or_default(),
+                resources.clone(),
                 self.input.typst_version.clone(),
             );
             return if existing == immutable {
@@ -65,11 +67,29 @@ impl crate::execution::TransactionEffect for IssueEffect {
                 ))
             };
         }
-        let payload: RenderInput = serde_json::from_str(&input)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let pending: u64 = db.query_row(
+            "SELECT count(*) FROM __konae_documents WHERE state IN ('pending','rendering','failed')",
+            [],
+            |row| row.get(0),
+        )?;
+        if pending >= MAX_PENDING_PER_APP {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+                Some(format!(
+                    "Documents already has {MAX_PENDING_PER_APP} pending issues for this app."
+                )),
+            ));
+        }
+        let input = serde_json::to_vec(&self.input).map_err(encode)?;
+        if input.len() > MAX_RENDER_INPUT_BYTES {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+                Some("Document render input exceeds 2 MiB.".into()),
+            ));
+        }
         db.execute("INSERT INTO __konae_documents(issue_key,release,read_rule_json,snapshot_json,template,resources_json,typst_version,state,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'pending',?8)",
-            params![self.key, self.release, self.read_rule_json, serde_json::to_string(&payload.snapshot).unwrap_or_default(), payload.template,
-                serde_json::to_string(&payload.resources).unwrap_or_default(), payload.typst_version, self.created_at as i64])?;
+            params![self.key, self.release, self.read_rule_json, snapshot, self.input.template,
+                resources, self.input.typst_version, self.created_at as i64])?;
         Ok(())
     }
 }
@@ -521,7 +541,7 @@ pub fn claim(db: &Connection) -> rusqlite::Result<Option<(String, i64, String, R
     ensure_schema(db)?;
     let tx = db.unchecked_transaction()?;
     let item: Option<(String, String, String, String, String, i64)> = tx.query_row(
-        "SELECT issue_key,snapshot_json,template,resources_json,typst_version,attempt FROM __konae_documents WHERE state IN ('pending','failed','rendering') ORDER BY created_at,issue_key LIMIT 1",
+        "SELECT issue_key,snapshot_json,template,resources_json,typst_version,attempt FROM __konae_documents WHERE state IN ('pending','failed','rendering') ORDER BY CASE state WHEN 'failed' THEN 1 ELSE 0 END,created_at,issue_key LIMIT 1",
         [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional()?;
     let Some((key, snapshot, template, resources, version, attempt)) = item else {
         tx.commit()?;
@@ -552,12 +572,6 @@ pub fn complete(
     let changed = db.execute("UPDATE __konae_documents SET state='ready',pdf_blob=?4,pdf_size=?5,error=NULL WHERE issue_key=?1 AND attempt=?2 AND attempt_token=?3 AND state='rendering'",
         params![key,attempt,token,blob,size as i64])?;
     Ok(changed == 1)
-}
-
-pub(crate) fn scratch(root: &Path, app: &str, key: &str, attempt: i64) -> PathBuf {
-    crate::layout::data(root, app)
-        .join("documents-work")
-        .join(format!("{}-{attempt}", hex::encode(key)))
 }
 
 pub(crate) fn check_pending_on_connection(db: &Connection) -> Result<()> {
@@ -612,8 +626,17 @@ pub(crate) fn resume_import(database: &Path) -> Result<()> {
 }
 
 pub(crate) fn spawn_worker(state: crate::AppState) {
+    use crate::execution::{AppTimers, WorkLimits, WorkResource};
+    use std::num::NonZeroUsize;
+    use std::time::Instant;
+    use tokio::task::JoinSet;
+
+    const RESOURCE: WorkResource = WorkResource::Documents;
+    const LIMITS: WorkLimits = WorkLimits::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN);
+
     tokio::spawn(async move {
-        let mut timers = crate::execution::AppTimers::default();
+        let mut timers = AppTimers::default();
+        let mut renders = JoinSet::new();
         let apps = state
             .deployments
             .read()
@@ -622,152 +645,177 @@ pub(crate) fn spawn_worker(state: crate::AppState) {
             .map(|deployment| deployment.id.clone())
             .collect::<Vec<_>>();
         for app in apps {
-            if pending(&crate::layout::database(&state.data_root, &app)).unwrap_or(false)
-                || has_failed(&crate::layout::database(&state.data_root, &app)).unwrap_or(false)
+            let database = crate::layout::database(&state.data_root, &app);
+            if database.is_file()
+                && (pending(&database).unwrap_or(false) || has_failed(&database).unwrap_or(false))
             {
-                state
-                    .dispatcher
-                    .wake(crate::execution::WorkResource::Documents, app)
-                    .await;
+                state.dispatcher.wake(RESOURCE, app).await;
             }
         }
         loop {
-            let turn = match timers.next_deadline() {
-                Some(deadline) => tokio::select! {
-                    turn = state.dispatcher.next_turn(crate::execution::WorkResource::Documents,
-                        crate::execution::WorkLimits::new(std::num::NonZeroUsize::new(2).unwrap(), std::num::NonZeroUsize::new(1).unwrap())) => Some(turn),
-                    _ = tokio::time::sleep_until(deadline.into()) => {
-                        for due in timers.take_due(std::time::Instant::now()) { state.dispatcher.wake(crate::execution::WorkResource::Documents, due).await; }
-                        None
+            let deadline = timers.next_deadline();
+            tokio::select! {
+                turn = state.dispatcher.next_turn(RESOURCE, LIMITS) => {
+                    let state = state.clone();
+                    renders.spawn(async move {
+                        let result = run_one(&state, turn.app()).await;
+                        (turn, result)
+                    });
+                }
+                Some(finished) = renders.join_next(), if !renders.is_empty() => {
+                    match finished {
+                        Ok((turn, result)) => {
+                            let app = turn.app();
+                            match result {
+                                Ok(true) => state.dispatcher.wake(RESOURCE, app).await,
+                                Ok(false) => timers.remove(app),
+                                Err(error) => {
+                                    eprintln!("Documents worker failed for {app}: {error:#}");
+                                    timers.schedule_retry(app.to_owned(), Instant::now());
+                                }
+                            }
+                        }
+                        Err(error) => eprintln!("Documents worker task failed: {error}"),
                     }
-                },
-                None => Some(
-                    state
-                        .dispatcher
-                        .next_turn(
-                            crate::execution::WorkResource::Documents,
-                            crate::execution::WorkLimits::new(
-                                std::num::NonZeroUsize::new(2).unwrap(),
-                                std::num::NonZeroUsize::new(1).unwrap(),
-                            ),
-                        )
-                        .await,
-                ),
-            };
-            let Some(turn) = turn else {
-                continue;
-            };
-            let app = turn.app().to_owned();
-            let Some(deployment) = state
+                }
+                _ = async {
+                    if let Some(deadline) = deadline {
+                        tokio::time::sleep_until(deadline.into()).await;
+                    }
+                }, if deadline.is_some() => {
+                    for app in timers.take_due(Instant::now()) {
+                        state.dispatcher.wake(RESOURCE, app).await;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn run_one(state: &crate::AppState, app: &str) -> Result<bool> {
+    let database = crate::layout::database(&state.data_root, app);
+    let job = {
+        let _lock = crate::database_lock(state, app).await;
+        if !database.is_file()
+            || crate::maintenance::pause(&state.data_root, app).is_some()
+            || !state
                 .deployments
                 .read()
                 .await
                 .values()
-                .find(|deployment| deployment.id == app)
-                .cloned()
-            else {
-                continue;
-            };
-            let database = crate::layout::database(&state.data_root, &app);
-            let claim_result = tokio::task::spawn_blocking({
-                let database = database.clone();
-                move || {
-                    let db = Connection::open(database)?;
-                    claim(&db)
-                }
-            })
-            .await;
-            let Ok(Ok(Some((key, attempt, token, input)))) = claim_result else {
-                continue;
-            };
-            let directory = scratch(&state.data_root, &app, &key, attempt);
-            let pdf = directory.join("document.pdf");
-            let result = render(input, &pdf, &directory).await;
-            if let Err(error) = result {
-                let _ = tokio::task::spawn_blocking({ let database=database.clone(); let key=key.clone(); let token=token.clone(); move || -> Result<()> {
-                    let db=Connection::open(database)?;
-                    db.execute("UPDATE __konae_documents SET state='failed',error=?4 WHERE issue_key=?1 AND attempt=?2 AND attempt_token=?3 AND state='rendering'", params![key,attempt,token,format!("{error:#}")])?;
-                    Ok(())
-                }}).await;
-                timers.schedule_retry(app.clone(), std::time::Instant::now());
-            } else {
-                let blob = uuid::Uuid::new_v4().to_string();
-                let size = tokio::fs::metadata(&pdf)
-                    .await
-                    .map(|meta| meta.len())
-                    .unwrap_or(0);
-                let _app_lock = crate::database_lock(&state, &app).await;
-                let database_copy = database.clone();
-                let key_copy = key.clone();
-                let token_copy = token.clone();
-                let current = tokio::task::spawn_blocking(move || -> Result<bool> {
-                    let db=Connection::open(database_copy)?;
-                    Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM __konae_documents WHERE issue_key=?1 AND attempt=?2 AND attempt_token=?3 AND state='rendering')", params![key_copy,attempt,token_copy], |row| row.get(0))?)
-                }).await.ok().and_then(Result::ok).unwrap_or(false);
-                let refs =
-                    crate::modules::blob_references(&state.data_root, &app).unwrap_or_default();
-                let used = refs.iter().map(|reference| reference.size).sum::<u64>();
-                let file_limit = MAX_PDF_BYTES.min(state.files.limits.max_file_bytes);
-                let stored = if current
-                    && size > 0
-                    && size <= file_limit
-                    && used.saturating_add(size) <= state.files.limits.quota_bytes
-                {
-                    state
-                        .files
-                        .store
-                        .put(&deployment.id, &blob, &pdf)
-                        .await
-                        .is_ok()
-                } else {
-                    false
-                };
-                if stored {
-                    let _ = tokio::task::spawn_blocking({
-                        let database = database.clone();
-                        let key = key.clone();
-                        let blob = blob.clone();
-                        let token = token.clone();
-                        move || -> Result<()> {
-                            let db = Connection::open(database)?;
-                            complete(&db, &key, attempt, &token, &blob, size)?;
-                            Ok(())
-                        }
-                    })
-                    .await;
-                } else if current {
-                    let error = if size > file_limit {
-                        format!(
-                            "Rendered PDF exceeds the app's {} per-file limit.",
-                            file_limit
-                        )
-                    } else if used.saturating_add(size) > state.files.limits.quota_bytes {
-                        "The app's shared file quota is full.".to_owned()
-                    } else {
-                        "The PDF could not be stored in the app's blob store.".to_owned()
-                    };
-                    let _ = tokio::task::spawn_blocking({ let database=database.clone(); let key=key.clone(); let token=token.clone(); move || -> Result<()> {
-                        let db=Connection::open(database)?;
-                        db.execute("UPDATE __konae_documents SET state='failed',error=?3 WHERE issue_key=?1 AND attempt=?2 AND attempt_token=?4 AND state='rendering'", params![key,attempt,error,token])?;
-                        Ok(())
-                    }}).await;
-                }
-            }
-            let remains = pending(&database).unwrap_or(false);
-            let failed = has_failed(&database).unwrap_or(false);
-            if failed {
-                timers.schedule_retry(app.clone(), std::time::Instant::now());
-            }
-            if remains {
-                state
-                    .dispatcher
-                    .wake(crate::execution::WorkResource::Documents, app.clone())
-                    .await;
-            } else if !failed {
-                timers.reset_retries(&app);
-            }
+                .any(|deployment| deployment.id == app)
+        {
+            return Ok(false);
         }
-    });
+        let database = database.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Connection::open(database)?;
+            if table_exists(&db)? {
+                claim(&db)
+            } else {
+                Ok(None)
+            }
+        })
+        .await??
+    };
+    let Some((key, attempt, token, input)) = job else {
+        return Ok(false);
+    };
+    let directory = state
+        .data_root
+        .join("transfers")
+        .join("documents")
+        .join(&token);
+    let pdf = directory.join("document.pdf");
+    let rendered = render(input, &pdf, &directory).await;
+    let result = async {
+        let _lock = crate::database_lock(state, app).await;
+        if !database.is_file() || crate::maintenance::pause(&state.data_root, app).is_some() {
+            return Ok(false);
+        }
+        let db = Connection::open(&database)?;
+        if !table_exists(&db)? || !current_attempt(&db, &key, attempt, &token)? {
+            return Ok(true);
+        }
+        drop(db);
+
+        let result = match rendered {
+            Ok(()) => store_rendered(state, app, &database, &key, attempt, &token, &pdf).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            Connection::open(&database)?.execute(
+                "UPDATE __konae_documents SET state='failed',error=?4 WHERE issue_key=?1 AND attempt=?2 AND attempt_token=?3 AND state='rendering'",
+                params![key, attempt, token, format!("{error:#}")],
+            )?;
+            return Err(error);
+        }
+        Ok(true)
+    }.await;
+    match tokio::fs::remove_dir_all(&directory).await {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "Could not remove Documents scratch {}: {error}",
+                directory.display()
+            );
+        }
+        _ => {}
+    }
+    result
+}
+
+fn current_attempt(
+    db: &Connection,
+    key: &str,
+    attempt: i64,
+    token: &str,
+) -> rusqlite::Result<bool> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM __konae_documents WHERE issue_key=?1 AND attempt=?2 AND attempt_token=?3 AND state='rendering')",
+        params![key, attempt, token],
+        |row| row.get(0),
+    )
+}
+
+async fn store_rendered(
+    state: &crate::AppState,
+    app: &str,
+    database: &Path,
+    key: &str,
+    attempt: i64,
+    token: &str,
+    pdf: &Path,
+) -> Result<()> {
+    let size = tokio::fs::metadata(pdf).await?.len();
+    let file_limit = MAX_PDF_BYTES.min(state.files.limits.max_file_bytes);
+    ensure!(
+        size <= file_limit,
+        "Rendered PDF exceeds the app's {file_limit} per-file limit."
+    );
+    let used = crate::modules::blob_references(&state.data_root, app)?
+        .iter()
+        .fold(0u64, |total, reference| {
+            total.saturating_add(reference.size)
+        });
+    ensure!(
+        used.saturating_add(size) <= state.files.limits.quota_bytes,
+        "The app's shared file quota is full."
+    );
+
+    let blob = uuid::Uuid::new_v4().to_string();
+    state.files.store.put(app, &blob, pdf).await?;
+    let committed =
+        Connection::open(database).and_then(|db| complete(&db, key, attempt, token, &blob, size));
+    if !matches!(committed, Ok(true)) {
+        if let Err(error) = state.files.store.delete(app, &blob).await {
+            eprintln!("Could not remove uncommitted document blob {blob} for {app}: {error:#}");
+        }
+        ensure!(
+            committed?,
+            "The document render attempt no longer owns this issue."
+        );
+    }
+    Ok(())
 }
 
 fn has_failed(database: &Path) -> Result<bool> {
@@ -838,6 +886,30 @@ mod tests {
         );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_app_at_capacity_can_replay_existing_issues() {
+        use crate::execution::TransactionEffect;
+        let db = Connection::open_in_memory().unwrap();
+        let first = effect(1700, "r1");
+        first.prepare(&db).unwrap();
+        db.execute(
+            "WITH RECURSIVE queue(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM queue WHERE n+1 < ?1)
+             INSERT INTO __konae_documents(issue_key,release,read_rule_json,snapshot_json,template,resources_json,typst_version,state,created_at)
+             SELECT 'queued-' || n, release,read_rule_json,snapshot_json,template,resources_json,typst_version,'pending',created_at
+             FROM queue, __konae_documents WHERE issue_key = ?2",
+            params![MAX_PENDING_PER_APP, first.key],
+        ).unwrap();
+        first.prepare(&db).unwrap();
+        let mut next = effect(1700, "r1");
+        next.key = "new-issue".into();
+        assert!(
+            next.prepare(&db)
+                .unwrap_err()
+                .to_string()
+                .contains("1000 pending issues")
+        );
     }
 
     #[test]
