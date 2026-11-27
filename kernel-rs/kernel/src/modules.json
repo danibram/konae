@@ -85,6 +85,15 @@
         ]
       }
     },
+    "mcp": {
+      "summary": "Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": ["actions", "auth"],
+      "uses": ["actions.json mcp"]
+    },
     "page": {
       "summary": "Values from the page address. The Kernel fills params when a declared page path answers.",
       "switch": false,

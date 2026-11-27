@@ -8,7 +8,7 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange, moduleCheckOrder } from "../lib/module-state";
-import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "../lib/module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp, sourcesUseMcp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
@@ -89,7 +89,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const SQL = await this.loadSql();
     const schemaSource = files["schema.sql"] ?? "";
     const filesCall = sourcesUseFiles(Object.values(files));
-    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files) };
+    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files), mcp: sourcesUseMcp(files) };
     for (const module of moduleCheckOrder) {
       if (!used[module as keyof typeof used]) continue;
       const state = modules?.[module];
@@ -97,7 +97,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
     const actionsState = modules?.actions;
-    for (const module of ["http", "calls"] as const) {
+    for (const module of ["http", "calls", "mcp"] as const) {
       const state = modules?.[module];
       if (state?.on === true) {
         const required = checkModuleChange({ rule: "requires", module, required: "actions", requiredState: actionsState });
@@ -112,6 +112,10 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     }
     if (filesState?.on === true && authState && authState.on !== true) {
       const required = checkModuleChange({ rule: "requires", module: "files", required: "auth", requiredState: authState });
+      if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
+    }
+    if (modules?.mcp?.on === true && authState && authState.on !== true) {
+      const required = checkModuleChange({ rule: "requires", module: "mcp", required: "auth", requiredState: authState });
       if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
     }
     const authOff = authState ? checkModuleChange({ rule: "on", module: "auth", state: authState }) : null;
@@ -186,7 +190,14 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) });
       }
 
-      if (program) errors.push(...checkActions(fresh, program, "actions"));
+      if (program) {
+        errors.push(...checkActions(fresh, program, "actions"));
+        const usesMcp = Object.values(program.actions).some((action) => action.mcp !== undefined);
+        if (usesMcp && modules?.mcp && modules.mcp.on !== true) {
+          const message = "Module mcp is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.";
+          errors.push({ stage: "actions", message, detail: message, code: "module.off", hint: hintOf("module.off") });
+        }
+      }
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
       if (release && ownerFixes(release.code)) warnings.push({ stage: "actions", message: release.message, detail: RELEASE_OWNER, owner: true, code: release.code, hint: release.hint });
       else if (release) errors.push({ stage: "actions", message: release.message, detail: RELEASE_AUTHOR, code: release.code, hint: release.hint });

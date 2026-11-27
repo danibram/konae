@@ -8,6 +8,7 @@
   "function.scheduled-route": { "fix": "capsule", "remedy": "Check functions.json." },
   "function.scheduled-action": { "fix": "capsule", "remedy": "Check the Function action allowlist in functions.json." },
   "action.scheduled-shape": { "fix": "capsule", "remedy": "Check the scheduled action in actions.json." },
+  "action.mcp-shape": { "fix": "capsule", "remedy": "Declare mcp with a description on an authenticated query action." },
   "call.then-scheduled": { "fix": "capsule", "remedy": "Choose a then action without scheduled access." },
   "function.manifest-size": { "fix": "capsule", "remedy": "Shorten function entries or action allowlists so server/manifest.json fits in 256 KiB, then rebuild." },
   "function.name-invalid": { "fix": "capsule", "remedy": "Check functions.json and rebuild the Server Artifact." },

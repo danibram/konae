@@ -53,6 +53,7 @@ The publish build, the same one the CLI and the export run, decides what a Deplo
 
 The published browser never receives SQL and never receives database credentials. It only knows action names. Every database read or write goes through a named Server Action declared in actions.json and invoked with miniapp.actions.call. On a published project, read modules_read before adding a Server Action. If Data and actions is off, ask the owner to turn it on with module_set in the confirmation dialog. On an unpublished project, finish the Capsule first. Read modules_read after its first publish.
 An action with an http route needs the http module on. An action of kind call needs calls on. Both modules require actions. On a published project, read modules_read before proposing either change and wait for the owner to confirm module_set.
+To expose an app-user MCP tool, add the mcp object with a description to an authenticated query Action. The tool schema comes from its input bindings, and every call uses the signed-in app user's Action authority. The mcp module requires actions and auth. Read modules_read before proposing module_set and wait for the owner to confirm it. App-scoped OAuth registration is not available yet, so do not direct an external client to the Owner OAuth endpoints.
 
 actions.json format, every key an action takes (each kind takes only its own; the SDK section below says what each does):
 
@@ -67,6 +68,7 @@ actions.json format, every key an action takes (each kind takes only its own; th
       "guard": "<a mutation only: the sentence the person sees when no row changes>",
       "notify": { "to": "owner" | "actor" | { "column": "<column>" }, "changes": ["<column>"], "subject": "<template>", "body": "<template>" },
       "schedule": { "every": "15m" } | { "daily": "02:00" },
+      "mcp": { "description": "<read-only tool description for an authenticated query>" },
       "signal": { "name": "order.placed", "properties": ["<input key>" | "actor"] },
       "http": {
         "method": "GET" | "POST", "path": "/api/<path>",

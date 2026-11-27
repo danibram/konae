@@ -686,6 +686,7 @@ fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, sta
         "actions" => uses_actions(root, id),
         "http" => uses_http(root, id),
         "calls" => uses_calls(root, id),
+        "mcp" => released_action_use(root, id, |action| action["mcp"].is_object()),
         _ => false,
     }
 }
@@ -972,7 +973,7 @@ mod tests {
     #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "files", "functions", "http", "seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "files", "functions", "http", "mcp", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);

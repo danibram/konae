@@ -181,7 +181,7 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
 
 fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
-        "query" => &["kind", "access", "statement", "bindings", "http", "page"],
+        "query" => &["kind", "access", "statement", "bindings", "http", "page", "mcp"],
         "mutation" => &["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule"],
         "signal" => &["kind", "access", "statement", "bindings", "signal", "page"],
         _ => &["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then", "page"],
@@ -193,6 +193,17 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
 /// keeps it. A key set to null counts as absent, on both doors. Keys are named
 /// in sorted order, as the editor names them.
 pub fn check_keys(name: &str, action: &ActionDefinition) -> Result<(), Refusal> {
+    if let Some(mcp) = action.extra.get("mcp").filter(|value| !value.is_null()) {
+        let valid = action.kind == "query"
+            && action.access == "authenticated"
+            && mcp.as_object().is_some_and(|object| {
+                object.len() == 1
+                    && object.get("description").and_then(Value::as_str).is_some_and(|description| !description.is_empty() && description.len() <= 1000)
+            });
+        if !valid {
+            return Err(refuse("action.mcp-shape", format!("Action {name} must be an authenticated query with an MCP description.")));
+        }
+    }
     let declared = [
         ("http", action.http.is_some()),
         ("page", action.page.is_some()),

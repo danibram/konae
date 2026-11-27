@@ -52,6 +52,7 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
   guard?: string;
   notify?: NotifyDeclaration;
   schedule?: ScheduleDeclaration;
+  mcp?: { description: string };
   call?: CallDeclaration;
 };
 
@@ -121,7 +122,7 @@ export function resolveServerAction(
 }
 
 const ACTION_KEYS: Record<ServerActionDefinition["kind"], readonly string[]> = {
-  query: ["kind", "access", "statement", "bindings", "http", "page"],
+  query: ["kind", "access", "statement", "bindings", "http", "page", "mcp"],
   mutation: ["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule"],
   signal: ["kind", "access", "statement", "bindings", "signal", "page"],
   call: ["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then", "page"],
@@ -152,6 +153,9 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (candidate.page !== undefined && kind !== "query") throw refusal("page.query", `Action ${name} declares a page path, so it must be an anonymous query.`);
   if (!Array.isArray(candidate.bindings)) throw refusal("action.bindings-missing", `Action ${name} requires a bindings array.`);
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
+  if (candidate.mcp != null && (kind !== "query" || access !== "authenticated" || !validMcpDeclaration(candidate.mcp))) {
+    throw refusal("action.mcp-shape", `Action ${name} must be an authenticated query with an MCP description.`);
+  }
   if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw refusal("action.invalid", `Invalid server action: ${name}`);
   if (access === "scheduled" && (kind !== "query" && kind !== "mutation"
     || ["http", "page", "notify", "signal", "schedule", "subscribe"].some((key) => candidate[key] != null)
@@ -193,8 +197,16 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   const notify = parseNotify(name, kind, bindings, candidate.notify);
   return {
     name, kind, access, statement: statement.trim(), bindings,
+    ...(candidate.mcp ? { mcp: candidate.mcp as { description: string } } : {}),
     ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(page ? { page } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}), ...(schedule ? { schedule } : {}),
   };
+}
+
+function validMcpDeclaration(value: unknown): value is { description: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.description === "string" && record.description.length > 0 && record.description.length <= 1000
+    && Object.keys(record).every((key) => key === "description");
 }
 
 function parsePageBinding(name: string, kind: string, access: string, value: unknown, bindings: ActionBinding[], http?: HttpBinding, statement?: string): PageBinding {

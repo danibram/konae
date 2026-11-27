@@ -116,6 +116,11 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
         if used { crate::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
     }
     let program = crate::action_shape::read(actions_source)?;
+    let uses_mcp = program.actions.values().any(|action| action.extra.get("mcp").is_some_and(|value| !value.is_null()));
+    if first_release && initial_modules.is_none_or(|modules| !modules.contains_key("mcp")) && uses_mcp {
+        candidate_modules.get_mut("mcp").expect("mcp is switchable")["on"] = json!(true);
+    }
+    if uses_mcp { crate::modules::require_on(&candidate_modules, "mcp").map_err(anyhow::Error::new)?; }
     if input.visibility != "public" && !crate::modules::is_on(&candidate_modules, "auth") {
         return Err(anyhow::Error::new(crate::modules::check_private_auth(false).unwrap_err()));
     }

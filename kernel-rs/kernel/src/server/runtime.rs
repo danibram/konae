@@ -110,6 +110,33 @@ struct RuntimeCaller {
     tools: Vec<Value>,
     anonymous: bool,
     account_only: bool,
+    app_tools: Vec<Value>,
+}
+
+fn published_mcp_tools(deployment: &Deployment) -> Vec<Value> {
+    if !crate::modules::is_on(&deployment.modules, "mcp") || !crate::modules::is_on(&deployment.modules, "actions") {
+        return Vec::new();
+    }
+    let Ok(program) = serde_json::from_str::<Value>(&deployment.actions) else { return Vec::new(); };
+    let Some(actions) = program["actions"].as_object() else { return Vec::new(); };
+    actions.iter().filter_map(|(name, action)| {
+        let description = action["mcp"]["description"].as_str()?;
+        if action["kind"] != "query" || action["access"] != "authenticated" { return None; }
+        let bindings = action["bindings"].as_array()?;
+        let mut properties = serde_json::Map::new();
+        let mut required = Vec::new();
+        for binding in bindings.iter().filter(|binding| binding["source"] == "input") {
+            let key = binding["key"].as_str()?;
+            let ty = match binding["type"].as_str()? {
+                "string" => "string", "number" => "number", "boolean" => "boolean", _ => return None,
+            };
+            let mut schema = json!({"type":ty});
+            if let Some(max) = binding["maxLength"].as_u64() { schema["maxLength"] = json!(max); }
+            properties.insert(key.to_owned(), schema);
+            if binding["nullable"] != true { required.push(json!(key)); }
+        }
+        Some(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}}))
+    }).collect()
 }
 
 async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std::net::SocketAddr>) -> Result<RuntimeCaller, Response> {
@@ -132,13 +159,15 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
         return Err(error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME));
     }
     let visitor = || format!("runtime:{}:anon:{}", deployment.id, limits::client_key(state.guards.client_ip(peer, headers)));
-    let (principal, tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers).await {
+    let (principal, mut tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers).await {
         Ok(Some(user)) => (format!("runtime:{}:{}", deployment.id, user.user_id), runtime_tools(), false, false),
         Ok(None) if !is_private(&deployment) => (visitor(), anonymous_runtime_tools(), true, false),
         Ok(None) => (visitor(), account_tools(), true, true),
         Err(_) => return Err(unauthorized(state, headers)),
     };
-    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only })
+    let app_tools = if anonymous { Vec::new() } else { published_mcp_tools(&deployment) };
+    tools.extend(app_tools.clone());
+    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools })
 }
 
 fn peer_of(request: &Request) -> Option<std::net::SocketAddr> {
@@ -168,12 +197,12 @@ async fn put_transfer(State(state): State<AppState>, AxumPath(id): AxumPath<Stri
 pub async fn runtime(State(state): State<AppState>, request: Request) -> Response {
     let headers = request.headers().clone();
     let peer = peer_of(&request);
-    let RuntimeCaller { deployment, principal, tools, anonymous, account_only } = match runtime_caller(&state, &headers, peer).await {
+    let RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools } = match runtime_caller(&state, &headers, peer).await {
         Ok(caller) => caller,
         Err(response) => return response,
     };
     let fixed_file_access = files::app_user_files(&deployment);
-    let app = deployment.id;
+    let app = deployment.id.clone();
     let call = match read_call(request).await {
         Ok(call) => call,
         Err(response) => return response,
@@ -217,7 +246,8 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
             if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
                 return rpc_error(id, -32602, &e.to_string());
             }
-            if name == "actions_invoke" {
+            let published_action_tool = name.contains('.') && app_tools.iter().any(|tool| tool["name"] == name);
+            if name == "actions_invoke" || published_action_tool {
                 let limited = if anonymous {
                     let client = limits::client_key(state.guards.client_ip(peer, &headers));
                     let key = format!("{app}|{client}");
@@ -242,6 +272,8 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                     }
                     Err(e) => Err(e),
                 }
+            } else if published_action_tool {
+                runtime_call(&state, &headers, &principal, Some(&app), "actions_invoke", json!({"name":name,"input":arguments})).await
             } else {
                 runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
             };
@@ -803,6 +835,7 @@ pub fn origin(state: &AppState, headers: &HeaderMap) -> String {
 #[cfg(test)]
 mod tests {
     use axum::http::{header, HeaderMap};
+    use serde_json::json;
 
     #[test]
     fn the_instructions_name_only_runtime_tools() {
@@ -815,6 +848,26 @@ mod tests {
         for word in named {
             assert!(served.iter().any(|name| name == word), "{word} is not a runtime tool");
         }
+    }
+
+    #[test]
+    fn app_mcp_catalog_uses_only_published_authenticated_query_declarations() {
+        let deployment: crate::Deployment = serde_json::from_value(json!({
+            "id":"notes","projectId":"notes","projectName":"Notes","slug":"notes","url":"https://notes.example",
+            "createdAt":1,"manifest":{},"hostname":"notes.example","artifactVersion":"1",
+            "signupPolicy":{"mode":"open","allowlist":[]},"signInMethods":["password"],
+            "modules":{"actions":{"on":true},"auth":{"on":true},"mcp":{"on":true}},
+            "actions":"{\"version\":1,\"actions\":{\"notes.mine\":{\"kind\":\"query\",\"access\":\"authenticated\",\"statement\":\"SELECT id FROM notes WHERE user_id=?1 LIMIT 20\",\"bindings\":[{\"source\":\"actor\",\"field\":\"id\"}],\"mcp\":{\"description\":\"List my notes.\"}},\"notes.hidden\":{\"kind\":\"query\",\"access\":\"authenticated\",\"statement\":\"SELECT id FROM notes LIMIT 20\",\"bindings\":[]}}}"
+        })).unwrap();
+        let tools = super::published_mcp_tools(&deployment);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "notes.mine");
+        assert_eq!(tools[0]["description"], "List my notes.");
+        assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+
+        let mut opted_out = deployment.clone();
+        opted_out.modules.get_mut("mcp").unwrap()["on"] = json!(false);
+        assert!(super::published_mcp_tools(&opted_out).is_empty());
     }
 
     fn headers(host: &str) -> HeaderMap {

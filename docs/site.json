@@ -31,6 +31,7 @@
       "reference/projects-and-releases.md",
       "reference/accounts.md",
       "reference/actions.md",
+      { "page": "mcp-app-tools.md", "label": "App MCP tools" },
       "reference/routes-and-calls.md",
       "reference/usage-and-signals.md",
       "reference/addresses.md",
