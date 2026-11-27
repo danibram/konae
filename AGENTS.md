@@ -54,6 +54,8 @@ For cron declarations, permissions and local runs, read [Run a function on a cro
 
 ## First run
 
+For cron declarations, permissions and local runs, read [Run a function on a cron schedule](docs/functions.md#run-a-function-on-a-cron-schedule).
+
 Keep this path short. If it grows, fix the path before adding docs.
 
 1. App that runs: editor apply through the Gate, or `konae init` + `dev`, which need no credential.

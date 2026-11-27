@@ -869,8 +869,19 @@ fn record_scheduled_run(folder: &Path, run: &Run, is_cron: bool) -> Result<()> {
          ON CONFLICT(day, kind, name) DO UPDATE SET count = count + 1",
         params![day(run.at), run.action],
     )?;
-    metric(&transaction, run.at, "execution", run.action, "schedule",
-        if !is_cron && run.changes == Some(0) { "unchanged" } else { outcome }, 1)?;
+    metric(
+        &transaction,
+        run.at,
+        "execution",
+        run.action,
+        "schedule",
+        if !is_cron && run.changes == Some(0) {
+            "unchanged"
+        } else {
+            outcome
+        },
+        1,
+    )?;
     if !is_cron && run.changes.is_some() {
         transaction.execute(
             "INSERT INTO schedule_state(action, schedule, slot) VALUES(?1, ?2, ?3)

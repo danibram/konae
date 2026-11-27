@@ -194,7 +194,7 @@ impl Drop for Cancel {
     }
 }
 #[derive(Clone)]
-struct ResponseCode(String);
+pub(super) struct ResponseCode(pub String);
 struct NativeTraceCompletion(TraceBuffer);
 impl Drop for NativeTraceCompletion {
     fn drop(&mut self) {
@@ -359,8 +359,6 @@ async fn prelookup_receipt(
     }))
 }
 
-#[derive(Clone)]
-pub(super) struct FunctionFailureCode(pub String);
 
 fn failure(status: u16, code: &str, message: &str) -> Response {
     let mut response = (
@@ -368,7 +366,6 @@ fn failure(status: u16, code: &str, message: &str) -> Response {
         Json(json!({"error":message,"code":code})),
     )
         .into_response();
-    response.extensions_mut().insert(FunctionFailureCode(code.to_owned()));
     response
         .extensions_mut()
         .insert(ResponseCode(code.to_owned()));

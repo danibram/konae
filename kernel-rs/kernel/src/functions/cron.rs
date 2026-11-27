@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     Function,
-    http::{CronSkipped, FunctionFailureCode, Trigger, invoke},
+    http::{CronSkipped, ResponseCode, Trigger, invoke},
 };
 
 #[cfg(test)]
@@ -279,7 +279,7 @@ pub(crate) async fn run(
     }
     if response
         .extensions()
-        .get::<FunctionFailureCode>()
+        .get::<ResponseCode>()
         .is_some_and(|code| code.0 == "cron.claim-failed")
     {
         anyhow::bail!("The Kernel could not record the cron attempt.");
@@ -290,7 +290,7 @@ pub(crate) async fn run(
     let name = run_name(id);
     let schedule = cron.cron.text().to_owned();
     let error = (status >= 400).then(
-        || match response.extensions().get::<FunctionFailureCode>() {
+        || match response.extensions().get::<ResponseCode>() {
             Some(code) => format!("Function failed with {} ({status}).", code.0),
             None => format!("Function returned status {status}."),
         },

@@ -8,6 +8,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ### Added
 
+- Apps can declare cron jobs in `app/crons.json` with five-field UTC expressions. Publishing enables Functions and the Actions the jobs use. The app export carries the schedules, App settings lists published cron jobs, and `konae test schedule cron:<id>` runs a job on a local Kernel. [Cron jobs](./docs/functions.md#run-a-function-on-a-cron-schedule)
 - Exported apps with server functions can start on a matching Kernel image under Docker's default security profile. The app folder carries the published bundles, accounts, data, and rules. The destination prepares the bundles in its own cache. [Server functions](./docs/functions.md)
 - The `konae:actions` helper types each function's named Server Actions from its allowlist and Action Contract. Both runners support request-scoped timers and Web Crypto, and the builders include a documented subset of Node.js modules.
 - Function timing includes individual Server Actions. `konae events` shows local function traces, and operators can send sampled traces to an OTLP/HTTP collector.
