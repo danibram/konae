@@ -634,7 +634,7 @@ Owner control: the owner can change this module with module_set. Permission: `pu
 - A release with cron jobs enables Functions and, when a cron target names Server Actions, Actions. This applies to the first release and to updates. For HTTP Functions in an app without cron jobs, enable Functions in App settings or in the local konae.json. Authenticated functions require auth. A nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.
 - For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Functions remain experimental. StarlingMonkey is the default runner. Operators can select deno_core. Workers start on demand and may stay warm until their idle timeout. Each request gets fresh JavaScript state.
 - A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.
-- The action allowlist accepts only queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.
+- The action allowlist accepts only queries and mutations without external effects. It refuses notify, issue, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.
 - The Kernel and runner speak konae-functions-ipc/3. Published bundles use konae-functions/1. Upgrade the Kernel, runner, and preparer together and restart the service. The app folder carries private bundles in server/. The optional shutdown(signal) hook runs in the last completed request's JavaScript state when that state is available.
 
 Declared with `functions` in `functions.json`. Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Use access scheduled for a cron target and omit mount and methods. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. The Kernel can end an invocation at its deadline without delivering an abort event to Request.signal.
@@ -673,3 +673,33 @@ Limits:
 - 32 jobs per app
 - Five numeric fields in UTC with minute precision
 - One attempt per job and matching minute
+
+### App MCP (`mcp`)
+
+Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+- Use the app's /_konae/mcp endpoint to list and call granted tools. Read docs/mcp-app-tools.md to configure and verify an external client.
+
+Declared with `mcp` in `actions.json`. Publish an authenticated query with a tool description. The app user grants the tool to an operator-registered OAuth client.
+
+### Documents (`documents`)
+
+Issue portable PDFs from mutation snapshots and serve them through an app-owned read rule.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+- Use the app's /_konae/documents/<issue-key> download as the signed-in user. Read docs/documents.md for renderer setup and a verification procedure.
+
+Declared with `issue` in `actions.json`. Issue a PDF from one changed row. Declare a stable issue key, a snapshot, a Typst template and the query that decides who may read the PDF.
+
+### File intake (`file-intake`)
+
+Accepts immutable file versions from declared sources and queues declared app consumers.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+- Read docs/file-intake.md to rehearse acceptance and docs/ftps.md to bind a receiver.
+
+Declared with `sources` in `file-intake.json`. Declare the sources the app accepts and optional SQL consumers. Consumers receive version metadata.

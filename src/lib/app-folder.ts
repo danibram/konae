@@ -262,6 +262,14 @@ An optional \`schema-transforms.json\` records ordered data changes between sche
 
 ## Module settings
 
+For local runs or a first CLI publish, turn app modules on under \`modules\` in \`konae.json\`. On an existing Konae Deployment, read \`modules_read\`, use the returned state as \`expected\` in \`module_set\`, and read the result with \`modules_read\`.
+
+- Documents needs \`actions\` and \`auth\`. Declare an \`issue\` mutation and a named download query in \`app/actions.json\`. Verify the PDF with the app account that may read it.
+- App MCP needs \`actions\` and \`auth\`. Declare \`mcp.description\` on an authenticated query in \`app/actions.json\`. The operator registers clients in \`mcp-app-clients.json\` in the Kernel data directory.
+- File intake needs \`actions\`. Declare sources and SQL consumers in \`app/file-intake.json\`. Verify a source with \`konae test intake <source> --path <path> --file <file>\`. The operator binds FTPS credentials to a published source in \`ftps.json\` in the Kernel data directory.
+
+For the full setup and verification steps, read \`platform_guide\` topic \`pieces\`, under \`moduleSetup\`.
+
 | Need | Use | Not |
 | --- | --- | --- |
 | Turn an app capability on or set its options | \`modules_read\` and \`module_set\`, then read it back with \`modules_read\` | A separate tool or a setting in the Capsule |

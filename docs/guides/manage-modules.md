@@ -6,6 +6,14 @@ Modules hold the options and capabilities an app uses. The editor's App settings
 
 Call `modules_read` to see every module, its state, switch availability, options, permission and current behavior. Call `module_set` with the module name, the change and the state you read as `expected`. The tool refuses a stale state with `module.changed`. Read `modules_read` again before retrying. After a successful change, read `modules_read` to confirm the new state.
 
+## Turn on an app module
+
+1. On an existing Deployment, read `session_inspect.can` and call `modules_read { projectId }`. Check the module's permission and dependencies.
+2. Turn on each dependency that is off. Call `module_set { projectId, module, on: true, expected }`. Pass `modules.<name>.state` from `modules_read` as `expected`. Read back each change with `modules_read`. The build agent asks you to confirm each change in the editor.
+3. Turn on the requested module, then save and verify the app declarations. Publish, read the active release with `project_inspect`, and test the feature on the app's address.
+
+Read [Documents](../documents.md), [App MCP tools](../mcp-app-tools.md), or [File intake](../file-intake.md) for the module you want. The installation operator sets up the native Typst binary, [the FTPS listener](../ftps.md), and OAuth client registrations for external App MCP clients.
+
 The contract in `src/sdk/contract.ts` lists each switch and its agent rule. Publishing a Capsule with a cron job enables Functions and the Actions its target needs. The module tab lists the published cron jobs. Read [Server functions](../functions.md#run-a-function-on-a-cron-schedule) for the cron setup.
 
 ## Configure search listing
@@ -18,4 +26,6 @@ The editor preview writes no canonical, card, `robots.txt` or sitemap. `konae de
 
 ## Before the first publish
 
-Before publishing, the module tab shows each module's project state and options as read-only. The first release carries that state. After publishing, the tab reads and changes the Deployment through `modules_read` and `module_set`; changes apply at once.
+For a local app or a first CLI publish, set each required module's `on` field under `modules` in `konae.json`.
+
+In the web editor, the module tab shows the project state as read-only until the first publish. If a declaration needs a switch that is off, publish the base app first. Turn on the required modules before adding that declaration.

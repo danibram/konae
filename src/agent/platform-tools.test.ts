@@ -139,6 +139,24 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(decline.calls).toEqual([]);
   });
 
+  test("the build agent can enable Documents, App MCP and File intake with confirmation and read-back", async () => {
+    for (const [module, title] of [["documents", "Documents"], ["mcp", "App MCP"], ["file-intake", "File intake"]]) {
+      const { value, calls, confirmations } = binding();
+      const tools = await toolsFor(value);
+      const expected = { on: false };
+      await run(tools.modules_read);
+      const result = await run(tools.module_set, { module, on: true, expected });
+      expect(confirmations).toHaveLength(1);
+      expect(confirmations[0]?.summary).toBe(`The agent will turn on ${title} (${module}).`);
+      expect(calls).toEqual([
+        { name: "modules_read", args: { projectId: "p1" } },
+        { name: "module_set", args: { module, on: true, expected, projectId: "p1" } },
+        { name: "modules_read", args: { projectId: "p1" } },
+      ]);
+      expect(result.details).toMatchObject({ outcome: "observed", readBackTool: "modules_read" });
+    }
+  });
+
   test("rechecks the operation's current permission after the owner confirmation", async () => {
     const dispatches: string[] = [];
     let canWrite = true;

@@ -509,7 +509,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "platform_guide",
-            "Read a guide topic. Start with rules (yardstick, first run, read-back, divergences), then pieces (which Capsule declaration to use). Also credentials, development, actions, sdk, publishing, users, portability and refusals.",
+            "Read a guide topic. Start with rules (yardstick, first run, read-back, divergences), then pieces (app declarations and setup for Documents, App MCP, File intake and FTPS). Also credentials, development, actions, sdk, publishing, users, portability and refusals.",
             json!({"topic":{"type":"string","enum":super::guide::TOPICS}}),
             &["topic"],
             true,
@@ -2155,6 +2155,30 @@ mod tests {
         assert_eq!(refusal.code, "module.changed");
         let denied = admin_call(&state, &reader, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false})).await.unwrap_err().to_string();
         assert_eq!(denied, "Permission denied for publish.");
+
+        let project = json!({"projectId":"app_modules"});
+        let guide = admin_call(&state, &publisher, "owner:o", "platform_guide", json!({"topic":"pieces"})).await.unwrap();
+        let setup = &guide["moduleSetup"];
+        assert!(setup["ftps"]["operator"].as_str().unwrap().contains("ftps.json"));
+        for module in ["documents", "mcp", "file-intake"] {
+            let expected = after["modules"][module]["state"].clone();
+            let args = json!({"projectId":"app_modules", "module":module, "on":true, "expected":expected});
+            let error = admin_call(&state, &publisher, "owner:o", "module_set", args).await.unwrap_err();
+            assert_eq!(error.downcast_ref::<crate::refusal::Refusal>().unwrap().code, "module.requires");
+        }
+        let mut current = after;
+        for module in ["actions", "documents", "mcp", "file-intake"] {
+            let expected = current["modules"][module]["state"].clone();
+            let args = json!({"projectId":"app_modules", "module":module, "on":true, "expected":expected});
+            admin_call(&state, &publisher, "owner:o", "module_set", args).await.unwrap();
+            current = admin_call(&state, &publisher, "owner:o", "modules_read", project.clone()).await.unwrap();
+            assert_eq!(current["modules"][module]["state"]["on"], true, "{module}");
+            if module != "actions" {
+                assert!(setup[module]["declare"].is_string(), "{module}");
+                assert!(setup[module]["verify"].is_string(), "{module}");
+            }
+        }
+        assert!(current["modules"].get("ftps").is_none());
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

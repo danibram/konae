@@ -37,6 +37,10 @@ After any write through MCP or the editor, observe the effect through the same d
 | Code between an HTTP request and the rows | A server function in `functions.json`, with its actions allowlist | A Server Action with string-built SQL, or a call action |
 | This app calls another host | Turn on `calls` with `module_set`, then declare `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
+| Issue a private PDF | Documents, an `issue` mutation and a named download query | A public Files upload |
+| Give an external MCP client read access to app rows | App MCP and an authenticated query with an `mcp` declaration | Owner MCP credentials |
+| Accept file versions from a device or test fixture | File intake with a declared source and optional Actions consumer | A browser Files upload |
+| Receive device uploads over FTPS | The installation's FTPS listener bound to a published File intake source | An app module switch for the listener |
 | Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
@@ -50,7 +54,7 @@ After any write through MCP or the editor, observe the effect through the same d
 
 Prefer a declaration inside the Capsule over a new platform resource. Topic `pieces` of `platform_guide` is the same table for agents.
 
-For cron declarations, permissions and local runs, read [Run a function on a cron schedule](docs/functions.md#run-a-function-on-a-cron-schedule).
+For cron declarations, permissions and local runs, read [Run a function on a cron schedule](docs/functions.md#run-a-function-on-a-cron-schedule). For Documents, App MCP, File intake and FTPS, start at [Turn on an app module](docs/guides/manage-modules.md#turn-on-an-app-module) or the `moduleSetup` section of `platform_guide` topic `pieces`.
 
 ## First run
 

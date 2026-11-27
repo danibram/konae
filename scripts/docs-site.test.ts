@@ -29,7 +29,14 @@ function links(markdown: string) {
 
 describe("the docs site", () => {
   test("the pieces page and AGENTS use the same module setup rows", () => {
-    const rows = (file: string) => readFileSync(path.join(repo, file), "utf8").split("\n").filter((line) => line.startsWith("| Another service calls this app |") || line.startsWith("| This app calls another host |"));
+    const needs = [
+      "Another service calls this app", "This app calls another host", "Issue a private PDF",
+      "Give an external MCP client read access to app rows", "Accept file versions from a device or test fixture",
+      "Receive device uploads over FTPS",
+    ];
+    const rows = (file: string) => readFileSync(path.join(repo, file), "utf8").split("\n")
+      .filter((line) => needs.some((need) => line.startsWith(`| ${need} |`)));
+    expect(rows("docs/pieces.md")).toHaveLength(needs.length);
     expect(rows("docs/pieces.md")).toEqual(rows("AGENTS.md"));
   });
 

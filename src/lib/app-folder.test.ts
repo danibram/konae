@@ -14,6 +14,8 @@ test("module defaults preserve only module choices that already exist", () => {
     seo: { on: true, canonical: "path", image: "social.png" },
   });
   expect(defaultModuleStates({ files: { on: true } })).toEqual({ files: { on: true, fileAccess: null } });
+  const declared = { documents: { on: true }, mcp: { on: true }, "file-intake": { on: false } };
+  expect(defaultModuleStates(declared)).toEqual(declared);
 });
 
 const settings: AppSettings = {

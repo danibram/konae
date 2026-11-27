@@ -1,3 +1,7 @@
+import documentsGuide from "../../docs/documents.md?raw";
+import fileIntakeGuide from "../../docs/file-intake.md?raw";
+import ftpsGuide from "../../docs/ftps.md?raw";
+import appMcpGuide from "../../docs/mcp-app-tools.md?raw";
 import schemaTransformsGuide from "../../docs/guides/schema-transformations.md?raw";
 import { sdkReferences } from "./sdk-section.generated";
 import type { PreviewTest, PreviewTestReport } from "./preview-test";
@@ -22,8 +26,15 @@ import type { ValidationFacts } from "./contracts";
 import type { SourceFiles } from "../lib/source-files";
 import { refusalOf, type Refusal } from "../kernel/refusal";
 
-const references: Record<string, string> = { ...sdkReferences, "/reference/schema-transforms.md": schemaTransformsGuide };
-const jsonDeclarations = ["actions.json", "functions.json", "crons.json"];
+const references: Record<string, string> = {
+  ...sdkReferences,
+  "/reference/schema-transforms.md": schemaTransformsGuide,
+  "/reference/documents.md": documentsGuide,
+  "/reference/file-intake.md": fileIntakeGuide,
+  "/reference/ftps.md": ftpsGuide,
+  "/reference/mcp-app-tools.md": appMcpGuide,
+};
+const jsonDeclarations = ["actions.json", "functions.json", "crons.json", "file-intake.json"];
 const gateFiles = ["schema.sql", ...jsonDeclarations];
 const gatePaths = gateFiles.map((file) => `/workspace/${file}`).join(", ");
 
@@ -66,7 +77,7 @@ function readTool(workspace: CapsuleWorkspace): AgentTool<any> {
     name: "read",
     label: "Read file",
     description:
-      "Read a Capsule file, /reference/sdk/<module>.md, /reference/schema-transforms.md, or a template. Current files were included in the first message, " +
+      "Read a Capsule file, /reference/sdk/<module>.md, a guide named in the prompt, or a template. Current files were included in the first message, " +
       "so read only to re-check a file after several edits, or to fetch a line range of a long file. " +
       "Use offset/limit to read part of a file; omit both to read all of it. " +
       "The seven templates are read-only under /templates/<id>/ (tasks, notes, members, form, webhook, digest, gallery), " +

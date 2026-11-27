@@ -77,6 +77,12 @@ The defaults suit one machine. Before another machine can reach the installation
 - Set `KONAE_COPY_DIR` or `KONAE_COPY_S3=1`, with `KONAE_COPY_SECRET` for S3. The data directory is the only place the apps live.
 - To serve an app at the domain's root, give its path address the name `konae-home`. Without an app on that name, the root answers not found. [`examples/site`](../examples/site/README.md) is a home ready to publish, with the docs inside it.
 
+## Configure Documents, FTPS and App MCP
+
+- [Documents](./documents.md#renderer-setup-and-limits) uses the Typst version bundled in the images. Native Kernels can set `KONAE_DOCUMENTS_TYPST_BIN` to the executable path.
+- [FTPS](./ftps.md) reads `ftps.json` from `KONAE_DATA_DIR` at startup. Bind each credential to a published File intake source. The listener needs its own certificate, control port and passive ports.
+- [App MCP](./mcp-app-tools.md#connect-an-external-client) reads public client registrations from `mcp-app-clients.json` in `KONAE_DATA_DIR`. Each app user signs in and grants specific Action tools.
+
 ## Function workers
 
 ### TypeScript function workers

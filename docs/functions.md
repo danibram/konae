@@ -38,7 +38,7 @@ Add `functions.json` to `app/`. This declaration exposes `GET /api/hello` withou
 
 Names start with an ASCII letter and contain at most 64 letters, digits, `_` or `-`. Each mount is an absolute path with nonempty ASCII segments. Mounts claim the exact path and its descendants. They cannot overlap another function, static route, or reserved Kernel path. Methods are a nonempty list of unique `GET` and `POST` values. Access defaults to `authenticated`. `actions` defaults to an empty list. The entry must name a source file under `app/functions/`.
 
-When a function uses Server Actions, its allowlist can name queries and mutations without external effects. It cannot name actions with `notify`, `signal`, `schedule`, `subscribe`, HTTP routes, grants, granted access, or a `then` target of an outgoing call. The build and Kernel check the declaration and artifact. The Kernel checks the allowlist, action schema, action access and actor bindings on every call.
+When a function uses Server Actions, its allowlist can name queries and mutations without external effects. It cannot name actions with `notify`, `issue`, `signal`, `schedule`, `subscribe`, HTTP routes, grants, granted access, or a `then` target of an outgoing call. The build and Kernel check the declaration and artifact. The Kernel checks the allowlist, action schema, action access and actor bindings on every call.
 
 ## Run a function on a cron schedule
 

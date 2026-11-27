@@ -29,7 +29,7 @@ OAuth offers `read`, `write`, `publish` and `manage_users`. A redirect to `local
 | Topic | What it answers |
 | --- | --- |
 | `rules` | The yardstick, the first run, the read-back after every write, and the named divergences between preview and published app. |
-| `pieces` | Which Capsule declaration to use for a need. See [Pick the smallest piece](./pieces.md). |
+| `pieces` | Which Capsule declaration to use. Read `moduleSetup` for Documents, App MCP, File intake, FTPS and their setup checks. See [Pick the smallest piece](./pieces.md). |
 | `credentials` | `konae login` and its flags, `login --browser`, `konae secret set`, OAuth, what each permission allows, and the refusal a missing permission gives. |
 | `development` | The CLI cycle: `init`, `dev`, `build`, `publish`, `pull`, `push`, `sql`, `events`, `secret`, `hostname`, `contract` and `conform`. |
 | `actions` | The `actions.json` format and its rules. |

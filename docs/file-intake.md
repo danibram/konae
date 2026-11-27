@@ -4,7 +4,7 @@ File intake accepts bytes from a declared source and stores each accepted versio
 
 ## Declare a source and consumer
 
-Add `file-intake.json` to the app folder and turn on the `file-intake` module in `konae.json` or with `module_set` before publishing.
+Follow [Turn on an app module](./guides/manage-modules.md#turn-on-an-app-module). Enable `actions`, then enable `file-intake`. Save the declaration as `app/file-intake.json` in an app folder, or `/workspace/file-intake.json` in the editor. Use the declared source ID when you configure a receiver.
 
 ```json
 {
@@ -33,13 +33,15 @@ Source and consumer IDs use ASCII letters, digits, `_` and `-`. Source version 1
 
 ## Accept bytes
 
-An authenticated local operator can accept a completed file in test mode:
+Run `konae dev --dir ./my-app` once to prepare the app. Stop the development server, then submit a completed test file with the local CLI:
 
 ```sh
-bun run konae -- test --dir ./my-app intake camera --path incoming/photo.jpg --file /tmp/photo.jpg --delivery-key camera-00042
+konae test --dir ./my-app intake camera --path incoming/photo.jpg --file /tmp/photo.jpg --delivery-key camera-00042
 ```
 
-The local command uses the same `accept_staged` operation that a trusted FTPS adapter calls. It runs under the local operator's OS account and requires a `konae dev` test Kernel. The adapter resolves the current Deployment, authenticates its credential, binds that credential to one app and declared source, and then passes the completed staged file, normalized relative path and optional delivery key. The operation rechecks the current Deployment and pinned source declaration after it acquires the app write lock.
+Run the command again with the same file, path and delivery key. The second response should have the same `versionId` and `created: false`. Start `konae dev` again to pick up any pending consumers. Verify each consumer's effect through an authorized query of the app rows. On a deployment, publish the source before the operator binds it to the [FTPS listener](./ftps.md).
+
+The local command uses the same `accept_staged` operation that a trusted FTPS adapter calls. It runs under the local operator's OS account against the test data that `konae dev` prepares. The adapter resolves the current Deployment, authenticates its credential, binds that credential to one app and declared source, and then passes the completed staged file, normalized relative path and optional delivery key. The operation rechecks the current Deployment and pinned source declaration after it acquires the app write lock.
 
 With a delivery key, retries return the original version ID when source, key, path and SHA-256 match. Reusing a source key with another path or digest fails. Without a key, the Kernel compares the content hash with the current version at that source path. The same current bytes return the same version. Changed bytes create a new version. If an old payload arrives after a replacement, it becomes a new replacement version because the old hash is no longer current.
 
