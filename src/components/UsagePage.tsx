@@ -158,6 +158,13 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   const actionNames = [...new Set([...summary.actions.filter((a) => a.kind !== "call").map((a) => a.name), ...summary.metrics.filter((m) => m.feature === "execution").map((m) => m.name)])].sort();
   return <>
     <div className="usage-app-link"><a className="usage-address" href={summary.url} target="_blank" rel="noopener">{addressOf(summary.url)} <ArrowUpRight size={14} aria-hidden="true" /></a><a href={projectHref(summary.projectId)}>Open project</a></div>
+    {(kindTotal(summary, "function") > 0 || kindTotal(summary, "action") > 0) && <section aria-labelledby="usage-calls-heading">
+      <h2 id="usage-calls-heading">Calls</h2>
+      <div className="usage-charts">
+        <DailyChart title="Function calls per day" unit="calls" showSinglePart points={dailyUsage(summary, "function")} empty="No function calls recorded in this period." />
+        <DailyChart title="Successful action calls per day" unit="calls" showSinglePart points={dailyUsage(summary, "action")} empty="No successful action calls recorded in this period." />
+      </div>
+    </section>}
     <FunctionLatency summary={summary.functionLatency} />
     {summary.functionActionLatency?.series.length ? <section aria-labelledby="function-action-latency-heading">
       <h2 id="function-action-latency-heading">Action latency</h2>

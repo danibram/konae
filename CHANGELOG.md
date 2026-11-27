@@ -11,6 +11,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - Exported apps with server functions can start on a matching Kernel image under Docker's default security profile. The app folder carries the published bundles, accounts, data, and rules. The destination prepares the bundles in its own cache. [Server functions](./docs/functions.md)
 - The `konae:actions` helper types each function's named Server Actions from its allowlist and Action Contract. Both runners support request-scoped timers and Web Crypto, and the builders include a documented subset of Node.js modules.
 - Function timing includes individual Server Actions. `konae events` shows local function traces, and operators can send sampled traces to an OTLP/HTTP collector.
+- Usage shows daily Function calls and successful Server Actions by name. Function counts start after the Kernel update and survive pruning of the latency samples. [Usage and Signals](./docs/reference/usage-and-signals.md)
 
 ### Changed
 

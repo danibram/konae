@@ -822,6 +822,70 @@ async fn validated_bundle_text_is_cached_by_deployment_version_and_digest() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[tokio::test]
+#[ignore = "requires KONAE_TEST_FUNCTION_WORKER pointing to the built external JavaScript worker"]
+async fn completed_function_calls_have_one_daily_count() {
+    let executable = std::env::var_os("KONAE_TEST_FUNCTION_WORKER").unwrap();
+    let root = std::env::temp_dir().join(format!("konae-function-usage-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut state = AppState::for_test(&root);
+    let policy = std::env::var_os("KONAE_TEST_FUNCTION_CGROUP")
+        .map(|root| MemoryPolicy::LinuxCgroup {
+            delegated_root: root.into(),
+        })
+        .unwrap_or(MemoryPolicy::DevelopmentPolling);
+    state.functions = Arc::new(Runtime::configured(
+        executable.into(),
+        policy,
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+    ));
+    let deployment = publish(
+        &state,
+        &release(
+            "function_usage",
+            "export function handle() { return new Response('ok'); }",
+        ),
+    )
+    .await;
+    let service = crate::stack(state, axum::Router::new());
+    let from = crate::usage::day(crate::now_ms());
+    for (method, status) in [
+        ("GET", StatusCode::OK),
+        ("GET", StatusCode::OK),
+        ("PUT", StatusCode::METHOD_NOT_ALLOWED),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri("/api/orders")
+            .header("host", &deployment.hostname)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            service.clone().oneshot(request).await.unwrap().status(),
+            status
+        );
+    }
+    let to = crate::usage::day(crate::now_ms());
+    let summary = crate::usage::admin_call(
+        &root,
+        &deployment,
+        "usage_summary",
+        &json!({"from": from, "to": to}),
+    )
+    .await
+    .unwrap();
+    let calls = summary["usage"]["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["kind"] == "function" && row["name"] == "orders")
+        .map(|row| row["count"].as_u64().unwrap())
+        .sum::<u64>();
+    assert_eq!(calls, 3, "{summary}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires KONAE_TEST_FUNCTION_WORKER pointing to the built external JavaScript worker"]
 async fn real_functions_http_auth_transaction_publish_deadline_and_usage() {
