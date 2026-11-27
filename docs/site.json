@@ -45,6 +45,7 @@
     ] },
     { "section": "Operate", "pages": [
       "operate.md",
+      "ftps.md",
       "reference/store-inventory.md",
       "reference/block-copies.md",
       "recovery-drill.md",

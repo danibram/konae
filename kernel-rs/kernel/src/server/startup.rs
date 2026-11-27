@@ -40,6 +40,7 @@ pub struct Running {
     pub state: AppState,
     pub _lock: std::fs::File,
     copy_config: Option<copies::CopyConfig>,
+    _ftps: Option<crate::ftps::Runtime>,
 }
 
 /// Loads every app folder, builds the state and starts the workers: copies,
@@ -122,7 +123,8 @@ pub async fn start_locked(
         mail::spawn_worker(queue, state.copies.clone(), state.clone());
     }
     crate::modules::start_durable_work(&state);
-    Ok(Running { state, _lock: lock, copy_config })
+    let ftps = crate::ftps::start(&state).await?;
+    Ok(Running { state, _lock: lock, copy_config, _ftps: ftps })
 }
 
 /// The state a Kernel serves with, read from the environment, without its
