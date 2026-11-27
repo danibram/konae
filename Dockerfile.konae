@@ -18,6 +18,7 @@ COPY kernel-rs/backup/Cargo.toml backup/Cargo.toml
 COPY kernel-rs/functions-executor/Cargo.toml functions-executor/Cargo.toml
 COPY kernel-rs/kernel/Cargo.toml kernel/Cargo.toml
 COPY kernel-rs/konae/Cargo.toml konae/Cargo.toml
+COPY kernel-rs/vendor/thirtyftp vendor/thirtyftp
 # Builds the dependencies once, on empty crates, so a source change rebuilds only Konae and the Kernel.
 RUN mkdir backup/src functions-executor/src kernel/src konae/src \
   && touch backup/src/lib.rs functions-executor/src/lib.rs && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
@@ -31,6 +32,8 @@ RUN rm -f target/release/konae \
   && cargo build --release --locked --bin konae \
   && test "$(od -An -tx1 -N4 target/release/konae | tr -d ' \n')" = 7f454c46 \
   && case "$TARGETARCH:$(od -An -tx1 -j18 -N2 target/release/konae | tr -d ' \n')" in amd64:3e00|arm64:b700) ;; *) echo "Konae ELF does not match target architecture $TARGETARCH" >&2; exit 1 ;; esac
+COPY ops/install-typst.sh /tmp/install-typst
+RUN sh /tmp/install-typst /usr/local/bin/typst
 
 FROM debian:bookworm-slim
 
@@ -46,6 +49,7 @@ RUN apt-get update \
   && chown konae:konae /data \
   && chmod 0700 /data
 COPY --from=build /src/target/release/konae /usr/local/bin/konae
+COPY --from=build /usr/local/bin/typst /usr/local/bin/typst
 RUN test "$(od -An -tx1 -N4 /usr/local/bin/konae | tr -d ' \n')" = 7f454c46 \
   && case "$TARGETARCH:$(od -An -tx1 -j18 -N2 /usr/local/bin/konae | tr -d ' \n')" in amd64:3e00|arm64:b700) ;; *) echo "Packaged Konae ELF does not match target architecture $TARGETARCH" >&2; exit 1 ;; esac
 ARG FUNCTIONS_RUNNER_SHA256

@@ -10,6 +10,7 @@ COPY kernel-rs/backup/Cargo.toml backup/Cargo.toml
 COPY kernel-rs/functions-executor/Cargo.toml functions-executor/Cargo.toml
 COPY kernel-rs/kernel/Cargo.toml kernel/Cargo.toml
 COPY kernel-rs/konae/Cargo.toml konae/Cargo.toml
+COPY kernel-rs/vendor/thirtyftp vendor/thirtyftp
 # Builds the dependencies once, on empty crates, so a source change rebuilds only the Kernel.
 # The workspace names konae too, so it gets an empty crate and is never built.
 RUN mkdir backup/src functions-executor/src kernel/src konae/src \
@@ -19,6 +20,8 @@ COPY kernel-rs/backup/src ./backup/src
 COPY kernel-rs/functions-executor/src ./functions-executor/src
 COPY kernel-rs/kernel/src ./kernel/src
 RUN touch backup/src/lib.rs functions-executor/src/lib.rs kernel/src/lib.rs kernel/src/main.rs && cargo build --release --locked -p kernel --bin kernel
+COPY ops/install-typst.sh /tmp/install-typst
+RUN sh /tmp/install-typst /usr/local/bin/typst
 
 FROM debian:bookworm-slim
 
@@ -29,6 +32,7 @@ RUN apt-get update \
   && useradd --system --uid 10002 --gid konae-functions --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin konae-functions \
   && mkdir -p /kernel/apps /usr/local/lib/konae
 COPY --from=build /src/target/release/kernel /usr/local/lib/konae/kernel
+COPY --from=build /usr/local/bin/typst /usr/local/bin/typst
 ARG FUNCTIONS_RUNNER_SHA256
 ARG FUNCTIONS_DENO_RUNNER_SHA256
 ARG FUNCTIONS_PREPARER_SHA256

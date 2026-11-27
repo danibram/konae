@@ -40,7 +40,7 @@ The Kernel serves a ready PDF at `/_konae/documents/<issue-key>`. It runs the pi
 
 ## Renderer setup and limits
 
-Install Typst 0.14.2 and put `typst` on the Kernel's `PATH`. Set `KONAE_DOCUMENTS_TYPST_BIN` to the executable path when the Kernel should use a different location. Startup refuses to serve an app with Documents enabled when that executable is missing or reports another version.
+The Konae and standalone Kernel images include Typst 0.14.2. For a native installation, put that version of `typst` on the Kernel's `PATH` or set `KONAE_DOCUMENTS_TYPST_BIN` to its executable path. Startup checks the executable and version when a served app has Documents enabled.
 
 Each render has a 30 second wall clock deadline and a 30 second CPU limit. The Kernel caps Typst memory at 1 GiB with an address-space limit on Linux and RSS polling on macOS. Each render also allows at most 2 MiB of frozen input, 64 KiB of renderer logs and a 10 MiB PDF. The app's shared Files per-file limit and total quota apply to the stored PDF. The renderer writes into a private temporary folder and Typst can read only from that folder. The Kernel stores the template, resources, issue snapshot, named read query, release ID and Typst version with the issue.
 

@@ -311,12 +311,13 @@ mod tests {
         let cases: Vec<Value> = serde_json::from_str(include_str!("../documents-cases.json")).unwrap();
         for case in cases {
             let source = serde_json::json!({"version": 1, "actions": case["actions"]}).to_string();
-            let directory = tempfile::tempdir().unwrap();
+            let database = std::env::temp_dir().join(format!("konae-documents-shape-{}.sqlite", uuid::Uuid::new_v4()));
             let outcome = super::read(&source).and_then(|program| {
-                crate::schema_change::apply(&directory.path().join("app.sqlite"), case["schema"].as_str().unwrap(), &program, crate::schema_change::Mode::Plan).map(|_| ())
+                crate::schema_change::apply(&database, case["schema"].as_str().unwrap(), &program, crate::schema_change::Mode::Plan).map(|_| ())
             }).map_err(|error| {
                 crate::refusal::of(&error).cloned().unwrap_or_else(|| panic!("{}: {error} has no code", case["case"]))
             });
+            let _ = std::fs::remove_file(database);
             crate::refusal::assert_case(&case, outcome);
         }
     }
