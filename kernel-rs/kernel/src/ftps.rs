@@ -642,6 +642,17 @@ fn validate(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+fn advertised_endpoint(settings: &Settings, bound: std::net::SocketAddr) -> (String, u16) {
+    let host = settings.advertised_host.clone().unwrap_or_else(|| {
+        if bound.ip().is_unspecified() {
+            "localhost".to_owned()
+        } else {
+            bound.ip().to_string()
+        }
+    });
+    (host, settings.advertised_port.unwrap_or(bound.port()))
+}
+
 fn installation_path(root: &Path, value: &Path) -> Result<PathBuf> {
     ensure!(
         !value.is_absolute(),
@@ -787,5 +798,30 @@ mod tests {
             ..settings
         };
         assert!(validate(&invalid).is_err());
+    }
+
+    #[test]
+    fn advertised_address_defaults_to_loopback_for_wildcard_bind() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "bind": "0.0.0.0:2121",
+            "passivePorts": [31000, 31010],
+            "certificate": "cert.pem",
+            "privateKey": "key.pem",
+            "credentials": [{
+                "username": "meter",
+                "password": "secret",
+                "appId": "app_meter",
+                "sourceId": "meter-source"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            advertised_endpoint(&settings, "0.0.0.0:2121".parse().unwrap()),
+            ("localhost".into(), 2121)
+        );
+        assert_eq!(
+            advertised_endpoint(&settings, "127.0.0.1:2121".parse().unwrap()),
+            ("127.0.0.1".into(), 2121)
+        );
     }
 }
