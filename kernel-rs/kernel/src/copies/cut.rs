@@ -255,11 +255,15 @@ impl Cut {
         prior: &HashMap<&str, &str>,
     ) -> Result<()> {
         let index = layout::files(staging, app).join("index.json");
-        if !index.try_exists()? {
-            return Ok(());
+        let index_bytes = match fs::read(index) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => b"[]".to_vec(),
+            Err(error) => return Err(error.into()),
+        };
+        let references = crate::modules::blob_references(&state.data_root, app)?;
+        if !references.is_empty() {
+            fs::create_dir_all(layout::files(staging, app))?;
         }
-        let index_bytes = fs::read(index)?;
-        let references = crate::modules::blob_references(staging, app)?;
         for mut file in attachments(app, &index_bytes, prior, references)? {
             self.budget.reserve(file.size)?;
             self.budget.reader()?;

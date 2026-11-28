@@ -84,7 +84,8 @@ pub(super) fn check_cut(root: &Path, installation: &Installation) -> Result<()> 
 
 fn check_files(root: &Path, id: &str) -> Result<()> {
     let files = layout::files(root, id);
-    if !files.try_exists()? {
+    let references = crate::modules::blob_references(root, id)?;
+    if references.is_empty() && !files.try_exists()? {
         return Ok(());
     }
     let index: Vec<Value> = optional_json(&files.join("index.json"))?.unwrap_or_default();
@@ -94,7 +95,7 @@ fn check_files(root: &Path, id: &str) -> Result<()> {
     let key = file["id"].as_str().filter(|v| crate::files::valid_file_id(v)).context("Invalid indexed file ID.")?;
         ensure!(file.get("ownerOnly").is_none_or(Value::is_boolean), "File {key} has an invalid owner-only flag.");
         ensure!(file["ownerOnly"] != true || crate::files::file_owner(file).is_some(), "Owner-only file {key} has no owner.");
-        ensure!(indexed.insert(key), "Duplicate indexed file {key}.");
+        ensure!(indexed.insert(key.to_owned()), "Duplicate indexed file {key}.");
         let blob = files.join(format!("{key}.blob"));
         ensure!(Some(fs::metadata(&blob)?.len()) == file["size"].as_u64(), "Indexed size differs for file {key}.");
         if let Some(digest) = file.get("sha256") {
@@ -108,6 +109,14 @@ fn check_files(root: &Path, id: &str) -> Result<()> {
             let exists: bool = accounts.as_ref().unwrap().query_row(
                 "SELECT EXISTS(SELECT 1 FROM app_users WHERE id=?1)", [owner], |r| r.get(0))?;
             ensure!(exists, "File {key} has no matching app user.");
+        }
+    }
+    for reference in references {
+        let key = reference.id;
+        if indexed.insert(key.clone()) {
+            ensure!(crate::files::valid_file_id(&key), "Invalid referenced blob ID.");
+            let blob = files.join(format!("{key}.blob"));
+            ensure!(fs::metadata(&blob)?.len() == reference.size, "Referenced size differs for file {key}.");
         }
     }
     for entry in fs::read_dir(files)? {
