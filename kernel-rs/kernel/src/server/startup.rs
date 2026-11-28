@@ -104,6 +104,12 @@ pub async fn start_locked(
         }
     }
     path::load(&state);
+    let deployed_apps: Vec<_> = state.deployments.read().await.values().cloned().collect();
+    for deployment in deployed_apps {
+        if let Err(error) = crate::files::reconcile_ftps_uploads(&state, &deployment).await {
+            eprintln!("Could not recover FTPS uploads for apps/{}: {error:#}", deployment.id);
+        }
+    }
     let own_hosts = domain::Rules::of(&state).installation_hosts;
     for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {
         eprintln!("Not serving apps/{}: {} is this installation's own host. Move the app with hostname_set.", deployment.id, deployment.hostname);

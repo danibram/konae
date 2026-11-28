@@ -9,12 +9,6 @@ pub async fn serve_file(
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
-    {
-        let _guard = database_lock(&state, &deployment.id).await;
-        if let Err(failure) = crate::files::reconcile_ftps_uploads(&state, &deployment).await {
-            return error(StatusCode::INTERNAL_SERVER_ERROR, &failure.to_string());
-        }
-    }
     let actor = match authenticate_deployment(&state, &deployment, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
