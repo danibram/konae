@@ -348,7 +348,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                 runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
             };
             if let Some(limits::Busy(wait)) = result.as_ref().err().and_then(|e| e.downcast_ref::<limits::Busy>()) {
-                return rate_limited_tool(&id, wait);
+                return rate_limited_tool(&id, *wait);
             }
             if name == "auth_logout" && result.is_ok() {
                 clear_cookie = true;
