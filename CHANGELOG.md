@@ -8,16 +8,17 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ### Added
 
+- Apps can handle HTTP GET and POST with experimental TypeScript or JavaScript Server Functions. The Kernel checks the caller and limits each handler to its declared Server Actions. It streams request bodies up to 100 MB. [Server functions](./docs/functions.md#add-a-function)
 - Apps can declare cron jobs in `app/crons.json` with five-field UTC expressions. Publishing enables Functions and the Actions the jobs use. The app export carries the schedules, App settings lists published cron jobs, and `konae test schedule cron:<id>` runs a job on a local Kernel. [Cron jobs](./docs/functions.md#run-a-function-on-a-cron-schedule)
 - Exported apps with server functions can start on a matching Kernel image under Docker's default security profile. The app folder carries the published bundles, accounts, data, and rules. The destination prepares the bundles in its own cache. [Server functions](./docs/functions.md)
 - The `konae:actions` helper types each function's named Server Actions from its allowlist and Action Contract. Both runners support request-scoped timers and Web Crypto, and the builders include a documented subset of Node.js modules.
 - Function timing includes individual Server Actions. `konae events` shows local function traces, and operators can send sampled traces to an OTLP/HTTP collector.
 - App exports carry pending Calls and notice intents alongside their database rows. The destination can resume them after import. [Export and import](./docs/reference/export-and-import.md)
 - Usage shows daily Function calls and successful Server Actions by name. Function counts start after the Kernel update and survive pruning of the latency samples. [Usage and Signals](./docs/reference/usage-and-signals.md)
-- Server Actions can issue private PDFs with Documents. The Kernel supervises a local Typst renderer, and the app's download rule and PDF bytes travel together in an export. [Documents](./docs/documents.md)
+- Server Actions can issue private PDFs with Documents. The Kernel runs up to two local Typst renders at once, with one per app. An export carries the PDF and the app's download rule. [Documents](./docs/documents.md)
 - Apps can publish selected authenticated query Actions to external MCP clients with app-scoped OAuth grants. [App MCP tools](./docs/mcp-app-tools.md)
-- File intake keeps immutable received versions and resumes their pending consumers after import. An optional FTPS listener accepts uploads for configured app sources. [File intake](./docs/file-intake.md) and [FTPS](./docs/ftps.md)
-- Apps can publish FTPS destinations in `app/ftps.json`. A member can request a one-use credential to upload a private file. A project owner can issue, rotate, or revoke credentials for devices that upload regularly. [FTPS](./docs/ftps.md)
+- File intake stores immutable versions from declared sources and resumes their pending consumers after a restart or import. [File intake](./docs/file-intake.md)
+- Apps can publish upload-only FTPS destinations in `app/ftps.json`. Members can request a one-use credential to upload a file only they can read. Project owners can issue, rotate, or revoke credentials for devices that upload regularly. [FTPS](./docs/ftps.md)
 
 ### Changed
 
@@ -30,7 +31,8 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 - Imports wait for runtime credential checks and Usage operations before replacing their SQLite files.
 - The Kernel bundles SQLite 3.51.3, which fixes the WAL reset race.
-- Static responses keep the body and ETag on the same revision while publishing or rolling back. Package import checks the shared blob inventory and app-wide file quota before installing the files.
+- Static responses keep the body and ETag on the same revision while publishing or rolling back.
+- App imports check the file quota across modules and retain owner-only access for personal FTPS files. Installation copies include private Documents and File intake blobs, even when the app has no Files index. [Export and import](./docs/reference/export-and-import.md)
 
 ## [0.12.1] - 2026-11-19
 
