@@ -288,10 +288,13 @@ impl IntakeSource<'_> {
                 Ok((source, declaration.consumers))
             }
             Self::Ftps(id) => {
-                let destination = &active.manifest["ftps"]["destinations"][*id];
+                use crate::ftps_declaration::{DestinationKind, published_destination};
+                let destination = published_destination(active, id);
                 ensure!(
-                    destination["kind"] == "device"
-                        && destination == &admitted.manifest["ftps"]["destinations"][*id],
+                    destination
+                        .as_ref()
+                        .is_some_and(|destination| destination.kind == DestinationKind::Device)
+                        && destination == published_destination(admitted, id),
                     "The published FTPS destination changed."
                 );
                 Ok((
