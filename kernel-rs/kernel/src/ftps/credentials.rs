@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -10,11 +11,10 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-const DATABASE: &str = "secrets.sqlite";
 const MEMBER_TTL_MS: i64 = 10 * 60 * 1000;
 const RESERVATION_TTL_MS: i64 = 60 * 60 * 1000;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct Credential {
     pub id: String,
     pub app_id: String,
@@ -22,9 +22,31 @@ pub(super) struct Credential {
     pub destination: String,
     pub kind: String,
     pub user_id: Option<String>,
+    pub label: Option<String>,
+    pub upload_id: Option<String>,
+    pub generation: i64,
     pub expires_at: Option<i64>,
     pub salt: Vec<u8>,
     pub verifier: Vec<u8>,
+}
+
+impl fmt::Debug for Credential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Credential")
+            .field("id", &self.id)
+            .field("app_id", &self.app_id)
+            .field("username", &self.username)
+            .field("destination", &self.destination)
+            .field("kind", &self.kind)
+            .field("user_id", &self.user_id)
+            .field("label", &self.label)
+            .field("upload_id", &self.upload_id)
+            .field("generation", &self.generation)
+            .field("expires_at", &self.expires_at)
+            .field("salt", &"[redacted]")
+            .field("verifier", &"[redacted]")
+            .finish()
+    }
 }
 
 pub(super) struct Issued {
@@ -41,9 +63,10 @@ fn now_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
-fn database(root: &Path) -> Result<Connection> {
-    std::fs::create_dir_all(root)?;
-    let path = root.join(DATABASE);
+fn database(root: &Path, app_id: &str) -> Result<Connection> {
+    let directory = crate::layout::data(root, app_id);
+    std::fs::create_dir_all(&directory)?;
+    let path = crate::layout::secrets(root, app_id);
     let db = Connection::open(&path).with_context(|| {
         format!(
             "Could not open private FTPS credential store {}.",
@@ -61,6 +84,8 @@ fn database(root: &Path) -> Result<Connection> {
             kind TEXT NOT NULL CHECK(kind IN ('member','device')),
             user_id TEXT,
             label TEXT,
+            upload_id TEXT,
+            generation INTEGER NOT NULL DEFAULT 1,
             salt BLOB NOT NULL,
             verifier BLOB NOT NULL,
             created_at INTEGER NOT NULL,
@@ -73,9 +98,30 @@ fn database(root: &Path) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS __konae_ftps_app_credentials
             ON __konae_ftps_credentials(app_id, created_at);",
     )?;
+    let mut columns = db.prepare("PRAGMA table_info(__konae_ftps_credentials)")?;
+    let names = columns
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(columns);
+    if !names.iter().any(|name| name == "upload_id") {
+        db.execute(
+            "ALTER TABLE __konae_ftps_credentials ADD COLUMN upload_id TEXT",
+            [],
+        )?;
+    }
+    if !names.iter().any(|name| name == "generation") {
+        db.execute(
+            "ALTER TABLE __konae_ftps_credentials ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    let current = now_ms();
+    db.execute("DELETE FROM __konae_ftps_credentials WHERE id IN (SELECT id FROM __konae_ftps_credentials WHERE expires_at IS NOT NULL AND expires_at<=?1 AND reserved_upload_id IS NULL ORDER BY expires_at LIMIT 32)", [current - 24 * 60 * 60 * 1000])?;
+    db.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE id IN (SELECT id FROM __konae_ftps_credentials WHERE reserved_at IS NOT NULL AND reserved_at<?1 ORDER BY reserved_at LIMIT 32)", [current - RESERVATION_TTL_MS])?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let wal = PathBuf::from(format!("{}-wal", path.display()));
         if wal.exists() {
@@ -120,10 +166,30 @@ fn create(
     let salt = Uuid::new_v4().as_bytes().to_vec();
     let verifier = verifier(&salt, &password);
     let name = username(app_key, &id);
-    let mut db = database(root)?;
+    let upload_id = (kind == "member").then(|| Uuid::new_v4().to_string());
+    let mut db = database(root, app_id)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    tx.execute("INSERT INTO __konae_ftps_credentials(id,app_id,username,destination,kind,user_id,label,salt,verifier,created_at,expires_at)
-        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![id, app_id, name, destination, kind, user_id, label, salt, verifier, now_ms(), expires_at])?;
+    if kind == "member" {
+        let outstanding: usize = tx.query_row(
+            "SELECT count(*) FROM __konae_ftps_credentials WHERE app_id=?1 AND user_id=?2 AND kind='member' AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>?3",
+            params![app_id, user_id, now_ms()], |row| row.get(0),
+        )?;
+        ensure!(
+            outstanding < 4,
+            "This account already has four active FTPS upload tickets."
+        );
+    } else {
+        let active_devices: usize = tx.query_row(
+            "SELECT count(*) FROM __konae_ftps_credentials WHERE app_id=?1 AND kind='device' AND revoked_at IS NULL",
+            [app_id], |row| row.get(0),
+        )?;
+        ensure!(
+            active_devices < 100,
+            "This app already has 100 active FTPS devices."
+        );
+    }
+    tx.execute("INSERT INTO __konae_ftps_credentials(id,app_id,username,destination,kind,user_id,label,salt,verifier,created_at,expires_at,upload_id)
+        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", params![id, app_id, name, destination, kind, user_id, label, salt, verifier, now_ms(), expires_at, upload_id])?;
     tx.commit()?;
     let credential = Credential {
         id,
@@ -132,11 +198,13 @@ fn create(
         destination: destination.into(),
         kind: kind.into(),
         user_id: user_id.map(str::to_owned),
+        label: label.map(str::to_owned),
+        upload_id: upload_id.clone(),
+        generation: 1,
         expires_at,
         salt,
         verifier,
     };
-    let upload_id = (kind == "member").then(|| Uuid::new_v4().simple().to_string());
     Ok(Issued {
         credential,
         password,
@@ -185,30 +253,39 @@ pub(super) fn create_device(
 pub(super) fn rotate_device(
     root: &Path,
     app_id: &str,
-    app_key: &str,
+    _app_key: &str,
     credential_id: &str,
 ) -> Result<Issued> {
-    let mut db = database(root)?;
+    let mut db = database(root, app_id)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let destination: Option<String> = tx.query_row("SELECT destination FROM __konae_ftps_credentials WHERE id=?1 AND app_id=?2 AND kind='device' AND revoked_at IS NULL", params![credential_id, app_id], |r| r.get(0)).optional()?;
-    let destination = destination.context("FTPS device credential not found.")?;
-    let id = Uuid::new_v4().simple().to_string();
+    let stored: Option<(String, String, String, i64)> = tx.query_row(
+        "SELECT destination,username,label,generation FROM __konae_ftps_credentials WHERE id=?1 AND app_id=?2 AND kind='device' AND revoked_at IS NULL",
+        params![credential_id, app_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional()?;
+    let (destination, name, label, generation) =
+        stored.context("FTPS device credential not found.")?;
     let password = password();
     let salt = Uuid::new_v4().as_bytes().to_vec();
     let verifier = verifier(&salt, &password);
-    let name = username(app_key, &id);
-    tx.execute("UPDATE __konae_ftps_credentials SET revoked_at=?3 WHERE id=?1 AND app_id=?2 AND revoked_at IS NULL", params![credential_id, app_id, now_ms()])?;
-    tx.execute("INSERT INTO __konae_ftps_credentials(id,app_id,username,destination,kind,user_id,label,salt,verifier,created_at,expires_at)
-        VALUES(?1,?2,?3,?4,'device',NULL,'rotated',?5,?6,?7,NULL)", params![id, app_id, name, destination, salt, verifier, now_ms()])?;
+    let next_generation = generation + 1;
+    let changed = tx.execute("UPDATE __konae_ftps_credentials SET salt=?3,verifier=?4,generation=?5,reserved_upload_id=NULL,reserved_at=NULL WHERE id=?1 AND app_id=?2 AND revoked_at IS NULL", params![credential_id, app_id, salt, verifier, next_generation])?;
+    ensure!(
+        changed == 1,
+        "FTPS device credential changed during rotation."
+    );
     tx.commit()?;
     Ok(Issued {
         credential: Credential {
-            id,
+            id: credential_id.into(),
             app_id: app_id.into(),
             username: name,
             destination,
             kind: "device".into(),
             user_id: None,
+            label: Some(label),
+            upload_id: None,
+            generation: next_generation,
             expires_at: None,
             salt,
             verifier,
@@ -219,7 +296,7 @@ pub(super) fn rotate_device(
 }
 
 pub(super) fn revoke(root: &Path, app_id: &str, credential_id: &str) -> Result<bool> {
-    let changed = database(root)?.execute("UPDATE __konae_ftps_credentials SET revoked_at=?3, reserved_upload_id=NULL, reserved_at=NULL WHERE id=?1 AND app_id=?2 AND revoked_at IS NULL", params![credential_id, app_id, now_ms()])?;
+    let changed = database(root, app_id)?.execute("UPDATE __konae_ftps_credentials SET revoked_at=?3, reserved_upload_id=NULL, reserved_at=NULL WHERE id=?1 AND app_id=?2 AND kind='device' AND revoked_at IS NULL", params![credential_id, app_id, now_ms()])?;
     Ok(changed == 1)
 }
 
@@ -231,14 +308,23 @@ fn map_credential(row: &rusqlite::Row<'_>) -> rusqlite::Result<Credential> {
         destination: row.get(3)?,
         kind: row.get(4)?,
         user_id: row.get(5)?,
-        expires_at: row.get(6)?,
-        salt: row.get(7)?,
-        verifier: row.get(8)?,
+        label: row.get(6)?,
+        upload_id: row.get(7)?,
+        generation: row.get(8)?,
+        expires_at: row.get(9)?,
+        salt: row.get(10)?,
+        verifier: row.get(11)?,
     })
 }
 
-pub(super) fn verify(root: &Path, username: &str, password: &str) -> Result<Option<Credential>> {
-    let credential = database(root)?.query_row("SELECT id,app_id,username,destination,kind,user_id,expires_at,salt,verifier FROM __konae_ftps_credentials WHERE username=?1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?2)", params![username, now_ms()], map_credential).optional()?;
+pub(super) fn verify(
+    root: &Path,
+    app_id: &str,
+    username: &str,
+    password: &str,
+) -> Result<Option<Credential>> {
+    let _ = recover(root, app_id)?;
+    let credential = database(root, app_id)?.query_row("SELECT id,app_id,username,destination,kind,user_id,label,upload_id,generation,expires_at,salt,verifier FROM __konae_ftps_credentials WHERE app_id=?1 AND username=?2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?3)", params![app_id, username, now_ms()], map_credential).optional()?;
     let Some(credential) = credential else {
         return Ok(None);
     };
@@ -246,49 +332,93 @@ pub(super) fn verify(root: &Path, username: &str, password: &str) -> Result<Opti
     Ok(bool::from(supplied.as_slice().ct_eq(credential.verifier.as_slice())).then_some(credential))
 }
 
+pub(super) fn authorized(
+    root: &Path,
+    app_id: &str,
+    credential: &Credential,
+    upload_id: &str,
+) -> Result<bool> {
+    let found: Option<bool> = database(root, app_id)?.query_row(
+        "SELECT (kind='device' OR user_id=?2) AND reserved_upload_id=?3 AND consumed_at IS NULL
+         FROM __konae_ftps_credentials WHERE id=?1 AND app_id=?4 AND generation=?5 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?6)",
+        params![credential.id, credential.user_id, upload_id, app_id, credential.generation, now_ms()], |row| row.get(0),
+    ).optional()?;
+    Ok(found.unwrap_or(false))
+}
+
+pub(super) fn ticket_status(
+    root: &Path,
+    upload_id: &str,
+    app_id: &str,
+    user_id: &str,
+) -> Result<Option<(bool, bool)>> {
+    database(root, app_id)?.query_row(
+        "SELECT expires_at<=?4,consumed_at IS NOT NULL FROM __konae_ftps_credentials WHERE upload_id=?1 AND app_id=?2 AND kind='member' AND user_id=?3",
+        params![upload_id, app_id, user_id, now_ms()], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(Into::into)
+}
+
 /// Reserves an upload atomically. Expired and revoked credentials cannot reserve.
 pub(super) fn reserve(
     root: &Path,
+    app_id: &str,
     id: &str,
+    generation: i64,
     upload_id: &str,
     user_id: Option<&str>,
 ) -> Result<bool> {
     let now = now_ms();
-    let changed = database(root)?.execute(
+    let changed = database(root, app_id)?.execute(
         "UPDATE __konae_ftps_credentials SET reserved_upload_id=?2,reserved_at=?3
-        WHERE id=?1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?3)
+        WHERE id=?1 AND app_id=?6 AND generation=?7 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?3)
         AND consumed_at IS NULL AND (kind='device' OR user_id=?4)
+        AND (kind='device' OR upload_id=?2)
         AND (reserved_upload_id IS NULL OR reserved_at<?5)",
-        params![id, upload_id, now, user_id, now - RESERVATION_TTL_MS],
+        params![id, upload_id, now, user_id, now - RESERVATION_TTL_MS, app_id, generation],
     )?;
     Ok(changed == 1)
 }
 
-pub(super) fn finish(root: &Path, id: &str, upload_id: &str, accepted: bool) -> Result<bool> {
+pub(super) fn finish(
+    root: &Path,
+    app_id: &str,
+    id: &str,
+    upload_id: &str,
+    accepted: bool,
+) -> Result<bool> {
     let now = now_ms();
-    let mut db = database(root)?;
+    let mut db = database(root, app_id)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let kind: Option<String> = tx.query_row("SELECT kind FROM __konae_ftps_credentials WHERE id=?1 AND reserved_upload_id=?2 AND revoked_at IS NULL", params![id, upload_id], |r| r.get(0)).optional()?;
+    let kind: Option<String> = tx.query_row("SELECT kind FROM __konae_ftps_credentials WHERE id=?1 AND app_id=?3 AND reserved_upload_id=?2 AND revoked_at IS NULL", params![id, upload_id, app_id], |r| r.get(0)).optional()?;
     let Some(kind) = kind else {
         return Ok(false);
     };
     if accepted && kind == "member" {
-        tx.execute("UPDATE __konae_ftps_credentials SET consumed_at=?3,reserved_upload_id=NULL,reserved_at=NULL WHERE id=?1 AND reserved_upload_id=?2 AND revoked_at IS NULL", params![id, upload_id, now])?;
+        tx.execute("UPDATE __konae_ftps_credentials SET consumed_at=?4,reserved_upload_id=NULL,reserved_at=NULL WHERE id=?1 AND app_id=?3 AND reserved_upload_id=?2 AND revoked_at IS NULL", params![id, upload_id, app_id, now])?;
     } else {
-        tx.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE id=?1 AND reserved_upload_id=?2 AND revoked_at IS NULL", params![id, upload_id])?;
+        tx.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE id=?1 AND app_id=?3 AND reserved_upload_id=?2 AND revoked_at IS NULL", params![id, upload_id, app_id])?;
     }
     tx.commit()?;
     Ok(true)
 }
 
-pub(super) fn recover(root: &Path) -> Result<usize> {
-    Ok(database(root)?.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE reserved_at IS NOT NULL AND reserved_at<?1", [now_ms() - RESERVATION_TTL_MS])?)
+pub(super) fn mark_receipt(root: &Path, app_id: &str, upload_id: &str) -> Result<bool> {
+    let changed = database(root, app_id)?.execute(
+        "UPDATE __konae_ftps_credentials SET consumed_at=COALESCE(consumed_at,?2),reserved_upload_id=NULL,reserved_at=NULL
+         WHERE app_id=?1 AND kind='member' AND upload_id=?3",
+        params![app_id, now_ms(), upload_id],
+    )?;
+    Ok(changed == 1)
+}
+
+pub(super) fn recover(root: &Path, app_id: &str) -> Result<usize> {
+    Ok(database(root, app_id)?.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE reserved_at IS NOT NULL AND reserved_at<?1", [now_ms() - RESERVATION_TTL_MS])?)
 }
 
 pub(super) fn list(root: &Path, app_id: &str) -> Result<Value> {
-    let db = database(root)?;
-    let mut statement = db.prepare("SELECT id,destination,kind,label,created_at,expires_at,revoked_at,consumed_at FROM __konae_ftps_credentials WHERE app_id=?1 ORDER BY created_at DESC")?;
-    let rows = statement.query_map([app_id], |row| Ok(json!({"credentialId":row.get::<_,String>(0)?,"destination":row.get::<_,String>(1)?,"kind":row.get::<_,String>(2)?,"label":row.get::<_,Option<String>>(3)?,"createdAt":row.get::<_,i64>(4)?,"expiresAt":row.get::<_,Option<i64>>(5)?,"revoked":row.get::<_,Option<i64>>(6)?.is_some(),"consumed":row.get::<_,Option<i64>>(7)?.is_some()})))?;
+    let db = database(root, app_id)?;
+    let mut statement = db.prepare("SELECT id,destination,label,created_at FROM __konae_ftps_credentials WHERE app_id=?1 AND kind='device' AND revoked_at IS NULL ORDER BY created_at DESC")?;
+    let rows = statement.query_map([app_id], |row| Ok(json!({"credentialId":row.get::<_,String>(0)?,"destination":row.get::<_,String>(1)?,"label":row.get::<_,Option<String>>(2)?,"createdAt":row.get::<_,i64>(3)?})))?;
     Ok(Value::Array(rows.collect::<rusqlite::Result<Vec<_>>>()?))
 }
 
@@ -304,8 +434,16 @@ mod tests {
     fn verifier_is_salted_and_credentials_are_scoped_revocable_and_one_shot() {
         let root = temp_root();
         let member = issue_member(&root, "app", "app", "photos", "user-1").unwrap();
+        assert_eq!(member.upload_id.as_deref().unwrap().len(), 36);
         assert_eq!(
-            verify(&root, &member.credential.username, &member.password)
+            crate::layout::secrets(&root, "app"),
+            root.join("apps/app/data/secrets.sqlite")
+        );
+        let debug = format!("{:?}", member.credential);
+        assert!(!debug.contains(&hex::encode(&member.credential.salt)));
+        assert!(!debug.contains(&hex::encode(&member.credential.verifier)));
+        assert_eq!(
+            verify(&root, "app", &member.credential.username, &member.password)
                 .unwrap()
                 .unwrap()
                 .user_id
@@ -313,26 +451,65 @@ mod tests {
             Some("user-1")
         );
         assert!(
-            verify(&root, &member.credential.username, "wrong")
+            verify(&root, "app", &member.credential.username, "wrong")
                 .unwrap()
                 .is_none()
         );
+        let upload_id = member.upload_id.as_deref().unwrap();
         assert!(
-            reserve(&root, &member.credential.id, "upload-a", Some("user-2")).unwrap() == false
+            !reserve(
+                &root,
+                "app",
+                &member.credential.id,
+                1,
+                upload_id,
+                Some("user-2")
+            )
+            .unwrap()
         );
-        assert!(reserve(&root, &member.credential.id, "upload-a", Some("user-1")).unwrap());
-        assert!(!reserve(&root, &member.credential.id, "upload-b", Some("user-1")).unwrap());
-        assert!(finish(&root, &member.credential.id, "upload-a", true).unwrap());
-        assert!(!reserve(&root, &member.credential.id, "upload-b", Some("user-1")).unwrap());
+        assert!(
+            reserve(
+                &root,
+                "app",
+                &member.credential.id,
+                1,
+                upload_id,
+                Some("user-1")
+            )
+            .unwrap()
+        );
+        assert!(
+            !reserve(
+                &root,
+                "app",
+                &member.credential.id,
+                1,
+                "another-ticket",
+                Some("user-1")
+            )
+            .unwrap()
+        );
+        assert!(finish(&root, "app", &member.credential.id, upload_id, true).unwrap());
+        assert!(
+            !reserve(
+                &root,
+                "app",
+                &member.credential.id,
+                1,
+                upload_id,
+                Some("user-1")
+            )
+            .unwrap()
+        );
 
         let device = create_device(&root, "app", "app", "meters", "field unit").unwrap();
-        assert!(reserve(&root, &device.credential.id, "device-a", None).unwrap());
-        assert!(finish(&root, &device.credential.id, "device-a", true).unwrap());
-        assert!(reserve(&root, &device.credential.id, "device-b", None).unwrap());
+        assert!(reserve(&root, "app", &device.credential.id, 1, "device-a", None).unwrap());
+        assert!(finish(&root, "app", &device.credential.id, "device-a", true).unwrap());
+        assert!(reserve(&root, "app", &device.credential.id, 1, "device-b", None).unwrap());
         assert!(revoke(&root, "app", &device.credential.id).unwrap());
-        assert!(!reserve(&root, &device.credential.id, "device-c", None).unwrap());
+        assert!(!reserve(&root, "app", &device.credential.id, 1, "device-c", None).unwrap());
         assert!(
-            verify(&root, &device.credential.username, &device.password)
+            verify(&root, "app", &device.credential.username, &device.password)
                 .unwrap()
                 .is_none()
         );
@@ -343,25 +520,37 @@ mod tests {
     fn abandoned_reservations_recover_and_rotation_invalidates_old_secret() {
         let root = temp_root();
         let device = create_device(&root, "app", "app", "meters", "sensor").unwrap();
-        assert!(reserve(&root, &device.credential.id, "pending", None).unwrap());
-        database(&root)
+        assert!(reserve(&root, "app", &device.credential.id, 1, "pending", None).unwrap());
+        database(&root, "app")
             .unwrap()
             .execute(
                 "UPDATE __konae_ftps_credentials SET reserved_at=0 WHERE id=?1",
                 [&device.credential.id],
             )
             .unwrap();
-        assert_eq!(recover(&root).unwrap(), 1);
+        assert_eq!(recover(&root, "app").unwrap(), 1);
         let rotated = rotate_device(&root, "app", "app", &device.credential.id).unwrap();
+        assert_eq!(rotated.credential.id, device.credential.id);
+        assert_eq!(rotated.credential.username, device.credential.username);
+        assert_eq!(rotated.credential.label, device.credential.label);
+        assert_eq!(
+            rotated.credential.generation,
+            device.credential.generation + 1
+        );
         assert!(
-            verify(&root, &device.credential.username, &device.password)
+            verify(&root, "app", &device.credential.username, &device.password)
                 .unwrap()
                 .is_none()
         );
         assert!(
-            verify(&root, &rotated.credential.username, &rotated.password)
-                .unwrap()
-                .is_some()
+            verify(
+                &root,
+                "app",
+                &rotated.credential.username,
+                &rotated.password
+            )
+            .unwrap()
+            .is_some()
         );
         let _ = std::fs::remove_dir_all(root);
     }

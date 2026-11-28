@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use serde::Deserialize;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thirtyftp::{
@@ -49,6 +50,7 @@ struct Settings {
     private_key: PathBuf,
     #[serde(default = "default_max_upload_bytes")]
     max_upload_bytes: u64,
+    #[serde(default)]
     credentials: Vec<Credential>,
 }
 
@@ -94,16 +96,34 @@ fn default_max_upload_bytes() -> u64 {
 
 #[derive(Clone)]
 struct BoundUser {
-    credential: Arc<Credential>,
+    legacy: Option<Arc<Credential>>,
+    managed: Option<credentials::Credential>,
     deployment: Arc<Deployment>,
 }
 
 impl fmt::Debug for BoundUser {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BoundUser")
-            .field("username", &self.credential.username)
-            .field("app_id", &self.credential.app_id)
-            .field("source_id", &self.credential.source_id)
+            .field(
+                "username",
+                &self
+                    .legacy
+                    .as_ref()
+                    .map(|credential| credential.username.as_str())
+                    .or_else(|| {
+                        self.managed
+                            .as_ref()
+                            .map(|credential| credential.username.as_str())
+                    }),
+            )
+            .field("app_id", &self.deployment.id)
+            .field(
+                "destination",
+                &self
+                    .managed
+                    .as_ref()
+                    .map(|credential| credential.destination.as_str()),
+            )
             .finish()
     }
 }
@@ -170,6 +190,28 @@ fn normalize_device_path(path: &FtpPath) -> std::result::Result<String, FsError>
     Ok(relative)
 }
 
+fn destination_path(
+    folder: Option<&str>,
+    relative_path: &str,
+) -> std::result::Result<String, FsError> {
+    let Some(folder) = folder else {
+        return Ok(relative_path.to_owned());
+    };
+    let prefix = Path::new(folder);
+    if prefix.is_absolute()
+        || prefix
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err(FsError::NameNotAllowed);
+    }
+    let combined = prefix.join(relative_path);
+    combined
+        .to_str()
+        .map(|path| path.replace('\\', "/"))
+        .ok_or(FsError::NameNotAllowed)
+}
+
 fn file_error(error: std::io::Error) -> FsError {
     FsError::from(error)
 }
@@ -228,25 +270,70 @@ impl Backend for BackendState {
         if !context.encrypted {
             return Err(LoginError::Incorrect);
         }
-        let Some(credential) = self.credentials.get(username) else {
-            return Err(LoginError::Incorrect);
-        };
-        let supplied = Sha256::digest(password.as_bytes());
-        let expected = Sha256::digest(credential.password.as_bytes());
-        if !bool::from(supplied.ct_eq(&expected)) {
-            return Err(LoginError::Incorrect);
+        if let Some(credential) = self.credentials.get(username) {
+            let supplied = Sha256::digest(password.as_bytes());
+            let expected = Sha256::digest(credential.password.as_bytes());
+            if !bool::from(supplied.ct_eq(&expected)) {
+                return Err(LoginError::Incorrect);
+            }
+            let deployment = self
+                .state
+                .deployments
+                .read()
+                .await
+                .values()
+                .find(|deployment| deployment.id == credential.app_id)
+                .cloned()
+                .ok_or(LoginError::Unavailable)?;
+            ensure_declared_source(&deployment, &credential.source_id)
+                .map_err(|_| LoginError::Unavailable)?;
+            return Ok(BoundUser {
+                legacy: Some(credential.clone()),
+                managed: None,
+                deployment: Arc::new(deployment),
+            });
         }
+        let app_key = username.split('.').nth(1).ok_or(LoginError::Incorrect)?;
         let deployment = self
             .state
             .deployments
             .read()
             .await
             .values()
-            .find(|deployment| deployment.id == credential.app_id)
+            .find(|deployment| deployment.id == app_key)
             .cloned()
             .ok_or(LoginError::Unavailable)?;
+        let managed =
+            credentials::verify(&self.state.data_root, &deployment.id, username, password)
+                .map_err(|_| LoginError::Unavailable)?
+                .ok_or(LoginError::Incorrect)?;
+        let target =
+            crate::ftps_declaration::published_destination(&deployment, &managed.destination)
+                .ok_or(LoginError::Unavailable)?;
+        let target_kind = match target.kind {
+            crate::ftps_declaration::DestinationKind::Member => "member",
+            crate::ftps_declaration::DestinationKind::Device => "device",
+        };
+        if target_kind != managed.kind {
+            return Err(LoginError::Unavailable);
+        }
+        if managed.kind == "member" {
+            if !crate::modules::is_on(&deployment.modules, "files") {
+                return Err(LoginError::Incorrect);
+            }
+            let user_id = managed.user_id.as_deref().ok_or(LoginError::Incorrect)?;
+            let accounts = crate::accounts::app_store(&self.state, &deployment)
+                .map_err(|_| LoginError::Unavailable)?;
+            if !accounts
+                .is_active(user_id)
+                .map_err(|_| LoginError::Unavailable)?
+            {
+                return Err(LoginError::Incorrect);
+            }
+        }
         Ok(BoundUser {
-            credential: credential.clone(),
+            legacy: None,
+            managed: Some(managed),
             deployment: Arc::new(deployment),
         })
     }
@@ -287,17 +374,179 @@ impl Backend for BackendState {
         data: &mut (dyn AsyncRead + Send + Unpin),
     ) -> std::result::Result<u64, FsError> {
         let relative_path = normalize_device_path(path)?;
+        if let Some(credential) = user
+            .managed
+            .as_ref()
+            .filter(|credential| credential.kind == "member")
+        {
+            let upload_id = credential
+                .upload_id
+                .as_deref()
+                .ok_or(FsError::PermissionDenied)?;
+            let user_id = credential
+                .user_id
+                .as_deref()
+                .ok_or(FsError::PermissionDenied)?;
+            if crate::files::ftps_upload_file_id(
+                &self.state.data_root,
+                &user.deployment.id,
+                user_id,
+                upload_id,
+            )
+            .map_err(|error| {
+                FsError::Local(format!("Could not check FTPS upload receipt: {error:#}"))
+            })?
+            .is_some()
+            {
+                return Err(FsError::PermissionDenied);
+            }
+        }
         let (staged, bytes) = stage(data, &self.staging, self.max_upload_bytes).await?;
-        crate::file_intake::accept_staged(
-            &self.state,
-            &user.deployment,
-            &user.credential.source_id,
-            &staged.path,
-            &relative_path,
-            None,
-        )
-        .await
-        .map_err(|error| FsError::Local(format!("Intake did not accept the upload: {error:#}")))?;
+        if let Some(legacy) = &user.legacy {
+            crate::file_intake::accept_staged(
+                &self.state,
+                &user.deployment,
+                &legacy.source_id,
+                &staged.path,
+                &relative_path,
+                None,
+            )
+            .await
+            .map_err(|error| {
+                FsError::Local(format!("Intake did not accept the upload: {error:#}"))
+            })?;
+        } else if let Some(credential) = &user.managed {
+            let declaration = crate::ftps_declaration::published_destination(
+                &user.deployment,
+                &credential.destination,
+            )
+            .ok_or_else(|| FsError::PermissionDenied)?;
+            let expected_kind = match declaration.kind {
+                crate::ftps_declaration::DestinationKind::Member => "member",
+                crate::ftps_declaration::DestinationKind::Device => "device",
+            };
+            if credential.kind != expected_kind {
+                return Err(FsError::PermissionDenied);
+            }
+            let relative_path = destination_path(declaration.folder.as_deref(), &relative_path)?;
+            let upload_id = credential
+                .upload_id
+                .clone()
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let root = self.state.data_root.clone();
+            let app_id = user.deployment.id.clone();
+            let owner_id = credential.user_id.clone();
+            if !credentials::reserve(
+                &root,
+                &app_id,
+                &credential.id,
+                credential.generation,
+                &upload_id,
+                owner_id.as_deref(),
+            )
+            .map_err(|error| FsError::Local(format!("Could not reserve FTPS upload: {error:#}")))?
+            {
+                return Err(FsError::PermissionDenied);
+            }
+            let auth_root = root.clone();
+            let auth_app = app_id.clone();
+            let auth_credential = credential.clone();
+            let auth_upload = upload_id.clone();
+            let auth_state = self.state.clone();
+            let auth_deployment = user.deployment.clone();
+            let auth_destination = credential.destination.clone();
+            let auth_kind = credential.kind.clone();
+            let auth_folder = declaration.folder.clone();
+            let authorize = move || -> Result<()> {
+                ensure!(
+                    credentials::authorized(&auth_root, &auth_app, &auth_credential, &auth_upload)?,
+                    "FTPS credential was revoked or rotated."
+                );
+                ensure!(
+                    crate::maintenance::pause(&auth_state.data_root, &auth_app).is_none(),
+                    "FTPS uploads are paused while the app is in maintenance."
+                );
+                let current = auth_state
+                    .deployments
+                    .try_read()
+                    .ok()
+                    .and_then(|deployments| {
+                        deployments
+                            .values()
+                            .find(|current| {
+                                current.id == auth_app
+                                    && current.project_id == auth_deployment.project_id
+                            })
+                            .cloned()
+                    })
+                    .context("FTPS upload Deployment is no longer active.")?;
+                ensure!(
+                    current.artifact_version == auth_deployment.artifact_version,
+                    "FTPS upload Deployment changed during the transfer."
+                );
+                let current_destination =
+                    crate::ftps_declaration::published_destination(&current, &auth_destination)
+                        .context("FTPS destination is no longer published.")?;
+                ensure!(
+                    current_destination.folder == auth_folder,
+                    "FTPS destination folder changed during the transfer."
+                );
+                let current_kind = match current_destination.kind {
+                    crate::ftps_declaration::DestinationKind::Member => "member",
+                    crate::ftps_declaration::DestinationKind::Device => "device",
+                };
+                ensure!(
+                    current_kind == auth_kind,
+                    "FTPS destination kind changed during the transfer."
+                );
+                if let Some(owner_id) = auth_credential.user_id.as_deref() {
+                    ensure!(
+                        crate::modules::is_on(&current.modules, "files"),
+                        "The Files module is off."
+                    );
+                    ensure!(
+                        crate::accounts::app_store(&auth_state, &current)?.is_active(owner_id)?,
+                        "Only an active app account can upload FTPS files."
+                    );
+                }
+                Ok(())
+            };
+            let accepted = match expected_kind {
+                "member" => crate::files::accept_ftps_staged(
+                    &self.state,
+                    &user.deployment,
+                    &upload_id,
+                    owner_id.as_deref().unwrap_or_default(),
+                    &relative_path,
+                    &staged.path,
+                    authorize,
+                )
+                .await
+                .map(|_| ()),
+                _ => crate::file_intake::accept_ftps_staged(
+                    &self.state,
+                    &user.deployment,
+                    &credential.destination,
+                    &staged.path,
+                    &relative_path,
+                    &upload_id,
+                    authorize,
+                )
+                .await
+                .map(|_| ()),
+            };
+            match accepted {
+                Ok(()) => {
+                    let _ = credentials::finish(&root, &app_id, &credential.id, &upload_id, true);
+                }
+                Err(error) => {
+                    let _ = credentials::finish(&root, &app_id, &credential.id, &upload_id, false);
+                    return Err(FsError::Local(format!(
+                        "FTPS destination refused the upload: {error:#}"
+                    )));
+                }
+            }
+        }
         Ok(bytes)
     }
 
@@ -613,10 +862,6 @@ fn validate(settings: &Settings) -> Result<()> {
         settings.max_upload_bytes > 0,
         "FTPS maxUploadBytes must be greater than zero."
     );
-    ensure!(
-        !settings.credentials.is_empty(),
-        "FTPS settings need at least one credential."
-    );
     let mut usernames = std::collections::HashSet::new();
     for credential in &settings.credentials {
         ensure!(
@@ -744,6 +989,242 @@ pub fn configured_status(data_root: &Path) -> Result<serde_json::Value> {
     }))
 }
 
+fn endpoint_for_credentials(data_root: &Path) -> Result<(String, u16)> {
+    let path = data_root.join(SETTINGS_FILE);
+    ensure!(path.is_file(), "FTPS listener is not configured.");
+    ensure_settings_private(&path)?;
+    let settings: Settings = serde_json::from_slice(&std::fs::read(path)?)?;
+    validate(&settings)?;
+    let bound = settings
+        .bind
+        .parse::<std::net::SocketAddr>()
+        .context("FTPS bind must be an IP socket address to derive advertised defaults.")?;
+    Ok(advertised_endpoint(&settings, bound))
+}
+
+fn credential_result(issued: credentials::Issued, host: &str, port: u16) -> Value {
+    let credential = issued.credential;
+    let mut result = json!({
+        "credentialId": credential.id,
+        "host": host,
+        "port": port,
+        "username": credential.username,
+        "password": issued.password,
+    });
+    if let Some(expires_at) = credential.expires_at {
+        result["expiresAt"] = json!(expires_at);
+    }
+    if let Some(upload_id) = issued.upload_id {
+        result["uploadId"] = json!(upload_id);
+    }
+    result
+}
+
+fn declaration_destinations(deployment: &Deployment) -> Value {
+    deployment
+        .manifest
+        .get("ftps")
+        .and_then(|ftps| ftps.get("destinations"))
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+}
+
+fn owner_list(state: &AppState, deployment: &Deployment) -> Result<Value> {
+    Ok(json!({
+        "projectId": deployment.project_id,
+        "destinations": declaration_destinations(deployment),
+        "credentials": credentials::list(&state.data_root, &deployment.id)?,
+    }))
+}
+
+async fn active_deployment(state: &AppState, observed: &Deployment) -> Result<Deployment> {
+    state
+        .deployments
+        .read()
+        .await
+        .values()
+        .find(|current| {
+            current.id == observed.id
+                && current.project_id == observed.project_id
+                && current.artifact_version == observed.artifact_version
+        })
+        .cloned()
+        .context("Deployment changed or stopped while handling FTPS credentials.")
+}
+
+/// Issues one short-lived FTPS ticket for an authenticated app account.
+pub async fn issue_member_upload(
+    state: &AppState,
+    deployment: &Deployment,
+    user_id: &str,
+    destination: &str,
+) -> Result<Value> {
+    ensure!(
+        !user_id.is_empty(),
+        "An app account is required for FTPS uploads."
+    );
+    let (host, port) = endpoint_for_credentials(&state.data_root)?;
+    let _lock = crate::database_lock(state, &deployment.id).await;
+    let active = active_deployment(state, deployment).await?;
+    crate::modules::require_on(&active.modules, "files")?;
+    let target = crate::ftps_declaration::published_destination(&active, destination)
+        .context("FTPS destination not found.")?;
+    ensure!(
+        matches!(
+            target.kind,
+            crate::ftps_declaration::DestinationKind::Member
+        ),
+        "FTPS destination requires an app user."
+    );
+    let _identity = crate::database_lock(state, &format!("identity:{}", active.id)).await;
+    ensure!(
+        crate::accounts::app_store(state, &active)?.is_active(user_id)?,
+        "Only an active app account can request an FTPS upload."
+    );
+    let issued = credentials::issue_member(
+        &state.data_root,
+        &active.id,
+        &active.id,
+        destination,
+        user_id,
+    )?;
+    ensure!(
+        credentials::verify(
+            &state.data_root,
+            &active.id,
+            &issued.credential.username,
+            &issued.password
+        )?
+        .is_some(),
+        "FTPS credential read-back failed."
+    );
+    Ok(credential_result(issued, &host, port))
+}
+
+/// Reads a member ticket's status from the Files receipt, which is authoritative after a crash.
+pub async fn member_upload_status(
+    state: &AppState,
+    deployment: &Deployment,
+    user_id: &str,
+    upload_id: &str,
+) -> Result<Value> {
+    let _lock = crate::database_lock(state, &deployment.id).await;
+    let active = active_deployment(state, deployment).await?;
+    ensure!(
+        credentials::ticket_status(&state.data_root, upload_id, &active.id, user_id)?.is_some(),
+        "FTPS upload not found."
+    );
+    crate::files::reconcile_ftps_uploads(state, &active).await?;
+    let (expired, consumed) =
+        credentials::ticket_status(&state.data_root, upload_id, &active.id, user_id)?
+            .context("FTPS upload not found.")?;
+    let file_id =
+        crate::files::ftps_upload_file_id(&state.data_root, &active.id, user_id, upload_id)?;
+    if file_id.is_some() {
+        let _ = credentials::mark_receipt(&state.data_root, &active.id, upload_id)?;
+        return Ok(json!({"uploadId": upload_id, "status": "complete", "fileId": file_id}));
+    }
+    if consumed {
+        return Ok(json!({"uploadId": upload_id, "status": "complete"}));
+    }
+    if expired {
+        return Ok(json!({"uploadId": upload_id, "status": "expired"}));
+    }
+    Ok(json!({"uploadId": upload_id, "status": "pending"}))
+}
+
+/// Runs owner operations after the MCP layer has checked manage_users.
+pub async fn owner_credentials_call(
+    state: &AppState,
+    deployment: &Deployment,
+    tool: &str,
+    input: &Value,
+) -> Result<Value> {
+    ensure!(
+        input.get("projectId").and_then(Value::as_str) == Some(deployment.project_id.as_str()),
+        "Project not found or access denied."
+    );
+    match tool {
+        "ftps_credentials_list" => owner_list(state, &active_deployment(state, deployment).await?),
+        "ftps_device_create" => {
+            let destination = input["destination"]
+                .as_str()
+                .context("destination is required.")?;
+            let label = input["label"].as_str().context("label is required.")?;
+            ensure!(
+                !label.trim().is_empty() && label.len() <= 80,
+                "FTPS device label must contain 1 to 80 bytes."
+            );
+            let (host, port) = endpoint_for_credentials(&state.data_root)?;
+            let _lock = crate::database_lock(state, &deployment.id).await;
+            let active = active_deployment(state, deployment).await?;
+            let target = crate::ftps_declaration::published_destination(&active, destination)
+                .context("FTPS destination not found.")?;
+            ensure!(
+                matches!(
+                    target.kind,
+                    crate::ftps_declaration::DestinationKind::Device
+                ),
+                "FTPS destination requires an app account."
+            );
+            let issued = credentials::create_device(
+                &state.data_root,
+                &active.id,
+                &active.id,
+                destination,
+                label,
+            )?;
+            let response = credential_result(issued, &host, port);
+            ensure!(
+                owner_list(state, &active)?["credentials"]
+                    .as_array()
+                    .is_some_and(|items| items
+                        .iter()
+                        .any(|item| item["credentialId"] == response["credentialId"])),
+                "FTPS credential read-back failed."
+            );
+            Ok(response)
+        }
+        "ftps_device_rotate" => {
+            let id = input["credentialId"]
+                .as_str()
+                .context("credentialId is required.")?;
+            let (host, port) = endpoint_for_credentials(&state.data_root)?;
+            let _lock = crate::database_lock(state, &deployment.id).await;
+            let active = active_deployment(state, deployment).await?;
+            let issued = credentials::rotate_device(&state.data_root, &active.id, &active.id, id)?;
+            let response = credential_result(issued, &host, port);
+            ensure!(
+                owner_list(state, &active)?["credentials"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|item| item["credentialId"] == id)),
+                "FTPS credential read-back failed."
+            );
+            Ok(response)
+        }
+        "ftps_credential_revoke" => {
+            let id = input["credentialId"]
+                .as_str()
+                .context("credentialId is required.")?;
+            let _lock = crate::database_lock(state, &deployment.id).await;
+            let active = active_deployment(state, deployment).await?;
+            ensure!(
+                credentials::revoke(&state.data_root, &active.id, id)?,
+                "FTPS credential not found."
+            );
+            let readback = owner_list(state, &active)?;
+            ensure!(
+                !readback["credentials"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|item| item["credentialId"] == id)),
+                "FTPS credential revocation did not persist."
+            );
+            Ok(json!({"credentialId": id, "revoked": true}))
+        }
+        _ => anyhow::bail!("Unknown FTPS credential operation."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,5 +1309,18 @@ mod tests {
             advertised_endpoint(&settings, "127.0.0.1:2121".parse().unwrap()),
             ("127.0.0.1".into(), 2121)
         );
+    }
+
+    #[test]
+    fn settings_allow_only_database_managed_credentials() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "bind": "127.0.0.1:2121",
+            "passivePorts": [31000, 31010],
+            "certificate": "cert.pem",
+            "privateKey": "key.pem"
+        }))
+        .unwrap();
+        validate(&settings).unwrap();
+        assert!(settings.credentials.is_empty());
     }
 }
