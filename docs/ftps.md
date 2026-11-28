@@ -74,6 +74,8 @@ The listener stages bytes in a private installation directory. It confirms only 
 
 The destination declaration travels with the app folder. Use `konae pull` to bring the published app declaration into a local folder, then use `konae export` or the app-folder export to carry it to another installation. The receiving operator configures that installation's listener and TLS settings. Device credentials remain in the installation's private secrets database. Issue new credentials there, or rotate them when a team or device changes.
 
+Use a Kernel that supports member FTPS uploads when you move an app with those files. It restores their owner-only access alongside their bytes.
+
 ## Legacy intake credentials
 
 Installations that already use the legacy `credentials` entries in `$KONAE_DATA_DIR/ftps.json` keep working. Those entries bind a username and password to a published `file-intake` source. Keep them as a migration path while replacing each binding with a destination declaration and an owner-issued device credential. The legacy format does not provide the new app-scoped lifecycle or one-time password handling.

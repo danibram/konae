@@ -160,7 +160,8 @@ pub fn data_versions_for_components<'a>(components: impl IntoIterator<Item = &'a
 pub fn check_data_versions(versions: &BTreeMap<String, u64>) -> Result<()> {
     for (module, version) in versions {
         let expected = data_version(module).with_context(|| format!("The package names unknown module data {module}."))?;
-        ensure!(*version == expected, "Module {module} data version {version} is not supported. This Kernel reads version {expected}.");
+        let legacy_files = module == "files" && *version == 1 && expected == 2;
+        ensure!(*version == expected || legacy_files, "Module {module} data version {version} is not supported. This Kernel reads version {expected}.");
     }
     Ok(())
 }
@@ -894,6 +895,9 @@ mod tests {
     fn data_versions_are_portable_and_reject_unknown_or_incompatible_state() {
         let current = data_versions();
         assert!(check_data_versions(&current).is_ok());
+        let mut legacy = current.clone();
+        legacy.insert("files".into(), 1);
+        assert!(check_data_versions(&legacy).is_ok());
         let mut unknown = current.clone();
         unknown.insert("future-private".into(), 1);
         assert!(check_data_versions(&unknown).unwrap_err().to_string().contains("unknown module data future-private"));
