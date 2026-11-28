@@ -401,3 +401,75 @@ async fn a_visitor_is_asked_to_sign_in_on_a_private_app_and_told_not_found_on_a_
     }
     let _ = tokio::fs::remove_dir_all(root).await;
 }
+
+#[tokio::test]
+async fn ftps_journal_recovers_pending_and_keeps_consumption_after_delete() {
+    ftps_journal_recovery(false).await;
+    ftps_journal_recovery(true).await;
+}
+
+async fn ftps_journal_recovery(s3: bool) {
+    let root = std::env::temp_dir().join(format!("konae-ftps-journal-{}", Uuid::new_v4()));
+    let (mut state, visitor) = login_on(&root, "public", s3).await;
+    let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+    let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
+    let (bob, _) = signed_in(&state, &deployment.id, &visitor, "bob@example.test");
+    let owner_id = crate::authenticate_deployment(&state, &deployment, &alice).await.unwrap().unwrap().user_id;
+    assert_eq!(response_json(list_files(State(state.clone()), visitor.clone()).await).await["result"], json!([]));
+    assert!(!crate::layout::database(&root, &deployment.id).exists());
+    let upload_id = Uuid::new_v4().to_string();
+    let staged = root.join("stage.bin");
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    tokio::fs::write(&staged, b"journal bytes").await.unwrap();
+    let (first, second) = tokio::join!(
+        accept_ftps_staged(&state, &deployment, &upload_id, &owner_id, "photos/a.bin", &staged, || anyhow::Ok(())),
+        accept_ftps_staged(&state, &deployment, &upload_id, &owner_id, "photos/a.bin", &staged, || anyhow::Ok(())),
+    );
+    let file_id = first.unwrap();
+    assert_eq!(second.unwrap(), file_id);
+    let database = crate::layout::database(&root, &deployment.id);
+    let db = Connection::open(&database).unwrap();
+    db.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0)).unwrap();
+    drop(db);
+    let _ = list_files(State(state.clone()), visitor.clone()).await;
+    let db = Connection::open(&database).unwrap();
+    assert_eq!(db.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0)).unwrap().to_ascii_lowercase(), "wal");
+
+    let before_rejections = state.files.store.list(&deployment.id).await.unwrap().len();
+    assert!(accept_ftps_staged(&state, &deployment, &Uuid::new_v4().to_string(), &owner_id, "photos/rejected.bin", &staged, || anyhow::bail!("suspended")).await.is_err());
+    assert_eq!(state.files.store.list(&deployment.id).await.unwrap().len(), before_rejections);
+    let original_limits = state.files.limits;
+    state.files.limits.quota_bytes = 0;
+    assert!(accept_ftps_staged(&state, &deployment, &Uuid::new_v4().to_string(), &owner_id, "photos/full.bin", &staged, || anyhow::Ok(())).await.is_err());
+    state.files.limits = original_limits;
+    assert_eq!(state.files.store.list(&deployment.id).await.unwrap().len(), before_rejections);
+
+    let db = Connection::open(crate::layout::database(&root, &deployment.id)).unwrap();
+    db.execute("UPDATE __konae_ftps_uploads SET state='pending' WHERE upload_id=?1", [&upload_id]).unwrap();
+    let files_dir = crate::layout::files(&root, &deployment.id);
+    let mut index: Vec<Value> = serde_json::from_slice(&tokio::fs::read(files_dir.join("index.json")).await.unwrap()).unwrap();
+    index.retain(|file| file["id"] != file_id);
+    tokio::fs::write(files_dir.join("index.json"), serde_json::to_vec(&index).unwrap()).await.unwrap();
+    assert_eq!(ftps_upload_file_id(&root, &deployment.id, &owner_id, &upload_id).unwrap().as_deref(), Some(file_id.as_str()));
+    assert!(crate::file_store::file_index_references_in(&files_dir).unwrap().iter().any(|(id, size)| id == &file_id && *size == b"journal bytes".len() as u64));
+    {
+        let _guard = database_lock(&state, &deployment.id).await;
+        reconcile_ftps_uploads(&state, &deployment).await.unwrap();
+    }
+    let recovered = find_file_metadata(&state, &deployment.id, &file_id).await.unwrap();
+    assert_eq!(recovered["ownerOnly"], true);
+    let mut shared = deployment.clone();
+    shared.modules.get_mut("files").unwrap()["fileAccess"] = json!("app-users");
+    assert!(file_readable(&shared, &recovered, Some(&owner_id)));
+    assert!(!file_readable(&shared, &recovered, Some("another-user")));
+    assert_eq!(serve_file(State(state.clone()), AxumPath(file_id.clone()), bob).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(delete_file(&state, &alice, &file_id).await.status(), StatusCode::OK);
+    assert_eq!(ftps_upload_file_id(&root, &deployment.id, &owner_id, &upload_id).unwrap().as_deref(), Some(file_id.as_str()));
+    assert_eq!(accept_ftps_staged(&state, &deployment, &upload_id, &owner_id, "photos/a.bin", &staged, || anyhow::bail!("receipt already consumed")).await.unwrap(), file_id);
+    {
+        let _guard = database_lock(&state, &deployment.id).await;
+        reconcile_ftps_uploads(&state, &deployment).await.unwrap();
+    }
+    assert!(find_file_metadata(&state, &deployment.id, &file_id).await.is_none());
+    let _ = tokio::fs::remove_dir_all(root).await;
+}

@@ -624,12 +624,32 @@ pub async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<
 
 pub(crate) fn file_index_references_in(directory: &Path) -> Result<Vec<(String, u64)>> {
     let path = directory.join("index.json");
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    let mut references = match std::fs::read(&path) {
+        Ok(bytes) => parse_indexed_files(&bytes, &path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error.into()),
     };
-    parse_indexed_files(&bytes, &path)
+    let database = directory.parent().map(|parent| parent.join("database.sqlite"));
+    if let Some(database) = database.filter(|path| path.is_file()) {
+        let connection = rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let has_journal: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='__konae_ftps_uploads')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_journal {
+            let mut statement = connection.prepare("SELECT file_id,metadata_json FROM __konae_ftps_uploads WHERE state='pending'")?;
+            let pending = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, metadata) in pending {
+                if references.iter().any(|(existing, _)| existing == &id) { continue; }
+                let metadata: serde_json::Value = serde_json::from_str(&metadata)?;
+                let size = metadata["size"].as_u64().context("Pending FTPS receipt has no size.")?;
+                references.push((id, size));
+            }
+        }
+    }
+    Ok(references)
 }
 
 pub(crate) fn parse_indexed_files(bytes: &[u8], path: &Path) -> Result<Vec<(String, u64)>> {

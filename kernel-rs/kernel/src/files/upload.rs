@@ -139,6 +139,9 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
     let directory = crate::layout::files(&state.data_root, &deployment.id);
     {
         let _guard = database_lock(state, &deployment.id).await;
+        if let Err(e) = reconcile_ftps_uploads(state, &deployment).await {
+            return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        }
         match read_file_index(&directory).await {
             Ok(files) => {
                 if let Some(refused) = file_room(state, &deployment.id, &files, size).await {
@@ -171,6 +174,9 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
     });
     let indexed = async {
         let _guard = database_lock(state, &deployment.id).await;
+        if let Err(e) = reconcile_ftps_uploads(state, &deployment).await {
+            return Err(error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()));
+        }
         tokio::fs::create_dir_all(&directory)
             .await
             .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;

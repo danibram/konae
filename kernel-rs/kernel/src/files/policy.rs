@@ -41,7 +41,7 @@ pub fn file_view(deployment: &Deployment, file: &Value, actor_id: Option<&str>) 
     if let Some(object) = view.as_object_mut() {
         object.remove("url");
         object.remove("sha256");
-        if app_user_files(deployment) {
+        if app_user_files(deployment) && file.get("ownerOnly").and_then(Value::as_bool) != Some(true) {
             object.insert("visibility".into(), json!("app-users"));
         }
         if file_owner(file) != actor_id {

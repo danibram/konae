@@ -251,6 +251,7 @@ pub async fn export(
         let _data = database_lock(state, &deployment.id).await;
         crate::modules::prepare_transfer(state, &id)?;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
+        crate::files::reconcile_ftps_uploads(state, &deployment).await?;
         if crate::modules::is_on(&deployment.modules, "auth") {
             open_auth(state, &deployment)?;
         }

@@ -1976,9 +1976,16 @@ async fn read_file_as_key(
     if files::app_user_files(deployment) || !files::valid_file_id(id) {
         return not_found();
     }
+    {
+        let _guard = crate::database_lock(state, &deployment.id).await;
+        if crate::files::reconcile_ftps_uploads(state, deployment).await.is_err() {
+            return not_found();
+        }
+    }
     let Some(metadata) = files::find_file_metadata(state, &deployment.id, id).await else {
         return not_found();
     };
+    if metadata["ownerOnly"] == true { return not_found(); }
     if !key_reads(
         key,
         files::file_visibility(&metadata),

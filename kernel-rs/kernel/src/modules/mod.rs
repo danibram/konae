@@ -893,6 +893,7 @@ mod tests {
 
     #[test]
     fn data_versions_are_portable_and_reject_unknown_or_incompatible_state() {
+        assert!(is_reserved_name("__konae_ftps_uploads"));
         let current = data_versions();
         assert!(check_data_versions(&current).is_ok());
         let mut legacy = current.clone();
