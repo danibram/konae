@@ -114,6 +114,10 @@ Two writes answer with their own observation, so no second call follows them. `t
 | `secret_delete` | `secrets_list` |
 | `api_keys_create` | `api_keys_list` |
 | `api_keys_revoke` | `api_keys_list` |
+| `ftps_device_create` | `ftps_credentials_list` |
+| `ftps_device_rotate` | `ftps_credentials_list` |
+| `ftps_credential_revoke` | `ftps_credentials_list` |
+| `ftps_upload_create` | `ftps_upload_status` |
 | `release_apply` | `project_inspect` |
 | `app_invitations_create` | `app_invitations_list` |
 | `app_invitation_resend` | `app_invitations_list` |

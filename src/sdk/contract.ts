@@ -792,7 +792,7 @@ export const sdkContract = {
       },
       calls: [],
       declarations: [{ file: "file-intake.json", key: "sources", summary: "Declare the sources the app accepts and optional SQL consumers. Consumers receive version metadata." }],
-      notes: ["Read docs/file-intake.md to rehearse acceptance and docs/ftps.md to bind a receiver."],
+      notes: ["Read docs/file-intake.md for intake acceptance and docs/ftps.md for FTPS destinations and listener setup."],
     },
   ],
 } as const satisfies SdkContract;

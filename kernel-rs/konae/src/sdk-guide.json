@@ -1456,7 +1456,7 @@
       "summary": "Accepts immutable file versions from declared sources and queues declared app consumers.",
       "switch": true,
       "notes": [
-        "Read docs/file-intake.md to rehearse acceptance and docs/ftps.md to bind a receiver."
+        "Read docs/file-intake.md for intake acceptance and docs/ftps.md for FTPS destinations and listener setup."
       ],
       "declarations": [
         {

@@ -104,10 +104,9 @@ function FtpsCard({ deploymentId, onSignedOut }: { deploymentId: string; onSigne
       <p className="access-note">Issue a credential for a device destination. It can upload more than one file. Konae shows each password once.</p>
       {error && <div className="access-error" role="alert">{error}</div>}
       {notice && <p className="access-note" role="status">{notice}</p>}
-      {!listed ? <LoadingBlock label="Loading FTPS credentials" rows={2} /> : devices.length === 0
-        ? <p className="access-note">This app declares no device destinations in app/ftps.json.</p>
-        : <>
-          {credentials.length === 0 ? <p className="access-note">No device credentials.</p> : (
+      {!listed ? !error && <LoadingBlock label="Loading FTPS credentials" rows={2} /> : <>
+          {devices.length === 0 && <p className="access-note">Publish a device destination in app/ftps.json to issue new credentials.</p>}
+          {credentials.length === 0 ? devices.length > 0 && <p className="access-note">No device credentials.</p> : (
             <ul className="access-keys" aria-label="Device credentials">
               {credentials.map((credential) => (
                 <li key={credential.credentialId}>
@@ -116,7 +115,7 @@ function FtpsCard({ deploymentId, onSignedOut }: { deploymentId: string; onSigne
                     <code>{credential.credentialId}</code>
                     <small>{credential.destination}{credential.createdAt ? ` · Created ${new Date(credential.createdAt).toLocaleDateString()}` : ""}</small>
                     <span className="access-row-actions">
-                      <Button size="sm" loading={saving} disabled={saving} onClick={() => void issue(() => rotateFtpsDevice(deploymentId, credential.credentialId))}>Rotate</Button>
+                      <Button size="sm" loading={saving} disabled={saving || listed.destinations[credential.destination]?.kind !== "device"} onClick={() => void issue(() => rotateFtpsDevice(deploymentId, credential.credentialId))}>Rotate</Button>
                       <Button size="sm" variant="ghost" disabled={saving} onClick={() => confirm.ask({
                         title: `Revoke ${credential.label}?`,
                         description: "This device will no longer be able to upload with this credential.",
@@ -138,12 +137,12 @@ function FtpsCard({ deploymentId, onSignedOut }: { deploymentId: string; onSigne
               ))}
             </ul>
           )}
-          <fieldset className="access-create">
+          {devices.length > 0 && <fieldset className="access-create">
             <legend>New device credential</legend>
             <Field label="Destination"><Select value={destination} onChange={(event) => setDestination(event.target.value)}>{devices.map(([name, item]) => <option key={name} value={name}>{name}{item.folder ? ` · ${item.folder}` : ""}</option>)}</Select></Field>
             <Field label="Label" help="Name the device that will use this credential."><Input value={label} maxLength={80} onChange={(event) => setLabel(event.target.value)} /></Field>
             <div className="access-actions"><Button variant="primary" size="sm" loading={saving} disabled={saving || !destination || !label.trim()} onClick={create}><Plus size={13} /> Create device credential</Button></div>
-          </fieldset>
+          </fieldset>}
         </>}
       {confirm.dialog}
       {revealed && <Dialog title="Copy this FTPS password now" description="Konae cannot show this password again after you close this dialog." onClose={() => setRevealed(null)} footer={<Button variant="primary" onClick={() => setRevealed(null)}>I copied the password</Button>}>

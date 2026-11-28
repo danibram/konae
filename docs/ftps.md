@@ -29,15 +29,17 @@ A device `folder` is an optional normalized relative path. It cannot start with 
 
 Turn on `auth` and `files` for member destinations. A member credential is temporary and belongs to one upload. The app's runtime MCP provides `ftps_upload_create { destination }` and `ftps_upload_status { uploadId }`. The create response contains `credentialId`, `host`, `port`, `username`, `password`, optional `expiresAt` and optional `uploadId`. The status response never contains the password.
 
-An owner with `manage_users` can call `ftps_credentials_list { projectId }`, `ftps_device_create { projectId, destination, label }`, `ftps_device_rotate { projectId, credentialId }` and `ftps_credential_revoke { projectId, credentialId }`. Create and rotate return a password once. List, revoke and upload status never return one. Read `ftps_credentials_list` after an owner-side change to confirm it. Read `ftps_upload_status` after a member upload to confirm its result.
+Call the member tools from the app's own origin and with its current app session. Send a `tools/call` request to `/_konae/mcp`, using the app's base path when it has a path address. Keep the returned `uploadId` to check the result after the client uploads.
 
-Konae stores salted password hashes in the private `data/secrets.sqlite` database, outside the app package. Audit records and conversation history must not contain passwords. The agent must not ask for a password or store one in chat.
+After publishing a device destination, open **Access > Integrations > FTPS device credentials** in the editor. An owner with `manage_users` can also call `ftps_credentials_list { projectId }`, `ftps_device_create { projectId, destination, label }`, `ftps_device_rotate { projectId, credentialId }` and `ftps_credential_revoke { projectId, credentialId }` through the owner's MCP. Create and rotate return a password once. List and revoke return credential metadata. Read `ftps_credentials_list` after a change to confirm it.
+
+Konae stores salted password hashes in the private `data/secrets.sqlite` database, outside the app package. Copy one-time passwords to the FTPS client when Konae shows them.
 
 ## Configure the installation
 
 Create `$KONAE_DATA_DIR/ftps.json` with mode `0600`. Store the certificate and private key under the installation data directory, outside app folders. Keep the private key readable only by the installation owner.
 
-The installation file configures the listener bind address, passive port range, certificate, private key and upload limits. `advertisedHost` and `advertisedPort` are optional. Set them when clients connect through a proxy, NAT or a public port that differs from the listener's bind address. The listener uses explicit TLS. Clients must issue `AUTH TLS` for control and `PROT P` for file data.
+The installation file configures the listener bind address, passive port range, certificate, private key and upload limits. `advertisedHost` and `advertisedPort` set the control address Konae returns with a credential. Set `passiveHost` when a NAT or proxy requires the listener to announce a different passive data address. Clients use explicit TLS with `AUTH TLS` for control and `PROT P` for file data.
 
 ```json
 {
@@ -53,7 +55,7 @@ The installation file configures the listener bind address, passive port range, 
 
 Open the control port and the full passive port range in the host firewall and any router. If the service runs in a container, publish those ports to the Kernel container. The operator owns TLS certificates, port exposure, listener limits and any advertised address. App owners manage destination declarations and device credentials through the app tools.
 
-Changing installation listener settings requires a Kernel restart. Destination and credential changes take effect on the running listener without a restart or app publish. Rotating a device credential invalidates its previous password. Revoking it stops new logins.
+Restart the Kernel to apply changes to the installation file. Publish the app to apply changes to its destinations. Creating, rotating, and revoking a credential takes effect on the running listener. Rotation invalidates the previous password.
 
 ## Connect and upload
 
@@ -61,21 +63,17 @@ Use an FTPS client that trusts the configured certificate. Do not put the passwo
 
 ```sh
 curl --fail --ssl-reqd --user 'k1.<appKey>.<credentialId>' \
-  --upload-file sample.txt ftp://<host>:<port>/sample.txt
+  --upload-file sample.txt ftp://ftps.example.com:2121/sample.txt
 ```
 
-Let the client prompt for the password. For a member credential, the app must report a confirmed upload before the credential is considered spent. A device credential can send multiple files to its bound destination.
+Let the client prompt for the password. A member credential covers one confirmed upload. If the client loses the final `226` response, read `ftps_upload_status` before retrying. When the receipt names a `fileId`, the app can open that file as the signed-in owner.
 
-The listener stages bytes in an owner-only installation directory and removes incomplete uploads. It confirms an upload only after the destination accepts it. SQLite records, blobs and `index.json` do not share one commit. Check the upload status or the app's authorized read path after an interrupted client request.
+The listener stages bytes in a private installation directory. It confirms only complete uploads accepted by the destination. A device credential can send multiple files to its destination, including distinct deliveries with identical bytes.
 
 ## Move an app
 
 The destination declaration travels with the app folder. Use `konae pull` to bring the published app declaration into a local folder, then use `konae export` or the app-folder export to carry it to another installation. The receiving operator configures that installation's listener and TLS settings. Device credentials remain in the installation's private secrets database. Issue new credentials there, or rotate them when a team or device changes.
 
-This declaration does not require publish for a credential rotation. App data and rules remain in the app folder; listener addresses, TLS files and credential hashes remain installation data.
-
 ## Legacy intake credentials
 
 Installations that already use the legacy `credentials` entries in `$KONAE_DATA_DIR/ftps.json` keep working. Those entries bind a username and password to a published `file-intake` source. Keep them as a migration path while replacing each binding with a destination declaration and an owner-issued device credential. The legacy format does not provide the new app-scoped lifecycle or one-time password handling.
-
-Functions do not process FTPS bytes. Use the destination's supported app data path; do not declare or assume an FTPS Function consumer.

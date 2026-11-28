@@ -28,6 +28,9 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("secret_delete", "secrets_list"),
     ("api_keys_create", "api_keys_list"),
     ("api_keys_revoke", "api_keys_list"),
+    ("ftps_device_create", "ftps_credentials_list"),
+    ("ftps_device_rotate", "ftps_credentials_list"),
+    ("ftps_credential_revoke", "ftps_credentials_list"),
     ("release_apply", "project_inspect"),
     ("app_invitations_create", "app_invitations_list"),
     ("app_invitation_resend", "app_invitations_list"),
@@ -58,6 +61,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("files_upload", "files_list"),
     ("files_update", "files_list"),
     ("files_delete", "files_list"),
+    ("ftps_upload_create", "ftps_upload_status"),
     ("actions_invoke", "actions_invoke"),
 ];
 

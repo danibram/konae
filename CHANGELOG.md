@@ -17,6 +17,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - Server Actions can issue private PDFs with Documents. The Kernel supervises a local Typst renderer, and the app's download rule and PDF bytes travel together in an export. [Documents](./docs/documents.md)
 - Apps can publish selected authenticated query Actions to external MCP clients with app-scoped OAuth grants. [App MCP tools](./docs/mcp-app-tools.md)
 - File intake keeps immutable received versions and resumes their pending consumers after import. An optional FTPS listener accepts uploads for configured app sources. [File intake](./docs/file-intake.md) and [FTPS](./docs/ftps.md)
+- Apps can publish FTPS destinations in `app/ftps.json`. A member can request a one-use credential to upload a private file. A project owner can issue, rotate, or revoke credentials for devices that upload regularly. [FTPS](./docs/ftps.md)
 
 ### Changed
 
