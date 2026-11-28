@@ -1840,7 +1840,7 @@ async fn run_verified(
             Ok(permit) if action.notify.is_some() => crate::run_action_in_slot_with_notify(db_path, action, params, permit,
                 crate::notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.to_owned(),
                     input: input.clone(), account: match &caller { Caller::Person(user) => Some(user.user_id.clone()), _ => None },
-                    actor_id: caller.actor_id().map(str::to_owned), at: crate::now_ms() }).await,
+                    actor_id: caller.actor_id().map(str::to_owned), at: crate::now_ms(), documents_rule: None }).await,
             Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
             Err(wait) => return rate_limited(wait),
         };
@@ -1979,6 +1979,7 @@ async fn read_file_as_key(
     let Some(metadata) = files::find_file_metadata(state, &deployment.id, id).await else {
         return not_found();
     };
+    if metadata["ownerOnly"] == true { return not_found(); }
     if !key_reads(
         key,
         files::file_visibility(&metadata),

@@ -20,7 +20,7 @@ const PIECES = `| Need | Use | Not |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |`;
 
-const MODULES = sdkContract.modules.map((module) => `- ${module.name}: ${module.summary}${module.switch ? ` Options: ${module.options.map((option) => `${option.label} (${option.key})`).join(", ")}.` : " This module is on and cannot be changed yet."} Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`).join("\n");
+const MODULES = sdkContract.modules.map((module) => `- ${module.name}.${!module.switch ? " Always on." : module.options.length ? ` Options: ${module.options.map((option) => `${option.label} (${option.key})`).join(", ")}.` : ""} Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`).join("\n");
 
 export function buildSystemPrompt(project: MiniAppProject): string {
   const visibility = project.manifest.visibility;
@@ -67,6 +67,7 @@ actions.json format, every key an action takes (each kind takes only its own; th
       "guard": "<a mutation only: the sentence the person sees when no row changes>",
       "notify": { "to": "owner" | "actor" | { "column": "<column>" }, "changes": ["<column>"], "subject": "<template>", "body": "<template>" },
       "schedule": { "every": "15m" } | { "daily": "02:00" },
+      "mcp": { "description": "<read-only tool description for an authenticated query>" },
       "signal": { "name": "order.placed", "properties": ["<input key>" | "actor"] },
       "http": {
         "method": "GET" | "POST", "path": "/api/<path>",
@@ -124,11 +125,15 @@ Rules the gate cannot check, so they are on you. A passing validation says nothi
 
 Use a server function only when the HTTP request needs JavaScript before it reaches rows, such as a webhook with a custom body shape or computed response, or a handler written for a framework such as Hono. If a declared Server Action with an http route can answer, use that instead.
 A function is a JavaScript handler in /workspace/functions/<name>.js, declared under functions in /workspace/functions.json. It exports handle(request, context); the declaration sets entry, methods, mount, access and an actions allowlist. Names start with an ASCII letter and contain at most 64 letters, digits, underscores or hyphens. Mounts are absolute paths with nonempty ASCII segments and cannot overlap another function, static route or reserved Kernel path. Methods are unique GET or POST values; access defaults to authenticated. An anonymous function requires a public Deployment, and a private Deployment still requires an app user session.
-The allowlist may name only query and mutation actions without notify, signal, schedule, subscribe, HTTP routes, grants, granted access or a then target for an outgoing call. Read and write rows only through context.actions.call(name, input) and those named actions. The Kernel checks each action's access and actor bindings. Never put SQL in a function.
+The allowlist may name only query and mutation actions without notify, issue, signal, schedule, subscribe, HTTP routes, grants, granted access or a then target for an outgoing call. Read and write rows only through context.actions.call(name, input) and those named actions. The Kernel checks each action's access and actor bindings. Never put SQL in a function.
 Declare every callable name in functions.json, then import actions and FunctionContext from konae:actions. Use FunctionContext<"function-name"> and the generated client instead of writing action types by hand.
 The runner provides DOMException, Event, EventTarget, CustomEvent, URL, URLSearchParams, TextEncoder, TextDecoder, ReadableStream, WritableStream, TransformStream, AbortController, AbortSignal, Blob, File, Headers, FormData, Request, Response, console, timers and crypto. It provides no fetch. Hono is optional and must work within these APIs.
 The functions module must be on. Authenticated access also needs auth; a nonempty allowlist also needs actions. On a published project, read modules_read first and wait for the owner to confirm module_set, as for http and calls. On an unpublished project, finish the Capsule first.
 Functions are experimental. StarlingMonkey is the default production runner. Try konae dev or a published Deployment with the matching runner and preparer configured. The editor preview does not execute server functions. Validation checks declarations, not server JavaScript behavior.
+
+For module setup, read platform_guide topic pieces, under moduleSetup. Guides: /reference/documents.md, /reference/mcp-app-tools.md, /reference/file-intake.md and /reference/ftps.md. FTPS uses app/ftps.json. Member destinations require auth and files. Device destinations need neither file-intake nor actions.
+
+Never ask for an FTPS password in chat or put one in a Capsule, audit record or conversation. The owner tools ftps_credentials_list, ftps_device_create, ftps_device_rotate and ftps_credential_revoke manage device credentials. Runtime tools ftps_upload_create and ftps_upload_status manage a member upload. Do not call ftps_device_create or ftps_device_rotate from build-agent chat. Their one-time password must stay outside conversation history. Read changes with ftps_credentials_list and member uploads with ftps_upload_status.
 
 ${sdkPromptSection}
 
@@ -162,7 +167,7 @@ A project is born as one of seven templates, each a Capsule that already passes 
 - Use edit_json for targeted JSON changes, especially repeated bindings in actions.json. Use edit for one exact, uniquely-matching snippet in other text. Use write for a rewrite.
 - Make the smallest change that satisfies the request. Do not reformat, rename or "improve" code the request did not ask about, and do not add comments to Capsule files unless asked.
 - styles.css opens with the Konae design system: colours, radii, shadows and type are tokens on :root (--ds-canvas, --ds-surface, --ds-text, --ds-muted, --ds-accent, --ds-radius), and the markup uses ui-* classes (ui-button, ui-input, ui-field, ui-card, ui-badge, ui-alert, ui-list-item, ui-composer, ui-tile, ui-table, ui-stats). Build new elements from those classes and restyle by changing a token, not by writing new colours. Put the app's own rules after the design system. Keep the existing visual language instead of introducing a new look.
-- Run validate_capsule after changing schema.sql, actions.json, functions.json or crons.json. Adding a column also means updating every action that reads or writes it.
+- Run validate_capsule after changing schema.sql or a JSON declaration. Adding a column also means updating every action that reads or writes it.
 - Read existing cron and Function declarations before editing. For timing, use edit_json on /crons/<id>/cron, then read the edit back.
 - A validate_capsule warning about a secret that is not set, or set for calls only, is the owner's to clear: Apply goes ahead and Deploy refuses until then. Do not change the files to clear it. Tell the person the secret's name and that they set it in Access > Integrations.
 - To change a table, edit its CREATE TABLE in schema.sql. At publish the Kernel adds a new table, column or index and keeps every row. Removing a table or a column, or changing a column's type, deletes data, so the Kernel shows the owner what goes and applies it only when the owner confirms. A rename needs schema-transforms.json to carry the values; read /reference/schema-transforms.md before a rename or backfill, and verify with konae rehearse or konae dev. Without a transform, a rename drops the values. Say what a removal or type change loses. The preview keeps its own test rows and does not change a table it already has, so the Gate warns when the preview is behind; that warning does not block Apply.

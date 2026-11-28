@@ -77,6 +77,12 @@ The defaults suit one machine. Before another machine can reach the installation
 - Set `KONAE_COPY_DIR` or `KONAE_COPY_S3=1`, with `KONAE_COPY_SECRET` for S3. The data directory is the only place the apps live.
 - To serve an app at the domain's root, give its path address the name `konae-home`. Without an app on that name, the root answers not found. [`examples/site`](../examples/site/README.md) is a home ready to publish, with the docs inside it.
 
+## Configure Documents, FTPS and App MCP
+
+- [Documents](./documents.md#renderer-setup-and-limits) uses the Typst version bundled in the images. Native Kernels can set `KONAE_DOCUMENTS_TYPST_BIN` to the executable path.
+- [FTPS](./ftps.md) reads listener and TLS settings from `$KONAE_DATA_DIR/ftps.json`. The operator exposes the control port and full passive range. Publish the app to apply destinations in `app/ftps.json`. Credential changes take effect on the running listener. Existing credentials bound to File intake also work.
+- [App MCP](./mcp-app-tools.md#connect-an-external-client) reads public client registrations from `mcp-app-clients.json` in `KONAE_DATA_DIR`. Each app user signs in and grants specific Action tools.
+
 ## Function workers
 
 ### TypeScript function workers
@@ -211,7 +217,7 @@ The editor, the `konae` CLI, the test configurations and an exported folder read
 
 ## Data directory and copies
 
-For an upgrade with legacy Calls or pending notices, stop the server and follow the [queue migration procedure](./architecture.md#migrating-the-legacy-queues).
+For an upgrade with legacy Calls or pending notices, stop the server and follow the [queue migration procedure](./architecture.md#migrating-the-legacy-queues). Set `KONAE_QUEUE_CONSUMERS_PAUSED` to `1` for the offline queue commands.
 
 Operators can rehearse a retained restore with a post-cut revocation on an isolated host. [Rehearse loss of the installation volume](./recovery-drill.md).
 

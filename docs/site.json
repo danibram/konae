@@ -4,7 +4,7 @@
   "repository": "https://github.com/danibram/konae",
   "nav": [
     { "section": "Start", "pages": [{ "page": "README.md", "label": "Overview" }, "concepts.md"] },
-    { "section": "Build", "pages": ["capsule.md", "server-actions.md", "functions.md", "gate-and-kernel.md", "accounts-and-access.md"] },
+    { "section": "Build", "pages": ["capsule.md", "server-actions.md", "documents.md", "functions.md", "file-intake.md", "gate-and-kernel.md", "accounts-and-access.md"] },
     { "section": "Guides", "pages": [
       "guides/first-app-from-the-editor.md",
       "guides/edit-files-with-the-cli.md",
@@ -31,6 +31,7 @@
       "reference/projects-and-releases.md",
       "reference/accounts.md",
       "reference/actions.md",
+      { "page": "mcp-app-tools.md", "label": "App MCP tools" },
       "reference/routes-and-calls.md",
       "reference/usage-and-signals.md",
       "reference/addresses.md",
@@ -44,6 +45,7 @@
     ] },
     { "section": "Operate", "pages": [
       "operate.md",
+      "ftps.md",
       "reference/store-inventory.md",
       "reference/block-copies.md",
       "recovery-drill.md",

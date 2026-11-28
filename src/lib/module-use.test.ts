@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 import * as esbuild from "esbuild";
-import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "./module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp, sourcesUseMcp } from "./module-use";
 
 const cases = JSON.parse(readFileSync("kernel-rs/kernel/src/module-use-cases.json", "utf8")) as Array<{ case: string; sources: string[]; sourceFiles?: Record<string, string>; artifact: string[]; usesFiles?: boolean; usesAuth?: boolean; usesActions?: boolean; usesHttp?: boolean; usesCalls?: boolean }>;
 
@@ -24,6 +24,11 @@ test("http and calls use detection matches the Kernel cases", () => {
     if (item.usesHttp !== undefined) expect(sourcesUseHttp(item.sourceFiles ?? item.sources), item.case).toBe(item.usesHttp);
     if (item.usesCalls !== undefined) expect(sourcesUseCalls(item.sourceFiles ?? item.sources), item.case).toBe(item.usesCalls);
   }
+});
+
+test("MCP module use follows Action declarations", () => {
+  expect(sourcesUseMcp({ "actions.json": '{"version":1,"actions":{"notes.mine":{"kind":"query","mcp":{"description":"List notes."}}}}' })).toBe(true);
+  expect(sourcesUseMcp({ "actions.json": '{"version":1,"actions":{"notes.list":{"kind":"query"}}}' })).toBe(false);
 });
 
 test("the SDK follows decided modules or the modules a new app uses", () => {

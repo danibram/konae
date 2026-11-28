@@ -4,6 +4,8 @@
 
 window.miniapp is the only host surface a Capsule has, in the editor preview and on every Deployment. Each module is a namespace on it. A published call is one or more MCP tool calls to the runtime endpoint, /_konae/mcp under the page's base path, on the host the page loaded from, the Deployment's generated hostname or its custom domain, with that host's app session cookie. The base path is /p/<id-or-name> when the page's address starts with /p/<segment>, and empty otherwise. On a Deployment the page's Content Security Policy refuses inline event handlers, fetches to other origins, WebAssembly, eval and new Function; the editor preview applies no policy.
 
+To expose named Actions to an MCP client, see [MCP tools for app users](mcp-app-tools.md).
+
 ```js
 const session = await miniapp.auth.session();                    // { userId, name, role }; role is "anonymous" when signed out
 await miniapp.auth.signIn();                                     // published login page, preview selects Alice
@@ -323,22 +325,22 @@ Editor preview: Returns the app path unchanged.
 
 ### File storage (`files`)
 
-Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.
+Small files stored by the Kernel for one Deployment. The app can share ordinary Files uploads among its users.
 
 Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: cannot change it.
 
 | Option | Type | Default | Help |
 | --- | --- | --- | --- |
-| `fileAccess` (Who can read every file) | `enum`: `app-users` (All signed-in users) | Only the uploader | Let every signed-in user read all files in this app. |
+| `fileAccess` (Who can read Files uploads) | `enum`: `app-users` (All signed-in users) | Only the uploader | Share ordinary uploads with signed-in users. Member FTPS uploads stay private to their uploader. |
 
 - By default, only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
 - files.list returns metadata and the same-origin file path without reading file bytes. files.upload sends the file's bytes in one request and returns its path as url. The Kernel checks access on every file request, including conditional requests.
-- The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.
+- The uploader can delete a file and can change the visibility of an ordinary Files upload. Member FTPS uploads keep their owner-only policy. A deleted file stops counting against the Deployment's file quota and its ID answers File not found.
 - The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 - A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
-Declared with `fileAccess` in `module`. Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.
+Declared with `fileAccess` in `module`. Set "fileAccess": "app-users" to let signed-in users read ordinary Files uploads, including earlier uploads. Member FTPS uploads stay private to their uploader. The Kernel checks the same policy in file listings and direct file URLs. The uploader keeps deletion rights.
 
 ### miniapp.files.list()
 
@@ -632,7 +634,7 @@ Owner control: the owner can change this module with module_set. Permission: `pu
 - A release with cron jobs enables Functions and, when a cron target names Server Actions, Actions. This applies to the first release and to updates. For HTTP Functions in an app without cron jobs, enable Functions in App settings or in the local konae.json. Authenticated functions require auth. A nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.
 - For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Functions remain experimental. StarlingMonkey is the default runner. Operators can select deno_core. Workers start on demand and may stay warm until their idle timeout. Each request gets fresh JavaScript state.
 - A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.
-- The action allowlist accepts only queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.
+- The action allowlist accepts only queries and mutations without external effects. It refuses notify, issue, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.
 - The Kernel and runner speak konae-functions-ipc/3. Published bundles use konae-functions/1. Upgrade the Kernel, runner, and preparer together and restart the service. The app folder carries private bundles in server/. The optional shutdown(signal) hook runs in the last completed request's JavaScript state when that state is available.
 
 Declared with `functions` in `functions.json`. Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Use access scheduled for a cron target and omit mount and methods. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. The Kernel can end an invocation at its deadline without delivering an abort event to Request.signal.
@@ -671,3 +673,33 @@ Limits:
 - 32 jobs per app
 - Five numeric fields in UTC with minute precision
 - One attempt per job and matching minute
+
+### App MCP (`mcp`)
+
+Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+- Use the app's /_konae/mcp endpoint to list and call granted tools. Read docs/mcp-app-tools.md to configure and verify an external client.
+
+Declared with `mcp` in `actions.json`. Publish an authenticated query with a tool description. The app user grants the tool to an operator-registered OAuth client.
+
+### Documents (`documents`)
+
+Issue portable PDFs from mutation snapshots and serve them through an app-owned read rule.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+- Use the app's /_konae/documents/<issue-key> download as the signed-in user. Read docs/documents.md for renderer setup and a verification procedure.
+
+Declared with `issue` in `actions.json`. Issue a PDF from one changed row. Declare a stable issue key, a snapshot, a Typst template and the query that decides who may read the PDF.
+
+### File intake (`file-intake`)
+
+Accepts immutable file versions from declared sources and queues declared app consumers.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+- Read docs/file-intake.md for intake acceptance and docs/ftps.md for FTPS destinations and listener setup.
+
+Declared with `sources` in `file-intake.json`. Declare the sources the app accepts and optional SQL consumers. Consumers receive version metadata.

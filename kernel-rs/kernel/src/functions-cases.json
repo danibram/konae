@@ -509,6 +509,35 @@
     "message": "Function orders action read must be a query or mutation without external effects."
   },
   {
+    "name": "document issue action",
+    "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[\"read\"]}}}",
+    "files": [
+      "functions/orders.ts"
+    ],
+    "modules": {
+      "functions": {
+        "on": true
+      },
+      "auth": {
+        "on": true
+      },
+      "actions": {
+        "on": true
+      }
+    },
+    "actions": {
+      "read": {
+        "kind": "mutation",
+        "issue": {}
+      }
+    },
+    "staticPaths": [
+      "index.html"
+    ],
+    "code": "function.action-unsupported",
+    "message": "Function orders action read must be a query or mutation without external effects."
+  },
+  {
     "name": "query allowed",
     "source": "{\"version\":1,\"functions\":{\"orders\":{\"entry\":\"functions/orders.ts\",\"mount\":\"/api/orders\",\"methods\":[\"GET\"],\"access\":\"anonymous\",\"actions\":[\"read\"]}}}",
     "files": [

@@ -80,8 +80,7 @@ fn install_database_authorizer(db: &Connection, receipts: Option<Arc<std::sync::
             && !(name.eq_ignore_ascii_case("__konae_function_receipts")
                 && accessor.is_none()
                 && receipts.as_ref().is_some_and(|allowed| allowed.load(std::sync::atomic::Ordering::SeqCst)))
-            && !(matches!(name.to_ascii_lowercase().as_str(), "__konae_notify_intents" | "__konae_calls")
-                && accessor.is_none()
+            && !(accessor.is_none()
                 && kernel_effects.as_ref().is_some_and(|allowed| allowed.load(std::sync::atomic::Ordering::SeqCst)))
     };
     db.authorizer(Some(move |context: AuthContext<'_>| {

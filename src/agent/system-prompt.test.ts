@@ -30,6 +30,11 @@ describe("system prompt", () => {
       "mutation statements using RETURNING fail validation",
       "top-level LIMIT",
       "name each new action as personal or shared",
+      "app/ftps.json",
+      "Member destinations require auth and files",
+      "Never ask for an FTPS password in chat",
+      "ftps_device_rotate",
+      "ftps_upload_status",
     ]) {
       expect(prompt).toContain(fragment);
     }

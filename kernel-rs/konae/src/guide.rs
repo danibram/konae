@@ -28,6 +28,9 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("secret_delete", "secrets_list"),
     ("api_keys_create", "api_keys_list"),
     ("api_keys_revoke", "api_keys_list"),
+    ("ftps_device_create", "ftps_credentials_list"),
+    ("ftps_device_rotate", "ftps_credentials_list"),
+    ("ftps_credential_revoke", "ftps_credentials_list"),
     ("release_apply", "project_inspect"),
     ("app_invitations_create", "app_invitations_list"),
     ("app_invitation_resend", "app_invitations_list"),
@@ -58,6 +61,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("files_upload", "files_list"),
     ("files_update", "files_list"),
     ("files_delete", "files_list"),
+    ("ftps_upload_create", "ftps_upload_status"),
     ("actions_invoke", "actions_invoke"),
 ];
 
@@ -132,6 +136,11 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Code between an HTTP request and the rows", "use": "A server function in functions.json, with its actions allowlist", "not": "A Server Action with string-built SQL, or a call action"},
                 {"need": "This app calls another host", "use": "Turn on calls with module_set, then declare kind: call", "not": "fetch of a secret from the browser"},
                 {"need": "Uploaded files", "use": "miniapp.files", "not": "Large bytes in a SQLite column"},
+                {"need": "Issue a private PDF", "use": "Documents, an issue mutation and a named download query", "not": "A public Files upload"},
+                {"need": "Give an external MCP client read access to app rows", "use": "App MCP and an authenticated query with an mcp declaration", "not": "Owner MCP credentials"},
+                {"need": "Accept file versions from a device or test fixture", "use": "File intake with a declared source and optional Actions consumer", "not": "A browser Files upload"},
+                {"need": "Receive files over FTPS", "use": "app/ftps.json destinations and the installation's FTPS listener", "not": "A File intake source for the new device path"},
+                {"need": "Keep a legacy FTPS intake binding", "use": "An existing installation credential bound to a published File intake source", "not": "A new app destination"},
                 {"need": "Every signed-in user reads every uploaded file", "use": "files.fileAccess set to app-users", "not": "Each upload as public"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
                 {"need": "An administrator inside the app", "use": "A role column in the app's own table, checked in SQL", "not": "An owner account inside the app"},
@@ -144,6 +153,40 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events", "not": "Reading the Kernel's files by hand"}
             ],
             "unit": "The app folder is the app: konae.json, app/, dist/ and data/ with its database, accounts, files and Usage. The Kernel keeps it under apps/<id>/, and an export hands the same folder over.",
+            "moduleSetup": {
+                "published": [
+                    "Read session_inspect.can and modules_read { projectId }. The three app switches need publish. Turning on auth needs manage_users.",
+                    "Enable dependencies first. Call module_set { projectId, module, on: true, expected }, with modules.<name>.state from modules_read as expected. Read each change back with modules_read. The editor asks the owner to confirm the change.",
+                    "Save app sources and read them back. In the editor, validate the scratch files and have the owner apply them. Publish and use project_inspect to read the active deployment before running the feature check."
+                ],
+                "firstPublish": "For a first CLI publish, set the app switches in konae.json. If the web editor project has a required switch off before its first publish, publish the base app first, then follow the published procedure before adding the declaration.",
+                "documents": {
+                    "requires": ["actions", "auth"],
+                    "declare": "Enable documents. In actions.json, put issue on an authenticated mutation with a string issue key. Supply a snapshot and a named authenticated query that checks actor.id and issueKey. Check row authority on the mutation too.",
+                    "operator": "Both images include Typst 0.14.2. On a native Kernel, install this version or set KONAE_DOCUMENTS_TYPST_BIN to its executable path.",
+                    "verify": "Run the mutation as its app user and open /_konae/documents/<issue-key> on the app address, including its base path. Verify a PDF for the allowed user and 404 for a signed-in user the query excludes."
+                },
+                "mcp": {
+                    "requires": ["actions", "auth"],
+                    "declare": "Enable mcp and publish an authenticated query with mcp.description. Its input bindings and app row rule also govern the tool.",
+                    "operator": "Register the public client in <KONAE_DATA_DIR>/mcp-app-clients.json using the app ID from project_inspect and the exact redirect URIs. The client uses app OAuth with PKCE S256.",
+                    "verify": "Use the app address, including its base path. Grant the selected query as an app user, then use tools/list and tools/call on /_konae/mcp to check the tool and its rows."
+                },
+                "file-intake": {
+                    "requires": ["actions"],
+                    "declare": "Enable file-intake. Save file-intake.json in the Capsule, under app/ in a folder. Declare source IDs and any consumers. Consumers run declared SQL mutations with version metadata.",
+                    "verify": "With the local dev server stopped, use konae test intake <source> --path <relative-path> --file <completed-file> --delivery-key <key>. Repeat the same input and check for the same versionId and created: false. Restart konae dev to pick up pending consumers. Read their changes through an authorized query."
+                },
+                "ftps": {
+                    "requires": [],
+                    "declare": "Save app/ftps.json with version 1 and a destinations object. Use kind member for signed-in app users, or kind device for a team or device. A device destination may set folder to a normalized relative virtual path. Member destinations require auth and files. The device path does not require file-intake or actions.",
+                    "operator": "Configure the installation listener in $KONAE_DATA_DIR/ftps.json with mode 0600. Keep its certificate and private key outside app folders and make the key owner-readable only. Set the control and passive ports, TLS files and upload limits. advertisedHost and advertisedPort are optional. Publish the control port and full passive range through the firewall, router and container. Listener settings need a Kernel restart. Destination and credential changes take effect live.",
+                    "credentials": "An app session uses ftps_upload_create { destination } and ftps_upload_status { uploadId }. A member credential expires after 10 minutes and accepts one confirmed upload. It stores the upload in Files with owner-only access, including when files.fileAccess is app-users. An owner with manage_users uses ftps_credentials_list { projectId }, ftps_device_create { projectId, destination, label }, ftps_device_rotate { projectId, credentialId } and ftps_credential_revoke { projectId, credentialId }. A device credential is permanent, rotates or revokes without publish, and accepts multiple uploads at one destination. Passwords are returned once by create and rotate, never by list, revoke or status. Store salted hashes in private data/secrets.sqlite, outside the app package. Do not put passwords in audit records or conversation history.",
+                    "portable": "The app declaration travels with the app folder through konae pull and export. Listener addresses, TLS files and credential hashes belong to the installation. Configure the listener again after a move, then issue or rotate device credentials there.",
+                    "legacy": "Keep existing global credentials bound to published File intake sources working as the legacy path. New destinations do not require File intake. Do not treat Functions as FTPS byte processors.",
+                    "verify": "Use an explicit TLS client that trusts the configured certificate. Confirm member uploads with ftps_upload_status and device credential changes with ftps_credentials_list. Rotate a device credential and confirm its next login uses the new password."
+                }
+            },
             "cronJobs": "Read the functions module in the sdk topic for the declaration. Read crons.json and functions.json through project_sources_read. After changing them with project_sources_save, use project_sources_read again to confirm the saved sources. Publishing installs the schedule and enables Functions. It also enables Actions when the cron target calls them. Read the published job IDs under modules.functions.current.crons with modules_read."
         }),
         "credentials" => json!({
@@ -160,7 +203,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, module_set for modules with publish permission, project_import, and initialSignupPolicy on a first release",
                 "module_set": "Changes a module whose registry permission is held by the credential",
                 "modules_read": "Reads module state and options; requires read",
-                "manage_users": "module_set for auth, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
+                "manage_users": "module_set for auth, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, app_invitations tools, ftps_credentials_list, ftps_device_create, ftps_device_rotate and ftps_credential_revoke",
                 "export_data": "project_export and reading its downloads",
                 "ownerSession": "tokens_list, token_create, token_revoke and app_user_enter"
             },

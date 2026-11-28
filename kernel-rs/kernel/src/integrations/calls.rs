@@ -476,6 +476,11 @@ pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
         if mutation.access == "scheduled" {
             return Err(refuse("call.then-scheduled", format!("Action {name} names {target} as its then, but that action runs only inside a scheduled Function.")));
         }
+        if mutation.issue.is_some() {
+            return Err(refuse("call.then-issues-document", format!(
+                "Action {name} names {target} as its then, which issues a document. A then mutation runs with no caller."
+            )));
+        }
         if mutation.http.is_some() {
             return Err(refuse("call.then-routed", format!(
                 "Action {name} names {target} as its then, which answers on an HTTP route. A then mutation runs only after its call."
@@ -1536,9 +1541,9 @@ pub fn spawn_worker(state: AppState) {
         }
         let mut timers = crate::execution::AppTimers::default();
         loop {
-            let app = match timers.next_deadline() {
+            let turn = match timers.next_deadline() {
                 Some(deadline) => tokio::select! {
-                    app = state.dispatcher.next(crate::execution::WorkResource::Calls) => app,
+                    turn = state.dispatcher.next_turn(crate::execution::WorkResource::Calls, crate::execution::WorkLimits::SERIAL) => turn,
                     _ = tokio::time::sleep_until(deadline.into()) => {
                         for due in timers.take_due(std::time::Instant::now()) {
                             state.dispatcher.wake(crate::execution::WorkResource::Calls, due).await;
@@ -1546,8 +1551,9 @@ pub fn spawn_worker(state: AppState) {
                         continue;
                     }
                 },
-                None => state.dispatcher.next(crate::execution::WorkResource::Calls).await,
+                None => state.dispatcher.next_turn(crate::execution::WorkResource::Calls, crate::execution::WorkLimits::SERIAL).await,
             };
+            let app = turn.app().to_owned();
             timers.cancel(&app);
             if !state.deployments.read().await.values().any(|deployment| deployment.id == app) {
                 timers.remove(&app);
@@ -1605,7 +1611,10 @@ async fn schedule_next_call(state: &AppState, app: &str) -> Result<Option<std::t
 async fn run_app_once(state: &AppState, app_id: &str) -> Result<usize> {
     let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == app_id).cloned() else { return Ok(0) };
     let claim_lock = crate::database_lock(state, app_id).await;
-    if crate::maintenance::pause(&state.data_root, app_id).is_some() { return Ok(0); }
+    if !crate::layout::database(&state.data_root, app_id).is_file()
+        || crate::maintenance::pause(&state.data_root, app_id).is_some() {
+        return Ok(0);
+    }
     if state.execution_mode.is_test() {
         let root = state.data_root.clone();
         let id = app_id.to_owned();
@@ -2032,7 +2041,7 @@ async fn run_then(
     let action = mutation.clone();
     let notify_context = crate::notify::MutationContext {
         app: deployment.id.clone(), release: identity.release.to_owned(), action: then.action.clone(),
-        input: values.clone(), account: None, actor_id: None, at: crate::now_ms(),
+        input: values.clone(), account: None, actor_id: None, at: crate::now_ms(), documents_rule: None,
     };
     let operation = {
         let _guard = action_lock(state, &deployment.id, &mutation.kind).await;

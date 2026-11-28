@@ -60,6 +60,7 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .route("/_konae/login", get(login_page))
         .route("/_konae/fonts/{name}", get(own_page::font))
         .merge(runtime::routes())
+        .merge(crate::documents::routes())
         .merge(extra)
         .merge(google::routes())
         .merge(accounts::routes())

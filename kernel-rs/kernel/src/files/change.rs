@@ -39,6 +39,9 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
         return not_found();
     }
     let _guard = database_lock(state, &deployment.id).await;
+    if let Err(failure) = crate::files::reconcile_ftps_uploads(state, &deployment).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &failure.to_string());
+    }
     let directory = crate::layout::files(&state.data_root, &deployment.id);
     let mut files = match read_file_index(&directory).await {
         Ok(files) => files,
@@ -53,6 +56,9 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
     }
     if file_owner(&files[position]) != Some(actor_id) {
         return error(StatusCode::FORBIDDEN, NOT_UPLOADER);
+    }
+    if files[position]["ownerOnly"] == true && matches!(&change, Change::Visibility(value) if *value != "private") {
+        return error(StatusCode::BAD_REQUEST, "This file is restricted to its owner.");
     }
     if let Change::Visibility(visibility) = change {
         if app_user_files(&deployment) {

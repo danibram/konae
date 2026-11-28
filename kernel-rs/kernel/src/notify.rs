@@ -23,6 +23,7 @@ pub struct MutationContext {
     pub account: Option<String>,
     pub actor_id: Option<String>,
     pub at: u64,
+    pub documents_rule: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -193,7 +194,7 @@ pub(crate) async fn handle_intent(state: &AppState, deployment: &Deployment, id:
     let action = ActionDefinition {
         kind: "mutation".into(), access: "anonymous".into(), statement: String::new(), bindings,
         http: None, page: None, signal: None, guard: None, notify: Some(payload.declaration),
-        schedule: None, subscribe: None, call: Default::default(), extra: Default::default(),
+        schedule: None, issue: None, subscribe: None, call: Default::default(), extra: Default::default(),
     };
     let Some(queue) = state.accounts.queue.as_ref() else { return };
     let Ok(Some(declared)) = declaration(&payload.action, &action) else { return };
@@ -262,9 +263,9 @@ pub fn spawn_worker(state: AppState) {
         wake_pending(&state).await;
         let mut timers = crate::execution::AppTimers::default();
         loop {
-            let app = match timers.next_deadline() {
+            let turn = match timers.next_deadline() {
                 Some(deadline) => tokio::select! {
-                    app = state.dispatcher.next(crate::execution::WorkResource::Notices) => app,
+                    turn = state.dispatcher.next_turn(crate::execution::WorkResource::Notices, crate::execution::WorkLimits::SERIAL) => turn,
                     _ = tokio::time::sleep_until(deadline.into()) => {
                         for due in timers.take_due(std::time::Instant::now()) {
                             state.dispatcher.wake(crate::execution::WorkResource::Notices, due).await;
@@ -272,8 +273,9 @@ pub fn spawn_worker(state: AppState) {
                         continue;
                     }
                 },
-                None => state.dispatcher.next(crate::execution::WorkResource::Notices).await,
+                None => state.dispatcher.next_turn(crate::execution::WorkResource::Notices, crate::execution::WorkLimits::SERIAL).await,
             };
+            let app = turn.app().to_owned();
             timers.cancel(&app);
             let Some(deployment) = state.deployments.read().await.values().find(|item| item.id == app).cloned() else {
                 timers.remove(&app);

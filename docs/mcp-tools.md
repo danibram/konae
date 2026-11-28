@@ -29,7 +29,7 @@ OAuth offers `read`, `write`, `publish` and `manage_users`. A redirect to `local
 | Topic | What it answers |
 | --- | --- |
 | `rules` | The yardstick, the first run, the read-back after every write, and the named divergences between preview and published app. |
-| `pieces` | Which Capsule declaration to use for a need. See [Pick the smallest piece](./pieces.md). |
+| `pieces` | Which Capsule declaration to use. Read `moduleSetup` for Documents, App MCP, File intake, FTPS and their setup checks. See [Pick the smallest piece](./pieces.md). |
 | `credentials` | `konae login` and its flags, `login --browser`, `konae secret set`, OAuth, what each permission allows, and the refusal a missing permission gives. |
 | `development` | The CLI cycle: `init`, `dev`, `build`, `publish`, `pull`, `push`, `sql`, `events`, `secret`, `hostname`, `contract` and `conform`. |
 | `actions` | The `actions.json` format and its rules. |
@@ -49,7 +49,7 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | `read` | `projects_list`, `project_inspect`, `project_sources_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `modules_read`, `secrets_list`, `api_keys_list`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
 | `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` writes |
 | `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `hostname_set`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `module_set`, `project_import`, and `initialSignupPolicy` on a first release |
-| `manage_users` | `module_set` for `auth`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
+| `manage_users` | `module_set` for `auth`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, the `app_invitations` tools, and `ftps_credentials_list`, `ftps_device_create`, `ftps_device_rotate` and `ftps_credential_revoke` |
 | `export_data` | `project_export` and reading its downloads |
 | The owner's browser session | `tokens_list`, `token_create`, `token_revoke` and `app_user_enter` |
 
@@ -58,6 +58,12 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 After a successful `release_apply`, Konae cancels the release JSON upload, any separate source upload and the package component uploads named by the release. The plan stores those IDs so a retry can finish cleanup after a fault. Replaying `release_apply` returns its saved receipt and runs cleanup again. A failed apply or a plan awaiting schema confirmation leaves its uploads available; `release_plan` alone does not consume them.
 
 A delegated token cannot create tokens or add permissions to itself. Run `konae login` again with the flag.
+
+## FTPS credential tools
+
+The app runtime provides `ftps_upload_create { destination }` and `ftps_upload_status { uploadId }` to a signed-in app user. The owner tools require `manage_users`. Use `ftps_credentials_list { projectId }` to read credentials, `ftps_device_create { projectId, destination, label }` to create one, `ftps_device_rotate { projectId, credentialId }` to replace its password, and `ftps_credential_revoke { projectId, credentialId }` to revoke it. Read `ftps_credentials_list` after each owner change. Read `ftps_upload_status` to check a member upload.
+
+Create and rotate return the password once. List, revoke and status never return it. Keep the password out of prompts, audit records, generated app files and conversation history. Read [Receive files over FTPS](./ftps.md) for the two destination kinds and their access rules.
 
 ## Tools by group
 
@@ -108,6 +114,10 @@ Two writes answer with their own observation, so no second call follows them. `t
 | `secret_delete` | `secrets_list` |
 | `api_keys_create` | `api_keys_list` |
 | `api_keys_revoke` | `api_keys_list` |
+| `ftps_device_create` | `ftps_credentials_list` |
+| `ftps_device_rotate` | `ftps_credentials_list` |
+| `ftps_credential_revoke` | `ftps_credentials_list` |
+| `ftps_upload_create` | `ftps_upload_status` |
 | `release_apply` | `project_inspect` |
 | `app_invitations_create` | `app_invitations_list` |
 | `app_invitation_resend` | `app_invitations_list` |

@@ -135,6 +135,8 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "files_upload",
       "files_update",
       "files_delete",
+      "ftps_upload_create",
+      "ftps_upload_status",
       "transfer_read",
       "transfer_status",
       "transfer_cancel",
@@ -182,7 +184,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. A client that redirects to http://127.0.0.1, localhost or [::1] gets a 24-hour token and may also ask for export_data; any other client gets a one-hour token without export_data. Under Clerk every token lasts one hour. There is no refresh token.",
     "permissions": {
       "export_data": "project_export and reading its downloads",
-      "manage_users": "module_set for auth, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
+      "manage_users": "module_set for auth, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, app_invitations tools, ftps_credentials_list, ftps_device_create, ftps_device_rotate and ftps_credential_revoke",
       "module_set": "Changes a module whose registry permission is held by the credential",
       "modules_read": "Reads module state and options; requires read",
       "none": "platform_describe, platform_guide, session_inspect and mail_status",
@@ -965,9 +967,9 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
         {
           "default": null,
           "defaultLabel": "Only the uploader",
-          "help": "Let every signed-in user read all files in this app.",
+          "help": "Share ordinary uploads with signed-in users. Member FTPS uploads stay private to their uploader.",
           "key": "fileAccess",
-          "label": "Who can read every file",
+          "label": "Who can read Files uploads",
           "type": "enum",
           "valueLabels": {
             "app-users": "All signed-in users"
@@ -985,7 +987,7 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
         "fileAccess": null,
         "on": false
       },
-      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "summary": "Small files stored by the Kernel for one Deployment. The app can share ordinary Files uploads among its users.",
       "switch": true,
       "uses": [
         "miniapp.files"
@@ -1042,9 +1044,9 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
         {
           "default": null,
           "defaultLabel": "Only the uploader",
-          "help": "Let every signed-in user read all files in this app.",
+          "help": "Share ordinary uploads with signed-in users. Member FTPS uploads stay private to their uploader.",
           "key": "fileAccess",
-          "label": "Who can read every file",
+          "label": "Who can read Files uploads",
           "type": "enum",
           "valueLabels": {
             "app-users": "All signed-in users"
@@ -1062,7 +1064,7 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
         "fileAccess": null,
         "on": true
       },
-      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "summary": "Small files stored by the Kernel for one Deployment. The app can share ordinary Files uploads among its users.",
       "switch": true,
       "uses": [
         "miniapp.files"
@@ -1502,6 +1504,16 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         }
       ],
       "createdAt": <time ms>,
+      "dataVersions": {
+        "actions": 2,
+        "auth": 1,
+        "calls": 1,
+        "documents": 1,
+        "file-intake": 1,
+        "files": 2,
+        "functions": 1,
+        "usage": 1
+      },
       "deploymentId": "<project id>",
       "excluded": [
         "app sessions",
@@ -1525,6 +1537,12 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         "calls": {
           "on": false
         },
+        "documents": {
+          "on": false
+        },
+        "file-intake": {
+          "on": false
+        },
         "files": {
           "fileAccess": null,
           "on": true
@@ -1534,6 +1552,9 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         },
         "http": {
           "on": true
+        },
+        "mcp": {
+          "on": false
         },
         "seo": {
           "canonical": null,

@@ -54,11 +54,11 @@ describe("the SDK contract", () => {
       ],
     });
     expect(seo?.uses).toBeDefined();
-    expect(sdkContract.modules.map((module) => module.title)).toEqual(["App accounts", "Data and actions", "Page address values", "File storage", "Outgoing calls", "Incoming routes", "Search listing", "Server functions"]);
+    expect(sdkContract.modules.map((module) => module.title)).toEqual(["App accounts", "Data and actions", "Page address values", "File storage", "Outgoing calls", "Incoming routes", "Search listing", "Server functions", "App MCP", "Documents", "File intake"]);
     expect(seo?.options[0].valueLabels).toEqual({ domain: "Custom domain", hostname: "Generated hostname", path: "Path address" });
-    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["auth", "actions", "files", "calls", "http", "seo", "functions"]);
+    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["auth", "actions", "files", "calls", "http", "seo", "functions", "mcp", "documents", "file-intake"]);
     const files = sdkContract.modules.find((module) => module.name === "files");
-    expect(files).toMatchObject({ title: "File storage", switch: true, requires: ["auth"], options: [{ key: "fileAccess", label: "Who can read every file", valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader" }] });
+    expect(files).toMatchObject({ title: "File storage", switch: true, requires: ["auth"], options: [{ key: "fileAccess", label: "Who can read Files uploads", valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader" }] });
     expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");
     const modules = JSON.parse(renderAll()["kernel-rs/kernel/src/modules.json"]);
     expect(modules.modules.actions.switch).toBe(true);
@@ -205,8 +205,9 @@ describe("the rendered readers", () => {
   test("the prompt, guide and docs carry every module and the agent read-back rule", () => {
     const prompt = buildSystemPrompt(cloneStarter());
     for (const module of sdkContract.modules) {
-      expect(prompt).toContain(`- ${module.name}: ${module.summary}`);
-      expect(prompt).toContain(`Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`);
+      expect(prompt).toContain(`/reference/sdk/${module.name}.md: ${module.summary}`);
+      const controls = prompt.split("\n").find((line) => line.startsWith(`- ${module.name}.`));
+      expect(controls).toContain(`Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`);
       expect(read("docs/sdk.md")).toContain(`### ${module.title} (\`${module.name}\`)`);
     }
     expect(prompt).toContain("module_set changes switchable modules or their options; read modules_read after each change.");

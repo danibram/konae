@@ -16,7 +16,28 @@ pub async fn invoke_action(
     headers: HeaderMap,
     Json(input): Json<Value>,
 ) -> Response {
-    let mut response = invoke_action_inner(state, name, headers.clone(), input).await;
+    let mut response = invoke_action_inner(state, name, headers.clone(), input, None).await;
+    crate::functions::trace::attach_request_response(&headers, &mut response);
+    response
+}
+
+fn pinned_mcp_query(action: &crate::actions::ActionDefinition) -> bool {
+    action.kind == "query"
+        && action.access == "authenticated"
+        && action.extra.get("mcp").is_some_and(|value| {
+            value["description"].as_str().is_some_and(|description| !description.trim().is_empty())
+        })
+}
+
+pub(crate) async fn invoke_action_pinned(
+    state: AppState,
+    deployment: crate::Deployment,
+    actor: crate::auth::AuthUser,
+    name: String,
+    headers: HeaderMap,
+    input: Value,
+) -> Response {
+    let mut response = invoke_action_inner(state, name, headers.clone(), input, Some((deployment, actor))).await;
     crate::functions::trace::attach_request_response(&headers, &mut response);
     response
 }
@@ -26,10 +47,14 @@ async fn invoke_action_inner(
     name: String,
     headers: HeaderMap,
     input: Value,
+    pinned: Option<(crate::Deployment, crate::auth::AuthUser)>,
 ) -> Response {
-    let deployment = match deployment_for(&state, &headers).await {
-        Some(value) => value,
-        None => return error(StatusCode::NOT_FOUND, "Deployment not found."),
+    let (deployment, pinned_actor) = match pinned {
+        Some((deployment, actor)) => (deployment, Some(actor)),
+        None => match deployment_for(&state, &headers).await {
+            Some(value) => (value, None),
+            None => return error(StatusCode::NOT_FOUND, "Deployment not found."),
+        },
     };
     if let Err(refused) = modules::require_on(&deployment.modules, "actions") {
         return refusal_error(&refused);
@@ -47,6 +72,9 @@ async fn invoke_action_inner(
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Server action not declared."),
     };
+    if pinned_actor.is_some() && !pinned_mcp_query(action) {
+        return error(StatusCode::FORBIDDEN, "Action is not a published authenticated MCP query.");
+    }
     if action.access == "scheduled" {
         return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only inside a scheduled Function."));
     }
@@ -73,9 +101,12 @@ async fn invoke_action_inner(
             &format!("Action {name} runs only on its schedule."),
         );
     }
-    let actor = match authenticate_deployment(&state, &deployment, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
+    let actor = match pinned_actor {
+        Some(actor) => Some(actor),
+        None => match authenticate_deployment(&state, &deployment, &headers).await {
+            Ok(actor) => actor,
+            Err(response) => return response,
+        },
     };
     if action.access == "granted" {
         return error(StatusCode::FORBIDDEN, "action-grant-required");
@@ -137,10 +168,14 @@ async fn invoke_action_inner(
         } else {
             let _guard = action_lock(&state, &deployment.id, &action.kind).await;
             match state.guards.statement_permit(&deployment.id).await {
-                Ok(permit) if action.notify.is_some() => crate::run_action_in_slot_with_notify(db_path, action, params, permit,
+                Ok(permit) if action.notify.is_some() || action.issue.is_some() => crate::run_action_in_slot_with_notify(db_path, action, params, permit,
                     notify::MutationContext { app: deployment.id.clone(), release: deployment.artifact_version.clone(), action: name.clone(),
                         input: input.clone(), account: actor.as_ref().map(|user| user.user_id.clone()),
-                        actor_id: actor.as_ref().map(|user| user.user_id.clone()), at: now_ms() }).await,
+                        actor_id: actor.as_ref().map(|user| user.user_id.clone()), at: now_ms(),
+                        documents_rule: action.issue.as_ref().and_then(|issue| {
+                            let source = serde_json::from_str::<Value>(&deployment.actions).ok()?;
+                            serde_json::to_string(source["actions"].get(&issue.download)?).ok()
+                        }) }).await,
                 Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
                 Err(wait) => return http::rate_limited(wait),
             }
@@ -196,6 +231,9 @@ async fn invoke_action_inner(
                             );
                         }
                         if let Some(id) = ran.notify_intent.as_deref() { notify::record_intent(&state, &deployment, id).await; }
+                        if action.issue.is_some() && ran.answer["changes"].as_u64().unwrap_or_default() > 0 {
+                            crate::documents::record_issue(&state, &deployment).await;
+                        }
                     }
                     Json(json!({"result": ran.answer})).into_response()
                 }
@@ -209,4 +247,22 @@ async fn invoke_action_inner(
         }
     })
     .await
+}
+
+#[cfg(test)]
+mod pinned_tests {
+    use super::pinned_mcp_query;
+
+    #[test]
+    fn pinned_execution_refuses_a_replaced_non_mcp_action() {
+        let published: crate::actions::ActionDefinition = serde_json::from_value(serde_json::json!({
+            "kind":"query","access":"authenticated","statement":"SELECT 1 LIMIT 1","bindings":[],
+            "mcp":{"description":"Read published rows."}
+        })).unwrap();
+        let replacement: crate::actions::ActionDefinition = serde_json::from_value(serde_json::json!({
+            "kind":"mutation","access":"authenticated","statement":"DELETE FROM notes","bindings":[]
+        })).unwrap();
+        assert!(pinned_mcp_query(&published));
+        assert!(!pinned_mcp_query(&replacement));
+    }
 }

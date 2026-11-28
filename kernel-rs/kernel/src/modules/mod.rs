@@ -29,12 +29,16 @@ struct ModuleData {
 #[serde(rename_all = "kebab-case")]
 enum BlobInventoryProvider {
     FileIndex,
+    IntakeVersions,
+    Documents,
 }
 
 impl BlobInventoryProvider {
     fn as_str(self) -> &'static str {
         match self {
             Self::FileIndex => "file-index",
+            Self::IntakeVersions => "intake-versions",
+            Self::Documents => "documents",
         }
     }
 }
@@ -126,6 +130,8 @@ pub fn blob_references_in_data_dir(directory: &std::path::Path) -> Result<Vec<Bl
         data_registry().iter().filter_map(|(module, data)| data.objects.map(|provider| (module.as_str(), provider))),
         |provider| match provider {
             BlobInventoryProvider::FileIndex => crate::file_store::file_index_references_in(&directory.join("files")),
+            BlobInventoryProvider::IntakeVersions => crate::file_intake::blob_references(&directory.join("database.sqlite")),
+            BlobInventoryProvider::Documents => crate::documents::blob_references_in(directory),
         },
     )
 }
@@ -154,7 +160,8 @@ pub fn data_versions_for_components<'a>(components: impl IntoIterator<Item = &'a
 pub fn check_data_versions(versions: &BTreeMap<String, u64>) -> Result<()> {
     for (module, version) in versions {
         let expected = data_version(module).with_context(|| format!("The package names unknown module data {module}."))?;
-        ensure!(*version == expected, "Module {module} data version {version} is not supported. This Kernel reads version {expected}.");
+        let legacy_files = module == "files" && *version == 1 && expected == 2;
+        ensure!(*version == expected || legacy_files, "Module {module} data version {version} is not supported. This Kernel reads version {expected}.");
     }
     Ok(())
 }
@@ -188,6 +195,22 @@ const DURABLE_WORK: &[DurableWork] = &[
         prepare_transfer: crate::notify::prepare_transfer,
         pause_export: Some(crate::notify::pause_exported_intents),
         resume_import: Some(crate::notify::resume_imported_intents),
+    },
+    DurableWork {
+        resource: crate::execution::WorkResource::FileIntake,
+        start: crate::file_intake::spawn_worker,
+        check_pending: Some(crate::file_intake::check_pending),
+        prepare_transfer: crate::file_intake::prepare_transfer,
+        pause_export: Some(crate::file_intake::pause_export),
+        resume_import: Some(crate::file_intake::resume_import),
+    },
+    DurableWork {
+        resource: crate::execution::WorkResource::Documents,
+        start: crate::documents::spawn_worker,
+        check_pending: Some(crate::documents::check_pending_on_connection),
+        prepare_transfer: crate::documents::prepare_transfer,
+        pause_export: Some(crate::documents::pause_export),
+        resume_import: Some(crate::documents::resume_import),
     },
 ];
 
@@ -303,6 +326,12 @@ pub fn sources_use_http<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>
 pub fn sources_use_calls<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
     files.into_iter().filter(|(name, _)| *name == "actions.json").any(|(_, bytes)| {
         serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(|action| action["kind"] == "call"))).unwrap_or(false)
+    })
+}
+
+pub fn sources_use_documents<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
+    files.into_iter().filter(|(name, _)| *name == "actions.json").any(|(_, bytes)| {
+        serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(|action| !action["issue"].is_null()))).unwrap_or(false)
     })
 }
 
@@ -639,7 +668,7 @@ pub async fn set(
                     check_dependent_requires(module, dependent, true)?;
                 }
             }
-            let used = published_app_uses_module(root, id, module, &current);
+            let used = published_app_uses_module(root, id, module, &current, settings.released.as_ref().map(|released| &released.manifest));
             if module == "http" && used {
                 let action = released_action_name(root, id, |action| action["http"].is_object()).unwrap_or_else(|| "a published action".to_owned());
                 check_in_use_action(module, &action)?;
@@ -673,19 +702,24 @@ pub async fn set(
             settings.sign_in_methods = serde_json::from_value(methods.clone())?;
         }
     }
+    if module == "mcp" && on == Some(false) {
+        crate::server::app_oauth::revoke_app_tokens_at(root, id)?;
+    }
     settings.modules.insert(module.to_owned(), current.clone());
     settings.write(root).await?;
     Ok(json!({"projectId":id,"module":module,"state":current}))
 }
 
-fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, state: &Value) -> bool {
+fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, state: &Value, released_manifest: Option<&Value>) -> bool {
     if crate::functions::published_use(root, id, module) { return true; }
     match module {
-        "files" => uses_files(root, id, state),
-        "auth" => uses_auth(root, id),
+        "files" => uses_files(root, id, state) || released_manifest.is_some_and(crate::ftps_declaration::manifest_uses_member),
+        "auth" => uses_auth(root, id) || released_manifest.is_some_and(crate::ftps_declaration::manifest_uses_member),
         "actions" => uses_actions(root, id),
         "http" => uses_http(root, id),
         "calls" => uses_calls(root, id),
+        "mcp" => released_action_use(root, id, |action| action["mcp"].is_object()),
+        "documents" => uses_documents(root, id),
         _ => false,
     }
 }
@@ -791,6 +825,10 @@ pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
     named_sources_use_actions([("actions.json", actions.as_slice()), ("schema.sql", schema.as_slice())])
 }
 
+pub fn uses_documents(root: &std::path::Path, id: &str) -> bool {
+    released_action_use_or_false_when_source_is_missing(root, id, |action| action["issue"].is_object())
+}
+
 fn database_has_tables(path: &std::path::Path) -> bool {
     if !path.is_file() { return false; }
     let connection = match rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
@@ -855,8 +893,12 @@ mod tests {
 
     #[test]
     fn data_versions_are_portable_and_reject_unknown_or_incompatible_state() {
+        assert!(is_reserved_name("__konae_ftps_uploads"));
         let current = data_versions();
         assert!(check_data_versions(&current).is_ok());
+        let mut legacy = current.clone();
+        legacy.insert("files".into(), 1);
+        assert!(check_data_versions(&legacy).is_ok());
         let mut unknown = current.clone();
         unknown.insert("future-private".into(), 1);
         assert!(check_data_versions(&unknown).unwrap_err().to_string().contains("unknown module data future-private"));
@@ -972,7 +1014,7 @@ mod tests {
     #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "files", "functions", "http", "seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "documents", "file-intake", "files", "functions", "http", "mcp", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);
@@ -1207,6 +1249,37 @@ mod tests {
         let index = crate::layout::files(&root, "app");
         std::fs::create_dir_all(&index).unwrap();
         std::fs::write(index.join("index.json"), r#"[{"id":"file-1"}]"#).unwrap();
+        let error = set(&root, "app", "files", Some(false), None, None).await.unwrap_err();
+        assert!(error.to_string().contains("Module files is in use by the published app. Remove its use before turning it off."));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_draft_ftps_change_does_not_remove_the_published_files_dependency() {
+        let root = std::env::temp_dir().join(format!("konae-ftps-files-in-use-{}", uuid::Uuid::new_v4()));
+        let mut settings = Settings::new("app", "App", "app", &json!({"visibility":"public"}));
+        settings.modules.get_mut("files").unwrap()["on"] = json!(true);
+        settings.released = Some(crate::ReleasedSettings {
+            name: settings.name.clone(),
+            slug: settings.slug.clone(),
+            visibility: "public".into(),
+            signup_policy: settings.signup_policy.clone(),
+            sign_in_methods: settings.sign_in_methods.clone(),
+            contact_email: None,
+            manifest: json!({"ftps":{"version":1,"destinations":{"photos":{"kind":"member"}}}}),
+            actions: String::new(),
+            schema_sql: String::new(),
+            schema_transforms: None,
+            server: None,
+            source_digest: None,
+            artifact_digest: None,
+            released_at: Some(1),
+        });
+        settings.write(&root).await.unwrap();
+        let sources = crate::layout::sources(&root, "app");
+        std::fs::create_dir_all(&sources).unwrap();
+        std::fs::write(sources.join("ftps.json"), r#"{"version":1,"destinations":{"meters":{"kind":"device"}}}"#).unwrap();
+        std::fs::create_dir_all(crate::layout::dist(&root, "app")).unwrap();
         let error = set(&root, "app", "files", Some(false), None, None).await.unwrap_err();
         assert!(error.to_string().contains("Module files is in use by the published app. Remove its use before turning it off."));
         std::fs::remove_dir_all(root).unwrap();

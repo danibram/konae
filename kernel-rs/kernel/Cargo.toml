@@ -28,6 +28,7 @@ libc.workspace = true
 rusqlite.workspace = true
 reqwest.workspace = true
 ring.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 oxc_allocator = "=0.67.0"
 oxc_parser = "=0.67.0"
 oxc_span = "=0.67.0"
@@ -35,9 +36,11 @@ oxc_syntax = "=0.67.0"
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 sha2.workspace = true
+subtle = "2"
 time = "0.3"
 tokio.workspace = true
 tokio-util.workspace = true
+thirtyftp = { path = "../vendor/thirtyftp" }
 tower.workspace = true
 uuid.workspace = true
 url.workspace = true

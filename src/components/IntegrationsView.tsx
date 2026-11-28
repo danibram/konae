@@ -2,12 +2,13 @@ import { platformAccessHref } from "./owner-session";
 import { Copy, KeyRound, Plus } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
-  createApiKey, deleteSecret, listApiKeys, listSecrets, revokeApiKey, setSecret,
-  type ApiKey, type FileVisibility, type ProjectSecret,
+  createApiKey, createFtpsDevice, deleteSecret, ftpsWriteThenReadBack, listApiKeys, listFtpsCredentials, listSecrets,
+  revokeApiKey, revokeFtpsCredential, rotateFtpsDevice, setSecret,
+  type ApiKey, type FileVisibility, type FtpsConnection, type FtpsCredentialList, type ProjectSecret,
 } from "../deployments/client";
 import { namedSecrets } from "./action-readiness";
 import { apiKeyProblem, fileCurl, revokedKeyNotes, routeActions, routeCurl, secretProblem, type RouteAction } from "./app-access";
-import { Badge, Button, Card, Dialog, EmptyState, Field, Input, LoadingBlock } from "./ui";
+import { Badge, Button, Card, Dialog, EmptyState, Field, Input, LoadingBlock, Select } from "./ui";
 import { useLoadingHold } from "./loading-hold";
 import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
@@ -33,10 +34,127 @@ export function IntegrationsView({ projectId, deploymentId, deploymentUrl, actio
       {ownerSignedOut ? <Card className="access-card"><SignedOut /></Card> : <>
         <SecretsCard projectId={projectId} actionsSource={actionsSource} onSignedOut={onSignedOut} />
         {deploymentId && deploymentUrl
-          ? <ApiKeysCard deploymentId={deploymentId} deploymentUrl={deploymentUrl} routes={routes} onSignedOut={onSignedOut} />
+          ? <><ApiKeysCard deploymentId={deploymentId} deploymentUrl={deploymentUrl} routes={routes} onSignedOut={onSignedOut} /><FtpsCard deploymentId={deploymentId} onSignedOut={onSignedOut} /></>
           : <Card className="access-card"><EmptyState icon={<KeyRound size={24} />} title="API keys need a published app" description="A key belongs to one published app and calls its routes. Deploy the app, then create a key here." /></Card>}
       </>}
     </section>
+  );
+}
+
+function FtpsCard({ deploymentId, onSignedOut }: { deploymentId: string; onSignedOut: () => void }) {
+  const [listed, setListed] = useState<FtpsCredentialList | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [destination, setDestination] = useState("");
+  const [label, setLabel] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [revealed, setRevealed] = useState<FtpsConnection | null>(null);
+  const confirm = useConfirm(onSignedOut);
+
+  useEffect(() => {
+    let current = true;
+    listFtpsCredentials(deploymentId).then((answer) => {
+      if (!current) return;
+      setListed(answer);
+      setError("");
+      const firstDevice = Object.entries(answer.destinations).find(([, item]) => item.kind === "device")?.[0] ?? "";
+      setDestination((value) => value && answer.destinations[value]?.kind === "device" ? value : firstDevice);
+    }, (cause) => {
+      if (!current) return;
+      if (signedOut(cause)) onSignedOut();
+      setError(message(cause));
+    });
+    return () => { current = false; };
+  }, [deploymentId, onSignedOut]);
+
+  const issue = async (request: () => Promise<FtpsConnection>) => {
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const answer = await ftpsWriteThenReadBack(request, setRevealed, () => listFtpsCredentials(deploymentId));
+      setListed(answer);
+      setError("");
+    } catch (cause) {
+      if (signedOut(cause)) onSignedOut();
+      setError(message(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const create = () => {
+    const cleanLabel = label.trim();
+    if (!destination || !cleanLabel) {
+      setError("Choose a device destination and enter a label.");
+      return;
+    }
+    void issue(() => createFtpsDevice(deploymentId, destination, cleanLabel).then((connection) => {
+      setLabel("");
+      return connection;
+    }));
+  };
+
+  const devices = Object.entries(listed?.destinations ?? {}).filter(([, item]) => item.kind === "device");
+  const credentials = listed?.credentials ?? [];
+
+  return (
+    <Card className="access-card" role="group" aria-label="FTPS credentials">
+      <h3>FTPS device credentials</h3>
+      <p className="access-note">Issue a credential for a device destination. It can upload more than one file. Konae shows each password once.</p>
+      {error && <div className="access-error" role="alert">{error}</div>}
+      {notice && <p className="access-note" role="status">{notice}</p>}
+      {!listed ? !error && <LoadingBlock label="Loading FTPS credentials" rows={2} /> : <>
+          {devices.length === 0 && <p className="access-note">Publish a device destination in app/ftps.json to issue new credentials.</p>}
+          {credentials.length === 0 ? devices.length > 0 && <p className="access-note">No device credentials.</p> : (
+            <ul className="access-keys" aria-label="Device credentials">
+              {credentials.map((credential) => (
+                <li key={credential.credentialId}>
+                  <div className="access-key-head">
+                    <strong>{credential.label}</strong>
+                    <code>{credential.credentialId}</code>
+                    <small>{credential.destination}{credential.createdAt ? ` · Created ${new Date(credential.createdAt).toLocaleDateString()}` : ""}</small>
+                    <span className="access-row-actions">
+                      <Button size="sm" loading={saving} disabled={saving || listed.destinations[credential.destination]?.kind !== "device"} onClick={() => void issue(() => rotateFtpsDevice(deploymentId, credential.credentialId))}>Rotate</Button>
+                      <Button size="sm" variant="ghost" disabled={saving} onClick={() => confirm.ask({
+                        title: `Revoke ${credential.label}?`,
+                        description: "This device will no longer be able to upload with this credential.",
+                        action: "Revoke credential",
+                        run: async () => {
+                          const answer = await ftpsWriteThenReadBack(
+                            () => revokeFtpsCredential(deploymentId, credential.credentialId),
+                            () => {},
+                            () => listFtpsCredentials(deploymentId),
+                          );
+                          setListed(answer);
+                          setError("");
+                          setNotice(`Revoked ${credential.label}.`);
+                        },
+                      })}>Revoke</Button>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {devices.length > 0 && <fieldset className="access-create">
+            <legend>New device credential</legend>
+            <Field label="Destination"><Select value={destination} onChange={(event) => setDestination(event.target.value)}>{devices.map(([name, item]) => <option key={name} value={name}>{name}{item.folder ? ` · ${item.folder}` : ""}</option>)}</Select></Field>
+            <Field label="Label" help="Name the device that will use this credential."><Input value={label} maxLength={80} onChange={(event) => setLabel(event.target.value)} /></Field>
+            <div className="access-actions"><Button variant="primary" size="sm" loading={saving} disabled={saving || !destination || !label.trim()} onClick={create}><Plus size={13} /> Create device credential</Button></div>
+          </fieldset>}
+        </>}
+      {confirm.dialog}
+      {revealed && <Dialog title="Copy this FTPS password now" description="Konae cannot show this password again after you close this dialog." onClose={() => setRevealed(null)} footer={<Button variant="primary" onClick={() => setRevealed(null)}>I copied the password</Button>}>
+        <div className="ui-dialog-body access-reveal">
+          <CopyLine label="Host" text={revealed.host} />
+          <CopyLine label="Port" text={String(revealed.port)} />
+          <CopyLine label="Username" text={revealed.username} />
+          <CopyLine label="Password" text={revealed.password} />
+          {revealed.expiresAt && <p className="access-note">Expires {new Date(revealed.expiresAt).toLocaleString()}.</p>}
+        </div>
+      </Dialog>}
+    </Card>
   );
 }
 

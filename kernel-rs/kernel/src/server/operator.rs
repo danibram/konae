@@ -10,7 +10,7 @@ use crate::{
     find_project_deployment, http, invitations, layout, recovery, runtime,
 };
 
-const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "module", "modules", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test", "queues"];
+const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "module", "modules", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test", "queues", "ftps"];
 
 pub fn usage() -> &'static str {
     "Commands on an app this Kernel serves. Add --app <id> when the data directory holds more than one app.
@@ -34,9 +34,11 @@ pub fn usage() -> &'static str {
   kernel test status [--app <id>]
   kernel test schedule <action|cron:id> [--app <id>]
   kernel test calls [--app <id>]
+  kernel test intake <source> --path <relative-path> --file <completed-file> [--delivery-key <key>] [--app <id>]
   kernel test reply <call id> [--app <id>]   reads response JSON from standard input
   kernel test reset-effects [--app <id>]   retires pending work after a stopped local reset
   kernel queues preflight|migrate|rollback <backup>   migrate legacy queues while consumers are stopped
+  kernel ftps status   show the installation's saved FTPS listener settings
   kernel maintenance on|off
   kernel enter <email>   prints a one-time link that signs this browser in as the account, for 2 minutes
   kernel import <folder> [--confirm-schema <confirmation>]   replaces the app's data with the data/ of an exported folder, after a backup"
@@ -118,6 +120,13 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     else {
         return Ok(false);
     };
+    if name == "ftps" {
+        let mut words = Arguments::new(&args[1..]);
+        ensure!(words.next().as_deref() == Some("status") && words.rest().is_empty(), "kernel ftps status\n{}", usage());
+        let startup = Startup::from_env()?;
+        println!("{}", serde_json::to_string_pretty(&crate::ftps::configured_status(&startup.data_root)?)?);
+        return Ok(true);
+    }
     let mut words = Arguments::new(&args[1..]);
     let app = words.option("app")?;
     let startup = Startup::from_env()?;
@@ -203,6 +212,17 @@ async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Resu
         Some("calls") => {
             ensure!(words.rest().is_empty(), "{}", usage());
             Ok(json!({"calls": crate::calls::list_test_calls_for_app(state, id).await?}))
+        }
+        Some("intake") => {
+            let source = words.required("a declared source ID")?;
+            let relative_path = words.required_option("path")?;
+            let staged = words.required_option("file")?;
+            let delivery_key = words.option("delivery-key")?;
+            ensure!(words.rest().is_empty(), "{}", usage());
+            let deployment = served(state, id).await?;
+            ensure!(crate::modules::is_on(&deployment.modules, "file-intake"), "Turn on the file-intake module before accepting files.");
+            let accepted = crate::file_intake::accept_staged(state, &deployment, &source, std::path::Path::new(&staged), &relative_path, delivery_key.as_deref()).await?;
+            Ok(serde_json::to_value(accepted)?)
         }
         Some("reply") => {
             let call = words.required("the captured call's ID")?;
@@ -422,6 +442,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                 words.rest().is_empty() && ["on", "off"].contains(&value.as_str()),
                 "kernel module <name> on|off"
             );
+            let _release_guard = crate::named_lock(state, &format!("publish:{}", deployment.id), true).await;
             let result = crate::modules::set(
                 &state.data_root,
                 &deployment.id,

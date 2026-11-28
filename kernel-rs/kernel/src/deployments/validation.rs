@@ -75,6 +75,11 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let uses_actions = crate::modules::named_sources_use_actions(action_files.iter().copied());
     let uses_http = crate::modules::sources_use_http(action_files.iter().copied());
     let uses_calls = crate::modules::sources_use_calls(action_files.iter().copied());
+    let intake_source = input.project.files.get(crate::file_intake::DECLARATION_FILE);
+    let ftps_source = input.project.files.get(crate::ftps_declaration::DECLARATION_FILE);
+    let ftps_declaration = ftps_source.map(|source| crate::ftps_declaration::validate_declaration(source)).transpose()?;
+    let uses_ftps_member = ftps_declaration.as_ref().is_some_and(|declaration| declaration.destinations.values().any(|destination| destination.kind == crate::ftps_declaration::DestinationKind::Member));
+    let uses_documents = crate::modules::sources_use_documents(action_files.iter().copied());
     crate::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
     crate::calls::check_connects(&input.project.manifest)?;
     let artifact = crate::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
@@ -92,7 +97,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let initial_modules = input.initial_modules.as_ref().or(package_modules);
     let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
     let first_release = existing_modules.is_none();
-    let mut candidate_modules = existing_modules.unwrap_or_else(|| crate::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
+    let mut candidate_modules = existing_modules.unwrap_or_else(|| crate::modules::initial_for_release(initial_modules, uses_files || uses_ftps_member, uses_auth || uses_ftps_member || input.visibility != "public", uses_http, uses_calls));
     crate::functions::enable_cron_modules(&mut candidate_modules, functions.as_ref());
     if input.project.manifest["fileAccess"] == "app-users" {
         let files = candidate_modules.get_mut("files").expect("files is switchable");
@@ -111,11 +116,31 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     if let Some(manifest) = functions.as_ref().filter(|manifest| !manifest.crons.is_empty()) {
         manifest.check_modules(&candidate_modules)?;
     }
+    let uses_mcp = serde_json::from_str::<Value>(actions_source)
+        .ok()
+        .and_then(|program| program["actions"].as_object().map(|actions| actions.values().any(|action| !action["mcp"].is_null())))
+        .unwrap_or(false);
+    if first_release && initial_modules.is_none_or(|modules| !modules.contains_key("mcp")) && uses_mcp {
+        candidate_modules.get_mut("mcp").expect("mcp is switchable")["on"] = json!(true);
+    }
     for module in crate::modules::release_use_order() {
-        let used = match module.as_str() { "files" => uses_files, "actions" => uses_actions, "http" => uses_http, "calls" => uses_calls, _ => false };
+        let used = match module.as_str() {
+            "files" => uses_files || uses_ftps_member,
+            "actions" => uses_actions,
+            "http" => uses_http,
+            "calls" => uses_calls,
+            "mcp" => uses_mcp,
+            "documents" => uses_documents,
+            "file-intake" => intake_source.is_some(),
+            _ => false,
+        };
         if used { crate::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
     }
     let program = crate::action_shape::read(actions_source)?;
+    if let Some(raw) = intake_source {
+        let declaration = crate::file_intake::validate_declaration(raw)?;
+        crate::file_intake::validate_consumers(&declaration, &program)?;
+    }
     if input.visibility != "public" && !crate::modules::is_on(&candidate_modules, "auth") {
         return Err(anyhow::Error::new(crate::modules::check_private_auth(false).unwrap_err()));
     }

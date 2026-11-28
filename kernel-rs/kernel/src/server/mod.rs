@@ -2,6 +2,7 @@ mod state;
 pub mod throttle;
 pub mod operator;
 pub mod runtime;
+pub mod app_oauth;
 pub mod security;
 pub mod transfers;
 

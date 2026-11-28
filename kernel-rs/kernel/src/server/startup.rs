@@ -40,6 +40,7 @@ pub struct Running {
     pub state: AppState,
     pub _lock: std::fs::File,
     copy_config: Option<copies::CopyConfig>,
+    _ftps: Option<crate::ftps::Runtime>,
 }
 
 /// Loads every app folder, builds the state and starts the workers: copies,
@@ -80,6 +81,9 @@ pub async fn start_locked(
     tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
+    if state.deployments.read().await.values().any(|deployment| crate::modules::is_on(&deployment.modules, "documents")) {
+        crate::documents::require_renderer().await?;
+    }
     let deployments = state.deployments.read().await.values()
         .filter(|deployment| deployment.server.as_ref().is_some_and(|server| !server.manifest.functions.is_empty()))
         .cloned().collect::<Vec<_>>();
@@ -100,6 +104,12 @@ pub async fn start_locked(
         }
     }
     path::load(&state);
+    let deployed_apps: Vec<_> = state.deployments.read().await.values().cloned().collect();
+    for deployment in deployed_apps {
+        if let Err(error) = crate::files::reconcile_ftps_uploads(&state, &deployment).await {
+            eprintln!("Could not recover FTPS uploads for apps/{}: {error:#}", deployment.id);
+        }
+    }
     let own_hosts = domain::Rules::of(&state).installation_hosts;
     for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {
         eprintln!("Not serving apps/{}: {} is this installation's own host. Move the app with hostname_set.", deployment.id, deployment.hostname);
@@ -119,7 +129,8 @@ pub async fn start_locked(
         mail::spawn_worker(queue, state.copies.clone(), state.clone());
     }
     crate::modules::start_durable_work(&state);
-    Ok(Running { state, _lock: lock, copy_config })
+    let ftps = crate::ftps::start(&state).await?;
+    Ok(Running { state, _lock: lock, copy_config, _ftps: ftps })
 }
 
 /// The state a Kernel serves with, read from the environment, without its

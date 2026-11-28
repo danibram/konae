@@ -212,6 +212,49 @@ export function revokeApiKey(deploymentId: string, keyId: string) {
   return platformMcp.call<{ keyId: string; revoked: boolean }>("api_keys_revoke", { projectId: deploymentId, keyId });
 }
 
+
+export type FtpsDestination = { kind: "member" | "device"; folder?: string };
+export type FtpsCredential = {
+  credentialId: string;
+  destination: string;
+  label: string;
+  createdAt?: number;
+  expiresAt?: number | null;
+  revokedAt?: number | null;
+};
+export type FtpsCredentialList = { destinations: Record<string, FtpsDestination>; credentials: FtpsCredential[] };
+export type FtpsConnection = {
+  credentialId: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  expiresAt?: number;
+  uploadId?: string;
+};
+
+export function listFtpsCredentials(projectId: string) {
+  return platformMcp.call<FtpsCredentialList>("ftps_credentials_list", { projectId });
+}
+
+export async function ftpsWriteThenReadBack<T>(write: () => Promise<T>, onWritten: (value: T) => void, readBack: () => Promise<FtpsCredentialList>) {
+  const written = await write();
+  onWritten(written);
+  return readBack();
+}
+
+export function createFtpsDevice(projectId: string, destination: string, label: string) {
+  return platformMcp.call<FtpsConnection>("ftps_device_create", { projectId, destination, label });
+}
+
+export function rotateFtpsDevice(projectId: string, credentialId: string) {
+  return platformMcp.call<FtpsConnection>("ftps_device_rotate", { projectId, credentialId });
+}
+
+export function revokeFtpsCredential(projectId: string, credentialId: string) {
+  return platformMcp.call<{ credentialId: string; revoked: boolean }>("ftps_credential_revoke", { projectId, credentialId });
+}
+
 export class HostedDatabaseClient implements DatabaseAdminHost {
   constructor(readonly deploymentId: string) {}
 

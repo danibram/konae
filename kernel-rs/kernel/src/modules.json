@@ -99,7 +99,7 @@
       ]
     },
     "files": {
-      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "summary": "Small files stored by the Kernel for one Deployment. The app can share ordinary Files uploads among its users.",
       "switch": true,
       "options": [
         {
@@ -113,8 +113,8 @@
           },
           "defaultLabel": "Only the uploader",
           "default": null,
-          "label": "Who can read every file",
-          "help": "Let every signed-in user read all files in this app."
+          "label": "Who can read Files uploads",
+          "help": "Share ordinary uploads with signed-in users. Member FTPS uploads stay private to their uploader."
         }
       ],
       "permission": "publish",
@@ -126,9 +126,13 @@
         "miniapp.files"
       ],
       "data": {
-        "version": 1,
+        "version": 2,
         "components": [
+          "database",
           "files"
+        ],
+        "reserved": [
+          "__konae_ftps_uploads"
         ],
         "objects": "file-index"
       }
@@ -231,6 +235,79 @@
         "migrations": [
           "function-receipts"
         ]
+      }
+    },
+    "mcp": {
+      "summary": "Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": [
+        "actions",
+        "auth"
+      ],
+      "uses": [
+        "actions.json mcp"
+      ]
+    },
+    "documents": {
+      "summary": "Issue portable PDFs from mutation snapshots and serve them through an app-owned read rule.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": [
+        "actions",
+        "auth"
+      ],
+      "uses": [
+        "actions.json issue and download declarations"
+      ],
+      "data": {
+        "version": 1,
+        "components": [
+          "database",
+          "files"
+        ],
+        "reserved": [
+          "__konae_documents"
+        ],
+        "migrations": [
+          "documents-v1"
+        ],
+        "objects": "documents"
+      }
+    },
+    "file-intake": {
+      "summary": "Accepts immutable file versions from declared sources and queues declared app consumers.",
+      "switch": true,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "after-owner-confirms",
+      "requires": [
+        "actions"
+      ],
+      "uses": [
+        "file-intake.json"
+      ],
+      "data": {
+        "version": 1,
+        "components": [
+          "database",
+          "files"
+        ],
+        "reserved": [
+          "__konae_intake_versions",
+          "__konae_intake_deliveries",
+          "__konae_intake_current",
+          "__konae_intake_jobs",
+          "__konae_intake_effects"
+        ],
+        "migrations": [
+          "file-intake-v1"
+        ],
+        "objects": "intake-versions"
       }
     },
     "usage": {

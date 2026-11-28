@@ -210,7 +210,7 @@ fn validate_context(manifest: &Manifest, files: Option<&BTreeSet<String>>, modul
             if definition.is_null() { return Err(refuse("function.action-missing", format!("Function {name} names unknown action {action}."))); }
             let then_target = actions.as_object().is_some_and(|all| all.values().any(|other| other["kind"] == "call" && other["then"]["action"] == action.as_str()));
             check_action_shape(name, action, definition["kind"].as_str().unwrap_or(""), definition["access"].as_str().unwrap_or(""),
-                ["notify", "call", "signal", "schedule", "subscribe", "http", "grants"].iter().any(|key| definition.get(key).is_some()), then_target)?;
+                ["notify", "issue", "call", "signal", "schedule", "subscribe", "http", "grants"].iter().any(|key| definition.get(key).is_some()), then_target)?;
             check_scheduled_action(name, function, action, definition["access"].as_str().unwrap_or(""))?;
         }
         if function.access == "scheduled" { continue; }
@@ -252,7 +252,7 @@ fn check_action_shape(function: &str, action: &str, kind: &str, access: &str, ef
 
 pub fn check_function_action(function: &str, name: &str, action: &crate::ActionDefinition, program: &crate::ActionProgram) -> Checked<()> {
     check_action_shape(function, name, &action.kind, &action.access,
-        action.notify.is_some() || action.signal.is_some() || action.schedule.is_some() || action.subscribe.is_some() || action.http.is_some() || action.call.any() || action.extra.contains_key("grants"),
+        action.notify.is_some() || action.issue.is_some() || action.signal.is_some() || action.schedule.is_some() || action.subscribe.is_some() || action.http.is_some() || action.call.any() || action.extra.contains_key("grants"),
         crate::calls::then_of(program, name).is_some())
 }
 

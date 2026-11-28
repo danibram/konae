@@ -8,9 +8,11 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange, moduleCheckOrder } from "../lib/module-state";
-import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "../lib/module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseDocuments, sourcesUseFiles, sourcesUseHttp, sourcesUseMcp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
+import { validateFileIntake, validateFileIntakeConsumers, type FileIntakeDeclaration } from "../kernel/file-intake";
+import { parseFtpsDeclaration, validateFtpsDeclaration } from "../kernel/ftps";
 import { isEncoded } from "../lib/source-files";
 import type {
   CapsuleFiles,
@@ -88,16 +90,41 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     }
     const SQL = await this.loadSql();
     const schemaSource = files["schema.sql"] ?? "";
+    let intakeDeclaration: FileIntakeDeclaration | undefined;
+    if (files["file-intake.json"] !== undefined) {
+      try {
+        intakeDeclaration = validateFileIntake(JSON.parse(files["file-intake.json"]));
+      } catch (error) {
+        return failure({ stage: "actions", message: describe(error), detail: "Declare version 1 sources and consumers in file-intake.json, then name a declared mutation action." }, ["sources"]);
+      }
+    }
+    let ftpsDeclaration: ReturnType<typeof validateFtpsDeclaration> | undefined;
+    if (files["ftps.json"] !== undefined) {
+      try {
+        ftpsDeclaration = parseFtpsDeclaration(files["ftps.json"]);
+      } catch (error) {
+        return failure({ stage: "actions", message: describe(error), code: "ftps.invalid", hint: hintOf("ftps.invalid") }, ["sources"]);
+      }
+    }
     const filesCall = sourcesUseFiles(Object.values(files));
-    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files) };
+    const used = {
+      files: filesCall,
+      actions: sourcesUseActions(files),
+      http: sourcesUseHttp(files),
+      calls: sourcesUseCalls(files),
+      mcp: sourcesUseMcp(files),
+      documents: sourcesUseDocuments(files),
+      "file-intake": intakeDeclaration !== undefined,
+    };
+    const usesFtpsMember = Object.values(ftpsDeclaration?.destinations ?? {}).some((destination) => destination.kind === "member");
     for (const module of moduleCheckOrder) {
-      if (!used[module as keyof typeof used]) continue;
+      if (!used[module as keyof typeof used] && !(usesFtpsMember && module === "files")) continue;
       const state = modules?.[module];
       const off = state ? checkModuleChange({ rule: "on", module, state }) : null;
       if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
     const actionsState = modules?.actions;
-    for (const module of ["http", "calls"] as const) {
+    for (const module of ["http", "calls", "mcp", "documents", "file-intake"] as const) {
       const state = modules?.[module];
       if (state?.on === true) {
         const required = checkModuleChange({ rule: "requires", module, required: "actions", requiredState: actionsState });
@@ -113,6 +140,12 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     if (filesState?.on === true && authState && authState.on !== true) {
       const required = checkModuleChange({ rule: "requires", module: "files", required: "auth", requiredState: authState });
       if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
+    }
+    for (const module of ["mcp", "documents"] as const) {
+      if (modules?.[module]?.on === true && authState && authState.on !== true) {
+        const required = checkModuleChange({ rule: "requires", module, required: "auth", requiredState: authState });
+        if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
+      }
     }
     const authOff = authState ? checkModuleChange({ rule: "on", module: "auth", state: authState }) : null;
     if (sourcesUseAuth(Object.values(files)) && authOff) {
@@ -186,7 +219,21 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) });
       }
 
-      if (program) errors.push(...checkActions(fresh, program, "actions"));
+      if (program) {
+        errors.push(...checkActions(fresh, program, "actions"));
+        const usesMcp = Object.values(program.actions).some((action) => action.mcp !== undefined);
+        if (usesMcp && modules?.mcp && modules.mcp.on !== true) {
+          const message = "Module mcp is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.";
+          errors.push({ stage: "actions", message, detail: message, code: "module.off", hint: hintOf("module.off") });
+        }
+      }
+      if (program && intakeDeclaration) {
+        try {
+          validateFileIntakeConsumers(intakeDeclaration, program.actions);
+        } catch (error) {
+          errors.push({ stage: "actions", message: describe(error), detail: "Name an existing mutation action and provide only its declared input fields." });
+        }
+      }
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
       if (release && ownerFixes(release.code)) warnings.push({ stage: "actions", message: release.message, detail: RELEASE_OWNER, owner: true, code: release.code, hint: release.hint });
       else if (release) errors.push({ stage: "actions", message: release.message, detail: RELEASE_AUTHOR, code: release.code, hint: release.hint });
@@ -320,6 +367,8 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
 
     const refused = notifyColumnsRefusal(db, action);
     if (refused) errors.push({ stage, message: refused.message, detail: refused.message, code: refused.code, hint: hintOf(refused.code) });
+    const documentRefused = documentsSnapshotRefusal(db, action);
+    if (documentRefused) errors.push({ stage, message: documentRefused.message, detail: documentRefused.message, code: documentRefused.code, hint: hintOf(documentRefused.code) });
 
     if (stage !== "actions") continue;
 
@@ -353,6 +402,20 @@ export function notifyColumnsRefusal(db: Database, action: ServerActionDefinitio
     // Falls through to the refusal.
   }
   return notifyColumnRefusal(action.name);
+}
+
+export function documentsSnapshotRefusal(db: Database, action: ServerActionDefinition) {
+  const columns = action.issue?.snapshot ?? [];
+  if (!columns.length) return undefined;
+  try {
+    const statement = db.prepare(notifyReturningStatement(action.statement, columns));
+    const returned = statement.getColumnNames().length;
+    statement.free();
+    if (returned === columns.length) return undefined;
+  } catch {
+    // The shared refusal tells the author which declaration to correct.
+  }
+  return { code: "documents.snapshot-column-unknown" as const, message: `Action ${action.name} names a Documents snapshot column its statement cannot return. Name columns returned by the mutation.` };
 }
 
 function divergence(fresh: Database, clone: Database): string[] {

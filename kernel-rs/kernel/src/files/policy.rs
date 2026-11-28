@@ -24,6 +24,9 @@ pub fn app_user_files(deployment: &Deployment) -> bool {
 }
 
 pub fn file_readable(deployment: &Deployment, file: &Value, actor_id: Option<&str>) -> bool {
+    if file.get("ownerOnly").and_then(Value::as_bool) == Some(true) {
+        return actor_id.is_some() && file_owner(file) == actor_id;
+    }
     if app_user_files(deployment) {
         return actor_id.is_some();
     }
@@ -38,7 +41,8 @@ pub fn file_view(deployment: &Deployment, file: &Value, actor_id: Option<&str>) 
     if let Some(object) = view.as_object_mut() {
         object.remove("url");
         object.remove("sha256");
-        if app_user_files(deployment) {
+        object.remove("ftpsUploadId");
+        if app_user_files(deployment) && file.get("ownerOnly").and_then(Value::as_bool) != Some(true) {
             object.insert("visibility".into(), json!("app-users"));
         }
         if file_owner(file) != actor_id {

@@ -2,7 +2,7 @@
 
 ## Complete architecture
 
-This map shows the running Kernel and the proposed additions. Plain boxes are existing capabilities. Blue boxes are implemented shared Kernel services and their current consumers. Orange boxes remain proposed. Each app keeps its own accounts, rows and access rules.
+This map shows how the Kernel serves apps, runs workers and talks to installation adapters. Blue boxes mark shared Kernel services. Each app keeps its own accounts, rows and access rules.
 
 ```mermaid
 flowchart TB
@@ -30,18 +30,19 @@ flowchart TB
       ACTIONS["actions<br/>named SQL, guards, actor bindings"]
       PAGE["page<br/>declared paths and parameters"]
       HTTP["http<br/>routes, keys and signatures"]
+      MCP["mcp<br/>published query tools and app OAuth"]
       CALLS["calls<br/>outbound requests and completions"]
       FILES["files<br/>upload, access, list and delete"]
       FUNCTIONS["functions<br/>JavaScript and allowed operations"]
       SEO["seo<br/>canonical, cards, robots and sitemap"]
-      DOCUMENTS["documents · new<br/>issue and download"]
-      INTAKE["file intake · new<br/>versions and change events"]
+      DOCUMENTS["documents<br/>issue and download"]
+      INTAKE["file intake<br/>versions and change events"]
     end
     subgraph COMMON["Shared Kernel services"]
       TX["App transactions + idempotency<br/>commit rows, receipts and effect intentions together"]
       BLOBS["Blob storage + quotas<br/>module-owned references"]
-      JOBS["Bounded fair dispatcher<br/>per-app admission, wake-up and recovery"]
-      HANDLERS["Module handlers<br/>Calls + Notify; transport stays behind handlers"]
+      JOBS["Tokio dispatcher<br/>turns by app, wake-up and recovery"]
+      HANDLERS["Module handlers<br/>Calls, Notify, Documents and File intake"]
       INVENTORY["Registered data inventory<br/>reserved tables + versions + migrations + export components"]
       TIMER["Schedule + cron<br/>produce declared work"]
       MAIL["Notify + account mail<br/>recipient verification and delivery"]
@@ -65,13 +66,13 @@ flowchart TB
   GATE --> REG
   USERS --> ENTRY
   subgraph ADAPTERS["Runtime and installation adapters"]
-    JS["JavaScript runner<br/>deno_core"]
-    TYPST["Typst process · new"]
-    FTP["Multi-app FTPS listener · new"]
+    JS["JavaScript runners<br/>StarlingMonkey and deno_core"]
+    TYPST["Local Typst process"]
+    FTP["Multi-app FTPS listener"]
     PROVIDERS["SMTP / Resend · HTTP services"]
     STORAGE["Local disk / S3"]
   end
-  DEVICE --> FTP -->|"app and source credential"| ENTRY
+  DEVICE --> FTP -->|"device destination credential"| INTAKE
   RUNNER --> JS
   RUNNER -.-> TYPST
   MAIL --> PROVIDERS
@@ -86,12 +87,10 @@ flowchart TB
   OWNER --> HOSTDATA
   PROJECT --> HOSTDATA
   classDef evolved fill:#d9e6ff,stroke:#3159a3,color:#172b4d
-  classDef proposed fill:#ffe0c5,stroke:#b85818,color:#63300d
   class REG,RELEASE,PORT,TX,JOBS,HANDLERS,INVENTORY evolved
-  class DOCUMENTS,INTAKE,FTP,TYPST proposed
 ```
 
-The registry describes each module's state, reserved tables, format version and export components. Publication checks pending work against the candidate schema before activation. HTTP, MCP, Functions, schedules and cron resolve an app-scoped execution context with its accepted release, actor or job, typed job authority, permissions and limits. Calls and Notify handlers claim their durable records through the in-process fair dispatcher; each handler keeps its own retry rules and hands network work to its transport. Blue boxes mark shared services in use. Orange boxes mark proposed additions.
+The registry describes each module's state, reserved tables, format version and export components. Publication checks pending work against the candidate schema before activation. HTTP, MCP, Functions, schedules and cron resolve the app, release, actor or job, permissions and limits. Calls, Notify, Documents and File intake handle their own durable records through the shared dispatcher.
 
 ### What app authors must declare
 
@@ -130,7 +129,7 @@ Each new module must expose its operation name, outcome and resource use through
 | Notify | Mutation result, verified recipient, mail transport | Request an email after an accepted mutation |
 | Documents | Actions, transactions, blobs, dispatcher, Typst | Freeze document input, render it and authorize downloads |
 | File intake | Transactions, blobs, dispatcher | Accept a version and record its change for declared consumers |
-| FTPS adapter | File intake | Translate a device transfer into an accepted app version |
+| FTPS adapter | Files or durable Intake | Store a member upload as a private Files object or accept a device upload at one declared destination |
 | Export, import, copies and cleanup | Every module's data inventory | Preserve live state and pending work, identify referenced bytes |
 | Usage and Signals | Execution outcomes and declared signals | Report what happened without controlling domain decisions |
 
@@ -168,8 +167,6 @@ Stop every process that serves this data directory before the first command. Rep
 
 `mail.sqlite` is an ordinary SQLite database, not an encrypted database. Account links in `jobs.link_sealed` use AES-256-GCM with the job ID as associated data. The migration reads `KONAE_MAIL_SECRET`, then `KONAE_SETUP_KEY`, then the private `mail-key` fallback, and checks the ciphertext before proceeding. Keep the same installation key through migration. Never copy it into an app folder or export. If no key opens the old bytes, use the previous release and its original key to drain those messages; a replacement key cannot decrypt them.
 
-Keep synchronous reads and short mutations on direct calls. The dispatcher handles work accepted for later execution. Load workers on demand, bound concurrency globally and per app, and give active apps turns. Keep one writer per app folder. A remote worker can execute a bounded job while its owning Kernel validates and commits the result.
-
 ### How another module is added
 
 A module supplies declarations and their validation cases, typed operations with access checks, versioned state and the lifecycle hooks it needs. A module with background work also supplies a job handler. The Kernel provides an app-scoped execution context and only the services the operation declares.
@@ -184,7 +181,7 @@ Register modules explicitly when compiling the Kernel. Ordinary app logic uses A
 | Stored bytes | A blob-reference provider in `modules`; Files keeps its own download ACL |
 | Retained SQL requirements | A compatibility hook called by `modules::check_pending_work` inside the candidate schema transaction |
 
-Actions, Functions, Calls and Notify exercise execution and transaction services. Files exercises the blob inventory. Documents, then intake and its FTPS adapter, are the next consumers. Each addition must pass the existing publication, permissions and portability checks.
+Documents and File intake register private blobs and durable work. FTPS feeds the intake operation. App MCP publishes selected query Actions under the app account's authority. Each module follows the existing publication, permissions and portability checks.
 
 ## One installation
 
@@ -278,10 +275,12 @@ A dependency follows a declared operation. A Function that calls a Server Action
 | Proposed operation | What happens |
 | --- | --- |
 | Issue a document | An Actions mutation returns the document ID, recipient and snapshot. Before commit, Documents records the pending issue on the same SQLite connection and pins the template, fonts, assets and compiler version. Rollback cancels both writes. After commit a worker renders the PDF. Retries publish one result per issue ID. Downloads run the app's access query for the current actor and serve the stored PDF. |
-| Receive a file | One FTPS listener maps each credential to one app and source. Intake stages the bytes, then commits the version and a pending change before acknowledging the transfer. A new path records a creation. Replacing its contents records an update. Each event identifies the source, path and immutable version. The source declares how to recognize a retransmission after a lost acknowledgement. |
+| Receive a file | One FTPS listener maps each credential to one app destination. A member destination requires auth and Files, issues a 10-minute credential for one confirmed upload, and keeps the Files object private to its owner. A device destination issues a permanent rotatable credential for one destination and records uploads as durable Intake data without enabling `file-intake` or `actions`. The legacy listener still accepts credentials bound to a published File intake source. |
 | Process a file | The app declares a consumer for the source. The dispatcher can redeliver after a crash. The consumer reads that version and records its result once per version and consumer. A JavaScript parser would require a narrowly scoped Function input for those bytes. Intake and Documents themselves both work with Functions off. |
 
-Keep module records in Kernel-controlled tables. When a mutation promises an effect, give the module a typed way to append its record to that mutation's transaction. App SQL must have no direct write access to those tables. After a move, existing PDFs remain readable and pending work resumes once its required renderer is available. New device uploads resume once the operator binds the FTPS source.
+File intake v1 implements declared sources and consumers with reserved app tables, immutable shared-store blobs and a declared Actions mutation. The FTPS device destination uses durable Intake records without that app module or consumer. See [File intake v1](file-intake.md) for the legacy declaration and [FTPS](ftps.md) for destination rules.
+
+Keep module records in Kernel-controlled tables. When a mutation promises an effect, give the module a typed way to append its record to that mutation's transaction. App SQL must have no direct write access to those tables. After a move, existing PDFs remain readable and pending work resumes once its required renderer is available. Configure the listener at the destination installation and issue device credentials there.
 
 ### Compatibility across Kernel versions
 
@@ -299,7 +298,17 @@ Each module admits at most 1,000 pending jobs of its handled kind per app. Produ
 
 Notice handoff uses the installation mail queue and its separate worker. Mail reconciles changed recipient outcomes in batches and records which results reached the app database. A confirmed result causes no further app writes until its delivery state changes.
 
-Start with one writer for each app folder. A worker can retry under a stable operation ID. The owning Kernel checks the result and publishes it. If attempts can overlap, check the attempt number when committing the result. When moving an app, recover its pending internal work and coordinate the handover before resuming external deliveries. An SMTP server may already have accepted a message when the sender loses its connection.
+When moving an app, recover its pending internal work and coordinate the handover before resuming external deliveries. An SMTP server may already have accepted a message when the sender loses its connection.
+
+### Local workers and scaling
+
+A self-hosted installation starts one serving process. Its Rust code uses Tokio to coordinate I/O, timers, work admission and child processes. Keep reads and short mutations on the request path. Use Tokio's blocking pool for short blocking calls and bound how many run at once. For work that needs its own memory limit or must stop at a deadline, the Kernel starts and supervises a local child process. The operator starts the same service in either case.
+
+Use the existing dispatcher for durable work. Each module keeps its own job records and decides when work is complete. Give ready apps turns and bound concurrent jobs by app and installation. Functions and scheduled Functions share the same runner and the worker limits `KONAE_FUNCTIONS_INSTANCES` and `KONAE_FUNCTIONS_APP_SLOTS`. Keep the current cron order within an app.
+
+Documents runs up to two renders at a time and one per app. Its handler sends a local Typst process the frozen input, template and assets for one render attempt. The Kernel remains the sole writer of the app folder. It checks the result and commits it only while that attempt is current. A retry keeps the same emission ID. File intake v1 uses the shared dispatcher for pending Actions consumers. MCP reads continue through the app's Actions.
+
+Check this design by filling one app's render slots while another serves reads. Measure read latency and render wait time. Stop a render process mid-job, then check that a retry produces one PDF and that a late result cannot replace it. If render capacity later limits an installation, a remote worker can take the same render inputs and return the result to the owning Kernel. If contention comes from the app's database or its total load, [move the app to its own Kernel](#when-one-app-needs-its-own-kernel).
 
 ### Functions execution
 
@@ -403,7 +412,7 @@ With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation
 
 The module inventory enumerates unique blob IDs and sizes from each registered provider. Export, import preflight, restore, copy, quota checks, cleanup and `files-migrate` use that inventory regardless of the Files switch. A failed inventory read stops cleanup before deletion. An archive can carry a module's private blob without adding it to the Files index or granting access through Files.
 
-Documents and file intake will register their own references and access rules. They must count incoming bytes and compute SHA-256 while staging, then check the shared quota under the app lock when committing a reference. Their immutable records, retained render resources and transfer acknowledgements remain work for those modules.
+Documents and File intake register their own blob references. The Kernel checks the shared quota under the app lock before committing a reference. Documents keeps the frozen render inputs with its issue. File intake keeps each version's SHA-256 and confirms the upload after the version and consumer jobs commit.
 
 For the portability test, render one receipt with template A and leave a second pending. Publish B, export and import on another machine with Files off. Disconnect the source. The first download must match its original SHA-256. The second must render with A's distinct content. For `files-migrate`, switch from S3 to local, disconnect the bucket and run reconciliation. Verify the stored hashes of the PDF and a pending FTP version. A separate quota test should race two uploads for space that can hold only one.
 

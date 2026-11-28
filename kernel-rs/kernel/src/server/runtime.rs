@@ -18,6 +18,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_konae/mcp", post(runtime))
         .route("/_konae/transfers/{id}", axum::routing::put(put_transfer))
+        .merge(crate::server::app_oauth::routes())
 }
 
 /// The largest JSON-RPC call an MCP door reads, except an owner's
@@ -92,11 +93,16 @@ pub fn answer(id: Value, result: Result<Value>) -> Response {
 }
 
 pub fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
+    oauth_challenge(&format!("{}/.well-known/oauth-protected-resource", origin(state, headers)))
+}
+
+fn app_unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
+    oauth_challenge(&crate::server::app_oauth::protected_resource_url(state, headers))
+}
+
+fn oauth_challenge(resource_metadata: &str) -> Response {
     let mut response = error(StatusCode::UNAUTHORIZED, "Sign in to use Konae MCP.");
-    let metadata = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
-        origin(state, headers)
-    );
+    let metadata = format!("Bearer resource_metadata=\"{resource_metadata}\"");
     response.headers_mut().insert(
         header::WWW_AUTHENTICATE,
         HeaderValue::from_str(&metadata).unwrap(),
@@ -110,6 +116,36 @@ struct RuntimeCaller {
     tools: Vec<Value>,
     anonymous: bool,
     account_only: bool,
+    app_tools: Vec<Value>,
+    actor: Option<crate::auth::AuthUser>,
+    _identity_guard: Option<crate::NamedLockGuard>,
+    _release_guard: crate::NamedLockGuard,
+}
+
+pub(crate) fn published_mcp_tools(deployment: &Deployment) -> Vec<Value> {
+    if !crate::modules::is_on(&deployment.modules, "mcp") || !crate::modules::is_on(&deployment.modules, "actions") {
+        return Vec::new();
+    }
+    let Ok(program) = serde_json::from_str::<Value>(&deployment.actions) else { return Vec::new(); };
+    let Some(actions) = program["actions"].as_object() else { return Vec::new(); };
+    actions.iter().filter_map(|(name, action)| {
+        let description = action["mcp"]["description"].as_str()?;
+        if action["kind"] != "query" || action["access"] != "authenticated" { return None; }
+        let bindings = action["bindings"].as_array()?;
+        let mut properties = serde_json::Map::new();
+        let mut required = Vec::new();
+        for binding in bindings.iter().filter(|binding| binding["source"] == "input") {
+            let key = binding["key"].as_str()?;
+            let ty = match binding["type"].as_str()? {
+                "string" => "string", "number" => "number", "boolean" => "boolean", _ => return None,
+            };
+            let mut schema = json!({"type":ty});
+            if let Some(max) = binding["maxLength"].as_u64() { schema["maxLength"] = json!(max); }
+            properties.insert(key.to_owned(), schema);
+            if binding["nullable"] != true { required.push(json!(key)); }
+        }
+        Some(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}}))
+    }).collect()
 }
 
 async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std::net::SocketAddr>) -> Result<RuntimeCaller, Response> {
@@ -122,7 +158,11 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
             "Cross-origin or unrecognized-host MCP request rejected.",
         ));
     }
-    let Some(deployment) = deployment_for(state, headers).await else {
+    let Some(observed) = deployment_for(state, headers).await else {
+        return Err(error(StatusCode::NOT_FOUND, "Deployment not found."));
+    };
+    let release_guard = crate::named_lock(state, &format!("publish:{}", observed.id), false).await;
+    let Some(deployment) = crate::deployment_by_id(state, &observed.id).await else {
         return Err(error(StatusCode::NOT_FOUND, "Deployment not found."));
     };
     if crate::path::foreign_referer(state, headers, &deployment.id) {
@@ -132,13 +172,33 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
         return Err(error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME));
     }
     let visitor = || format!("runtime:{}:anon:{}", deployment.id, limits::client_key(state.guards.client_ip(peer, headers)));
-    let (principal, tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers).await {
-        Ok(Some(user)) => (format!("runtime:{}:{}", deployment.id, user.user_id), runtime_tools(), false, false),
-        Ok(None) if !is_private(&deployment) => (visitor(), anonymous_runtime_tools(), true, false),
-        Ok(None) => (visitor(), account_tools(), true, true),
-        Err(_) => return Err(unauthorized(state, headers)),
+    let has_app_oauth_bearer = bearer(headers).is_some_and(crate::server::app_oauth::is_app_token);
+    let session_user = if has_app_oauth_bearer { None } else { match authenticate_deployment(state, &deployment, headers).await {
+        Ok(user) => user,
+        Err(_) => return Err(app_unauthorized(state, headers)),
+    }};
+    let full_app_tools = published_mcp_tools(&deployment);
+    let oauth = if session_user.is_none() {
+        match crate::server::app_oauth::authenticate(state, &deployment, headers, &full_app_tools).await {
+            Ok(value) => value,
+            Err(()) => return Err(app_unauthorized(state, headers)),
+        }
+    } else { None };
+    let (actor, oauth_scopes, identity_guard) = match oauth {
+        Some(grant) => (Some(grant.actor), Some(grant.scopes), Some(grant.identity_guard)),
+        None => (session_user, None, None),
     };
-    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only })
+    let anonymous = actor.is_none();
+    let principal = actor.as_ref().map(|user| format!("runtime:{}:{}", deployment.id, user.user_id))
+        .unwrap_or_else(visitor);
+    let mut tools = if oauth_scopes.is_some() { Vec::new() } else if actor.is_some() { runtime_tools() }
+        else if !is_private(&deployment) { anonymous_runtime_tools() } else { account_tools() };
+    let app_tools = if anonymous { Vec::new() } else {
+        full_app_tools.into_iter().filter(|tool| oauth_scopes.as_ref().is_none_or(|scopes| scopes.contains(tool["name"].as_str().unwrap_or("")))).collect()
+    };
+    tools.extend(app_tools.clone());
+    let account_only = actor.is_none() && is_private(&deployment);
+    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools, actor, _identity_guard: identity_guard, _release_guard: release_guard })
 }
 
 fn peer_of(request: &Request) -> Option<std::net::SocketAddr> {
@@ -168,12 +228,12 @@ async fn put_transfer(State(state): State<AppState>, AxumPath(id): AxumPath<Stri
 pub async fn runtime(State(state): State<AppState>, request: Request) -> Response {
     let headers = request.headers().clone();
     let peer = peer_of(&request);
-    let RuntimeCaller { deployment, principal, tools, anonymous, account_only } = match runtime_caller(&state, &headers, peer).await {
+    let RuntimeCaller { deployment, principal, tools, anonymous, account_only, app_tools, actor, _identity_guard, _release_guard } = match runtime_caller(&state, &headers, peer).await {
         Ok(caller) => caller,
         Err(response) => return response,
     };
     let fixed_file_access = files::app_user_files(&deployment);
-    let app = deployment.id;
+    let app = deployment.id.clone();
     let call = match read_call(request).await {
         Ok(call) => call,
         Err(response) => return response,
@@ -186,7 +246,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
             || (method == "tools/call"
                 && call["params"]["name"].as_str().is_some_and(|name| tools.iter().any(|t| t["name"] == name))))
     {
-        return unauthorized(&state, &headers);
+        return app_unauthorized(&state, &headers);
     }
     if call.get("id").is_none() {
         return without_id(method);
@@ -217,7 +277,8 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
             if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
                 return rpc_error(id, -32602, &e.to_string());
             }
-            if name == "actions_invoke" {
+            let published_action_tool = name.contains('.') && app_tools.iter().any(|tool| tool["name"] == name);
+            if name == "actions_invoke" || published_action_tool {
                 let limited = if anonymous {
                     let client = limits::client_key(state.guards.client_ip(peer, &headers));
                     let key = format!("{app}|{client}");
@@ -233,6 +294,42 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                 Err(anyhow::anyhow!("File not found."))
             } else if name.starts_with("transfer_") {
                 transfer_call(&state, &principal, name, &arguments, true).await
+            } else if name == "ftps_upload_create" || name == "ftps_upload_status" {
+                match actor.as_ref() {
+                    Some(actor) if name == "ftps_upload_create" => {
+                        match crate::ftps::issue_member_upload(
+                            &state,
+                            &deployment,
+                            &actor.user_id,
+                            arguments["destination"].as_str().unwrap_or_default(),
+                        )
+                        .await
+                        {
+                            Ok(created) => match created["uploadId"].as_str() {
+                                Some(upload_id) => crate::ftps::member_upload_status(
+                                    &state,
+                                    &deployment,
+                                    &actor.user_id,
+                                    upload_id,
+                                )
+                                .await
+                                .map(|_| created),
+                                None => Ok(created),
+                            },
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Some(actor) => {
+                        crate::ftps::member_upload_status(
+                            &state,
+                            &deployment,
+                            &actor.user_id,
+                            arguments["uploadId"].as_str().unwrap_or_default(),
+                        )
+                        .await
+                    }
+                    None => Err(anyhow::anyhow!("authentication-required")),
+                }
             } else if account_tools().iter().any(|t| t["name"] == name) {
                 let client = state.guards.client_ip(peer, &headers);
                 match crate::accounts::runtime_tool(&state, &headers, client, name, &arguments).await {
@@ -241,6 +338,11 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                         Ok(value)
                     }
                     Err(e) => Err(e),
+                }
+            } else if published_action_tool {
+                match actor.clone() {
+                    Some(actor) => response_value(crate::actions::invoke_action_pinned(state.clone(), deployment.clone(), actor, name.to_owned(), headers.clone(), arguments.clone()).await).await,
+                    None => Err(anyhow::anyhow!("authentication-required")),
                 }
             } else {
                 runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
@@ -374,6 +476,20 @@ pub fn runtime_tools() -> Vec<Value> {
             json!({"fileId":{"type":"string"}}),
             &["fileId"],
             false,
+        ),
+        tool(
+            "ftps_upload_create",
+            "Issue a short-lived FTPS credential for one member destination. It permits one completed upload.",
+            json!({"destination":{"type":"string","minLength":1,"maxLength":100}}),
+            &["destination"],
+            false,
+        ),
+        tool(
+            "ftps_upload_status",
+            "Read the status of one FTPS upload issued to this app account.",
+            json!({"uploadId":{"type":"string","minLength":1,"maxLength":100}}),
+            &["uploadId"],
+            true,
         ),
     ];
     tools.extend(transfer_tools(true));
@@ -803,6 +919,7 @@ pub fn origin(state: &AppState, headers: &HeaderMap) -> String {
 #[cfg(test)]
 mod tests {
     use axum::http::{header, HeaderMap};
+    use serde_json::json;
 
     #[test]
     fn the_instructions_name_only_runtime_tools() {
@@ -815,6 +932,42 @@ mod tests {
         for word in named {
             assert!(served.iter().any(|name| name == word), "{word} is not a runtime tool");
         }
+    }
+
+    #[test]
+    fn ftps_upload_tools_are_signed_in_and_take_no_actor_argument() {
+        let runtime = super::runtime_tools();
+        for name in ["ftps_upload_create", "ftps_upload_status"] {
+            let tool = runtime.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+            assert!(tool["inputSchema"]["properties"].get("userId").is_none());
+        }
+        let create = runtime.iter().find(|tool| tool["name"] == "ftps_upload_create").unwrap();
+        assert_eq!(create["inputSchema"]["required"], json!(["destination"]));
+        let status = runtime.iter().find(|tool| tool["name"] == "ftps_upload_status").unwrap();
+        assert_eq!(status["inputSchema"]["required"], json!(["uploadId"]));
+        let anonymous = super::anonymous_runtime_tools();
+        assert!(anonymous.iter().all(|tool| !["ftps_upload_create", "ftps_upload_status"].contains(&tool["name"].as_str().unwrap())));
+    }
+
+    #[test]
+    fn app_mcp_catalog_uses_only_published_authenticated_query_declarations() {
+        let deployment: crate::Deployment = serde_json::from_value(json!({
+            "id":"notes","projectId":"notes","projectName":"Notes","slug":"notes","url":"https://notes.example",
+            "createdAt":1,"manifest":{},"hostname":"notes.example","artifactVersion":"1",
+            "signupPolicy":{"mode":"open","allowlist":[]},"signInMethods":["password"],
+            "modules":{"actions":{"on":true},"auth":{"on":true},"mcp":{"on":true}},
+            "actions":"{\"version\":1,\"actions\":{\"notes.mine\":{\"kind\":\"query\",\"access\":\"authenticated\",\"statement\":\"SELECT id FROM notes WHERE user_id=?1 LIMIT 20\",\"bindings\":[{\"source\":\"actor\",\"field\":\"id\"}],\"mcp\":{\"description\":\"List my notes.\"}},\"notes.hidden\":{\"kind\":\"query\",\"access\":\"authenticated\",\"statement\":\"SELECT id FROM notes LIMIT 20\",\"bindings\":[]}}}"
+        })).unwrap();
+        let tools = super::published_mcp_tools(&deployment);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "notes.mine");
+        assert_eq!(tools[0]["description"], "List my notes.");
+        assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+
+        let mut opted_out = deployment.clone();
+        opted_out.modules.get_mut("mcp").unwrap()["on"] = json!(false);
+        assert!(super::published_mcp_tools(&opted_out).is_empty());
     }
 
     fn headers(host: &str) -> HeaderMap {

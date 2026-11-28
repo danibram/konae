@@ -123,6 +123,15 @@ pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
     for name in names {
         crate::validate_action(name, &program.actions[name])?;
     }
+    for (name, action) in &program.actions {
+        let Some(issue) = &action.issue else { continue; };
+        let valid = program.actions.get(&issue.download).is_some_and(|rule| rule.kind == "query" && rule.access == "authenticated"
+            && rule.bindings.iter().any(|binding| binding.source == "actor" && binding.field.as_deref() == Some("id"))
+            && rule.bindings.iter().any(|binding| binding.source == "input" && binding.key.as_deref() == Some("issueKey") && binding.value_type.as_deref() == Some("string")));
+        if !valid {
+            return Err(refuse("documents.download-rule-invalid", format!("Action {name} issue.download must name an authenticated query with an actor binding and the issue key input.")));
+        }
+    }
     crate::http::validate_routes(program)?;
     crate::page::check_program(program)?;
     crate::calls::check_program(program)
@@ -147,7 +156,7 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
         return Err(refuse("action.kind-invalid", format!(r#"Action {name} has an invalid kind. Use "query", "mutation", "signal" or "call"."#)));
     }
     if action.access == "scheduled" && (!matches!(action.kind.as_str(), "query" | "mutation")
-        || action.http.is_some() || action.page.is_some() || action.notify.is_some()
+        || action.http.is_some() || action.page.is_some() || action.notify.is_some() || action.issue.is_some()
         || action.signal.is_some() || action.schedule.is_some() || action.subscribe.is_some()
         || action.bindings.iter().any(|binding| binding.source == "actor"))
     {
@@ -176,13 +185,44 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
     if action.statement.len() > MAX_STATEMENT_BYTES || action.bindings.len() > MAX_BINDINGS {
         return Err(refuse("action.limits-exceeded", format!("Action {name} exceeds statement or binding limits.")));
     }
+    if let Some(issue) = &action.issue {
+        let input_key = action.bindings.iter().any(|binding| binding.source == "input" && binding.key.as_deref() == Some(issue.key.as_str()) && binding.value_type.as_deref() == Some("string"));
+        if action.kind != "mutation" || action.access != "authenticated" || !input_key {
+            return Err(refuse("documents.issue-key-invalid", format!("Action {name} issue.key must name a string input binding on an authenticated mutation.")));
+        }
+        if !valid_name(&issue.download) {
+            return Err(refuse("documents.download-rule-invalid", format!("Action {name} issue.download must name an authenticated query with an actor binding and the issue key input.")));
+        }
+        if issue.snapshot.is_empty() || issue.snapshot.len() > 32 || issue.snapshot.iter().any(|column| !document_identifier(column)) {
+            return Err(refuse("documents.snapshot-invalid", format!("Action {name} issue.snapshot must name 1 to 32 returned columns.")));
+        }
+        if issue.template.is_empty() || issue.template.len() > 64 * 1024 || issue.typst_version != crate::documents::DEFAULT_TYPST_VERSION {
+            return Err(refuse("documents.template-invalid", format!("Action {name} issue must include a template of at most 64 KiB and Typst version {}.", crate::documents::DEFAULT_TYPST_VERSION)));
+        }
+        if issue.resources.iter().any(|(path, value)| !document_path(path) || match value.strip_prefix("base64:") {
+            Some(encoded) => base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).map_or(true, |bytes| bytes.len() > 256 * 1024),
+            None => value.len() > 256 * 1024,
+        }) {
+            return Err(refuse("documents.resources-invalid", format!("Action {name} issue.resources must use relative paths and values up to 256 KiB.")));
+        }
+    }
     Ok(())
+}
+
+fn document_identifier(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 64 && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn document_path(value: &str) -> bool {
+    let path = std::path::Path::new(value);
+    !value.is_empty() && value.len() <= 200 && !path.is_absolute()
+        && path.components().all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
 fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
-        "query" => &["kind", "access", "statement", "bindings", "http", "page"],
-        "mutation" => &["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule"],
+        "query" => &["kind", "access", "statement", "bindings", "http", "page", "mcp"],
+        "mutation" => &["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule", "issue"],
         "signal" => &["kind", "access", "statement", "bindings", "signal", "page"],
         _ => &["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then", "page"],
     }
@@ -193,6 +233,17 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
 /// keeps it. A key set to null counts as absent, on both doors. Keys are named
 /// in sorted order, as the editor names them.
 pub fn check_keys(name: &str, action: &ActionDefinition) -> Result<(), Refusal> {
+    if let Some(mcp) = action.extra.get("mcp").filter(|value| !value.is_null()) {
+        let valid = action.kind == "query"
+            && action.access == "authenticated"
+            && mcp.as_object().is_some_and(|object| {
+                object.len() == 1
+                    && object.get("description").and_then(Value::as_str).is_some_and(|description| !description.is_empty() && description.len() <= 1000)
+            });
+        if !valid {
+            return Err(refuse("action.mcp-shape", format!("Action {name} must be an authenticated query with an MCP description.")));
+        }
+    }
     let declared = [
         ("http", action.http.is_some()),
         ("page", action.page.is_some()),
@@ -200,6 +251,7 @@ pub fn check_keys(name: &str, action: &ActionDefinition) -> Result<(), Refusal> 
         ("guard", action.guard.is_some()),
         ("notify", action.notify.is_some()),
         ("schedule", action.schedule.is_some()),
+        ("issue", action.issue.is_some()),
         ("subscribe", action.subscribe.is_some()),
     ];
     let mut keys: Vec<&str> = declared.iter().filter(|(_, present)| *present).map(|(key, _)| *key).collect();
@@ -250,6 +302,22 @@ mod tests {
             let outcome = super::read(&source).map(|_| ()).map_err(|error_value| {
                 crate::refusal::of(&error_value).cloned().unwrap_or_else(|| panic!("{}: {error_value} has no code", case["case"]))
             });
+            crate::refusal::assert_case(&case, outcome);
+        }
+    }
+
+    #[test]
+    fn documents_declarations_match_the_editor_refusals() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../documents-cases.json")).unwrap();
+        for case in cases {
+            let source = serde_json::json!({"version": 1, "actions": case["actions"]}).to_string();
+            let database = std::env::temp_dir().join(format!("konae-documents-shape-{}.sqlite", uuid::Uuid::new_v4()));
+            let outcome = super::read(&source).and_then(|program| {
+                crate::schema_change::apply(&database, case["schema"].as_str().unwrap(), &program, crate::schema_change::Mode::Plan).map(|_| ())
+            }).map_err(|error| {
+                crate::refusal::of(&error).cloned().unwrap_or_else(|| panic!("{}: {error} has no code", case["case"]))
+            });
+            let _ = std::fs::remove_file(database);
             crate::refusal::assert_case(&case, outcome);
         }
     }

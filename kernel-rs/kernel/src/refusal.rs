@@ -110,7 +110,7 @@ mod tests {
 
     const GROUPS: &[&str] = &[
         "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "page", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
-        "secret", "setting", "signal", "signature", "signin", "sources", "statement", "module", "function", "cron",
+        "secret", "setting", "signal", "signature", "signin", "sources", "statement", "module", "function", "cron", "documents", "ftps",
     ];
 
     fn refusal_cases() -> Vec<(String, String, Option<String>)> {

@@ -200,6 +200,14 @@ async fn deploy_input_in(state: &AppState, input: DeployInput, restoring_import:
     let mut manifest = input.project.manifest;
     let legacy_file_access = manifest["fileAccess"] == "app-users";
     manifest["visibility"] = Value::String(input.visibility.clone());
+    let intake = input.project.files.get(crate::file_intake::DECLARATION_FILE).map(String::as_str);
+    if let Err(error_value) = crate::file_intake::pin_declaration(&mut manifest, intake) {
+        return error(StatusCode::BAD_REQUEST, &error_value.to_string());
+    }
+    let ftps = input.project.files.get(crate::ftps_declaration::DECLARATION_FILE).map(String::as_str);
+    if let Err(error_value) = crate::ftps_declaration::pin_declaration(&mut manifest, ftps) {
+        return error(StatusCode::BAD_REQUEST, &error_value.to_string());
+    }
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
     let deployment = Deployment {
         id: id.clone(),

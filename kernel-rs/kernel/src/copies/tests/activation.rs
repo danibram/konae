@@ -119,3 +119,33 @@ async fn the_file_index_must_match_the_bytes_and_accounts_in_its_app() {
     assert!(format!("{:#}", validation::check_cut(&root, &Installation::for_test()).unwrap_err()).contains("absent from the index"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn a_copy_restores_an_intake_blob_without_a_files_index() {
+    let root = scratch("private-intake-copy");
+    let live = root.join("live");
+    let repo = root.join("copies");
+    let (app, _) = seed(&live);
+    let files = crate::layout::files(&live, &app.id);
+    fs::remove_dir_all(&files).unwrap();
+    fs::create_dir_all(&files).unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let bytes = b"meter,42";
+    let name = format!("{id}.blob");
+    fs::write(files.join(&name), bytes).unwrap();
+    let database = Connection::open(crate::layout::database(&live, &app.id)).unwrap();
+    database.execute_batch(include_str!("../../file_intake/schema.sql")).unwrap();
+    database.execute(
+        "INSERT INTO __konae_intake_versions(id,source_id,source_version,path,sha256,size,created_at) VALUES(?1,'ftps:meter',1,'meter.csv',?2,?3,1)",
+        rusqlite::params![id, super::super::checksum_file(&files.join(&name)).unwrap().1, bytes.len()],
+    ).unwrap();
+    drop(database);
+
+    let copy = run_copy(&state(&live), &[Target::Directory(repo.clone())]).await.unwrap();
+    let destination = root.join("destination");
+    restore(&Source::Directory(repo), Some(&copy), &destination, None, &Installation::for_test()).await.unwrap();
+    let restored = crate::layout::files(&destination, &app.id);
+    assert_eq!(fs::read(restored.join(&name)).unwrap(), bytes);
+    assert!(!restored.join("index.json").exists());
+    fs::remove_dir_all(root).unwrap();
+}

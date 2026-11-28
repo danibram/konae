@@ -57,7 +57,7 @@ export type KernelModuleData = {
   components: string[];
   reserved?: string[];
   migrations?: string[];
-  objects?: "file-index";
+  objects?: "file-index" | "documents" | "intake-versions";
 };
 
 export type SdkModule = {
@@ -415,16 +415,16 @@ export const sdkContract = {
     },
     {
       name: "files",
-      data: {"version": 1, "components": ["files"], "objects": "file-index"},
+      data: {"version": 2, "components": ["database", "files"], "reserved": ["__konae_ftps_uploads"], "objects": "file-index"},
       title: "File storage",
-      summary: "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
-      switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader", default: null, label: "Who can read every file", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: ["auth"], uses: ["miniapp.files"],
-      declarations: [{ key: "fileAccess", file: "module", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.' }],
+      summary: "Small files stored by the Kernel for one Deployment. The app can share ordinary Files uploads among its users.",
+      switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader", default: null, label: "Who can read Files uploads", help: "Share ordinary uploads with signed-in users. Member FTPS uploads stay private to their uploader." }], permission: "publish", agentRule: "never", requires: ["auth"], uses: ["miniapp.files"],
+      declarations: [{ key: "fileAccess", file: "module", summary: 'Set "fileAccess": "app-users" to let signed-in users read ordinary Files uploads, including earlier uploads. Member FTPS uploads stay private to their uploader. The Kernel checks the same policy in file listings and direct file URLs. The uploader keeps deletion rights.' }],
       notes: [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
         "files.list returns metadata and the same-origin file path without reading file bytes. files.upload sends the file's bytes in one request and returns its path as url. The Kernel checks access on every file request, including conditional requests.",
-        "The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.",
+        "The uploader can delete a file and can change the visibility of an ordinary Files upload. Member FTPS uploads keep their owner-only policy. A deleted file stops counting against the Deployment's file quota and its ID answers File not found.",
         "The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.",
         "A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.",
       ],
@@ -736,7 +736,63 @@ export const sdkContract = {
         { message: "Server Artifact manifest does not match crons.json.", when: "the source and built cron declarations differ", source: "kernel" },
       ],
         summary: 'Declare { "version": 1, "crons": { "cleanup": { "cron": "0 8 * * 1-5", "function": "cleanup" } } }. The target names a Function with access scheduled in functions.json. The Kernel calls it with an empty POST and no app user. It passes the job ID and scheduled time in milliseconds as cron and scheduledAt query parameters. Use access scheduled on Server Actions reserved for scheduled Functions. Run a job in local test mode with konae test schedule cron:<id>.' }],
-      notes: ["A release with cron jobs enables Functions and, when a cron target names Server Actions, Actions. This applies to the first release and to updates. For HTTP Functions in an app without cron jobs, enable Functions in App settings or in the local konae.json. Authenticated functions require auth. A nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.", "For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Functions remain experimental. StarlingMonkey is the default runner. Operators can select deno_core. Workers start on demand and may stay warm until their idle timeout. Each request gets fresh JavaScript state.", "A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.", "The action allowlist accepts only queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.", "The Kernel and runner speak konae-functions-ipc/3. Published bundles use konae-functions/1. Upgrade the Kernel, runner, and preparer together and restart the service. The app folder carries private bundles in server/. The optional shutdown(signal) hook runs in the last completed request's JavaScript state when that state is available."],
+      notes: ["A release with cron jobs enables Functions and, when a cron target names Server Actions, Actions. This applies to the first release and to updates. For HTTP Functions in an app without cron jobs, enable Functions in App settings or in the local konae.json. Authenticated functions require auth. A nonempty action allowlist requires actions. The Kernel authenticates each request, fixes its actor for that invocation, and checks every action call against it. The handler receives no session cookie, owner credential or SQL connection.", "For setup and examples, see the repository guide docs/functions.md. The editor preview does not run functions. Functions remain experimental. StarlingMonkey is the default runner. Operators can select deno_core. Workers start on demand and may stay warm until their idle timeout. Each request gets fresh JavaScript state.", "A POST handler with actions must consume the complete request body before its first awaited context.actions.call. GET may call queries only; POST actions need an Idempotency-Key of 1 to 128 visible ASCII bytes. Retry the same request with the same key; reusing it for another request is refused. An uncertain outcome can mean the action committed. An identical retry returns 409 idempotency_replay. Read current state through an authorized request that applies current row access.", "The action allowlist accepts only queries and mutations without external effects. It refuses notify, issue, signal, schedule, subscribe, HTTP routes, grants, granted access and actions targeted by an outgoing call. Responses are UTF-8 text or JSON, not binary; the runtime provides no outbound network fetch. A request body can be up to 100000000 bytes decimal, but that does not raise worker heap, action, query or response caps. Each serialized action operation is limited to 1 MiB and 64 operations per invocation. Await context.actions.call before returning. The HTTP-to-Hono stream is bounded and does not spool the whole request.", "The Kernel and runner speak konae-functions-ipc/3. Published bundles use konae-functions/1. Upgrade the Kernel, runner, and preparer together and restart the service. The app folder carries private bundles in server/. The optional shutdown(signal) hook runs in the last completed request's JavaScript state when that state is available."],
+    },
+    {
+      name: "mcp",
+      title: "App MCP",
+      summary: "Expose explicitly named authenticated read-only Server Actions as app-user MCP tools.",
+      switch: true,
+      options: [],
+      permission: "publish",
+      agentRule: "after-owner-confirms",
+      requires: ["actions", "auth"],
+      uses: ["actions.json mcp"],
+      calls: [],
+      declarations: [{ file: "actions.json", key: "mcp", summary: "Publish an authenticated query with a tool description. The app user grants the tool to an operator-registered OAuth client." }],
+      notes: ["Use the app's /_konae/mcp endpoint to list and call granted tools. Read docs/mcp-app-tools.md to configure and verify an external client."],
+    },
+    {
+      name: "documents",
+      title: "Documents",
+      summary: "Issue portable PDFs from mutation snapshots and serve them through an app-owned read rule.",
+      switch: true,
+      options: [],
+      permission: "publish",
+      agentRule: "after-owner-confirms",
+      requires: ["actions", "auth"],
+      uses: ["actions.json issue and download declarations"],
+      data: {
+        version: 1,
+        components: ["database", "files"],
+        reserved: ["__konae_documents"],
+        migrations: ["documents-v1"],
+        objects: "documents",
+      },
+      calls: [],
+      declarations: [{ file: "actions.json", key: "issue", summary: "Issue a PDF from one changed row. Declare a stable issue key, a snapshot, a Typst template and the query that decides who may read the PDF." }],
+      notes: ["Use the app's /_konae/documents/<issue-key> download as the signed-in user. Read docs/documents.md for renderer setup and a verification procedure."],
+    },
+    {
+      name: "file-intake",
+      title: "File intake",
+      summary: "Accepts immutable file versions from declared sources and queues declared app consumers.",
+      switch: true,
+      options: [],
+      permission: "publish",
+      agentRule: "after-owner-confirms",
+      requires: ["actions"],
+      uses: ["file-intake.json"],
+      data: {
+        version: 1,
+        components: ["database", "files"],
+        reserved: ["__konae_intake_versions", "__konae_intake_deliveries", "__konae_intake_current", "__konae_intake_jobs", "__konae_intake_effects"],
+        migrations: ["file-intake-v1"],
+        objects: "intake-versions",
+      },
+      calls: [],
+      declarations: [{ file: "file-intake.json", key: "sources", summary: "Declare the sources the app accepts and optional SQL consumers. Consumers receive version metadata." }],
+      notes: ["Read docs/file-intake.md for intake acceptance and docs/ftps.md for FTPS destinations and listener setup."],
     },
   ],
 } as const satisfies SdkContract;

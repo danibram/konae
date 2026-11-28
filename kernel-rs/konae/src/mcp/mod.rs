@@ -509,7 +509,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "platform_guide",
-            "Read a guide topic. Start with rules (yardstick, first run, read-back, divergences), then pieces (which Capsule declaration to use). Also credentials, development, actions, sdk, publishing, users, portability and refusals.",
+            "Read a guide topic. Start with rules (yardstick, first run, read-back, divergences), then pieces (app declarations and setup for Documents, App MCP, File intake and FTPS). Also credentials, development, actions, sdk, publishing, users, portability and refusals.",
             json!({"topic":{"type":"string","enum":super::guide::TOPICS}}),
             &["topic"],
             true,
@@ -574,6 +574,12 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools.extend(mail_tools());
     if owner.scopes.iter().any(|s| s == "manage_users") {
         tools.extend(invitations_tools());
+        tools.extend([
+            tool("ftps_credentials_list", "List this deployment's FTPS destinations and credentials without passwords.", json!({"projectId":text}), &["projectId"], true),
+            tool("ftps_device_create", "Issue a permanent FTPS credential for one device destination. The password appears once in this answer. Read back with ftps_credentials_list.", json!({"projectId":text,"destination":{"type":"string","minLength":1,"maxLength":100},"label":{"type":"string","minLength":1,"maxLength":80}}), &["projectId","destination","label"], false),
+            tool("ftps_device_rotate", "Replace a device FTPS password. The new password appears once in this answer. Read back with ftps_credentials_list.", json!({"projectId":text,"credentialId":{"type":"string","minLength":1,"maxLength":100}}), &["projectId","credentialId"], false),
+            tool("ftps_credential_revoke", "Revoke an FTPS credential. Read back with ftps_credentials_list.", json!({"projectId":text,"credentialId":{"type":"string","minLength":1,"maxLength":100}}), &["projectId","credentialId"], false),
+        ]);
         if owner.session {
             tools.push(tool(
                 "app_user_enter",
@@ -899,6 +905,9 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             let any_execution = execution_headers
                 .iter()
                 .any(|name| headers.contains_key(*name));
+            if any_execution && matches!(name, "ftps_device_create" | "ftps_device_rotate") {
+                return rpc_error(id, -32000, "Issue FTPS device passwords from Integrations or a direct owner MCP client.");
+            }
             let mut execution: Option<(String, String, String, i64, String, Option<String>, bool)> = None;
             if any_execution {
                 let get = |name: &str| {
@@ -1389,6 +1398,11 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
             super::http::api_keys_call(state, &deployment, name, &a).await
         }
+        "ftps_credentials_list" | "ftps_device_create" | "ftps_device_rotate" | "ftps_credential_revoke" => {
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let deployment = owned_deployment(state, owner, id, "manage_users").await?;
+            kernel::ftps::owner_credentials_call(state, &deployment, name, &a).await
+        }
         "notices_read" => {
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "read").await?;
             super::mail::notices_tool(state, &deployment, &a).await
@@ -1459,6 +1473,7 @@ async fn admin_call(
             let registry: Value = serde_json::from_str(include_str!("../../../kernel/src/modules.json"))?;
             let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::Error::new(kernel::refusal::refuse("module.unknown", format!("Unknown module {module}."))))?;
             let deployment = owned_deployment(state, owner, id, scope).await?;
+            let _release_guard = kernel::named_lock(state, &format!("publish:{}", deployment.id), true).await;
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             if module == "auth" {
                 if let Some(methods) = a.get("options").and_then(|options| options.get("signInMethods")) {
@@ -2154,6 +2169,33 @@ mod tests {
         assert_eq!(refusal.code, "module.changed");
         let denied = admin_call(&state, &reader, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false})).await.unwrap_err().to_string();
         assert_eq!(denied, "Permission denied for publish.");
+
+        let project = json!({"projectId":"app_modules"});
+        let guide = admin_call(&state, &publisher, "owner:o", "platform_guide", json!({"topic":"pieces"})).await.unwrap();
+        let setup = &guide["moduleSetup"];
+        assert!(setup["ftps"]["operator"].as_str().unwrap().contains("ftps.json"));
+        assert!(setup["ftps"]["declare"].as_str().unwrap().contains("kind device"));
+        assert!(setup["ftps"]["credentials"].as_str().unwrap().contains("ftps_device_rotate"));
+        assert!(setup["ftps"]["portable"].as_str().unwrap().contains("konae pull and export"));
+        for module in ["documents", "mcp", "file-intake"] {
+            let expected = after["modules"][module]["state"].clone();
+            let args = json!({"projectId":"app_modules", "module":module, "on":true, "expected":expected});
+            let error = admin_call(&state, &publisher, "owner:o", "module_set", args).await.unwrap_err();
+            assert_eq!(error.downcast_ref::<crate::refusal::Refusal>().unwrap().code, "module.requires");
+        }
+        let mut current = after;
+        for module in ["actions", "documents", "mcp", "file-intake"] {
+            let expected = current["modules"][module]["state"].clone();
+            let args = json!({"projectId":"app_modules", "module":module, "on":true, "expected":expected});
+            admin_call(&state, &publisher, "owner:o", "module_set", args).await.unwrap();
+            current = admin_call(&state, &publisher, "owner:o", "modules_read", project.clone()).await.unwrap();
+            assert_eq!(current["modules"][module]["state"]["on"], true, "{module}");
+            if module != "actions" {
+                assert!(setup[module]["declare"].is_string(), "{module}");
+                assert!(setup[module]["verify"].is_string(), "{module}");
+            }
+        }
+        assert!(current["modules"].get("ftps").is_none());
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -2623,6 +2665,24 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    #[tokio::test]
+    async fn ftps_credential_audit_rows_do_not_contain_passwords() {
+        let root = std::env::temp_dir().join(format!("konae-ftps-audit-{}", Uuid::new_v4()));
+        let (state, _) = kernel::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(state);
+        let issued = Ok(json!({"credentialId":"credential-1","password":"one-time-secret"}));
+        audit(
+            &state, "owner:ana", "ftps_device_create",
+            &json!({"projectId":"p1","destination":"meters","label":"Meter"}), &issued,
+        );
+        let detail: String = store(&state).unwrap().query_row(
+            "SELECT COALESCE(target,'') || COALESCE(detail,'') FROM audit WHERE tool='ftps_device_create'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(!detail.contains("one-time-secret"));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
     #[test]
     fn runtime_principals_never_see_owner_tools_and_anonymous_visitors_cannot_upload() {
         let anonymous = anonymous_runtime_tools()
@@ -2652,6 +2712,9 @@ mod tests {
         let reader = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
         let names = |owner: &Owner| admin_tools(owner).iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
         assert!(!names(&reader).contains(&"signup_policy_read".to_owned()));
+        for ftps_tool in ["ftps_credentials_list", "ftps_device_create", "ftps_device_rotate", "ftps_credential_revoke"] {
+            assert!(!names(&reader).contains(&ftps_tool.to_owned()));
+        }
         assert!(names(&reader).contains(&"usage_summary".to_owned()));
         assert!(!names(&reader).contains(&"usage_read".to_owned()));
         for definition in admin_tools(&reader) {
@@ -2663,6 +2726,17 @@ mod tests {
         assert!(!names(&publisher).iter().any(|name| name.starts_with("app_")));
         let manager = Owner { scopes: vec!["read".into(), "manage_users".into()], ..reader };
         assert!(names(&manager).contains(&"module_set".to_owned()));
+        for ftps_tool in ["ftps_credentials_list", "ftps_device_create", "ftps_device_rotate", "ftps_credential_revoke"] {
+            assert!(names(&manager).contains(&ftps_tool.to_owned()), "{ftps_tool}");
+        }
+        let definitions = admin_tools(&manager);
+        let list = definitions.iter().find(|tool| tool["name"] == "ftps_credentials_list").unwrap();
+        assert_eq!(list["annotations"]["readOnlyHint"], true);
+        for tool_name in ["ftps_device_create", "ftps_device_rotate"] {
+            let definition = definitions.iter().find(|tool| tool["name"] == tool_name).unwrap();
+            assert_eq!(definition["annotations"]["readOnlyHint"], false);
+            assert!(definition["description"].as_str().unwrap().contains("appears once"));
+        }
         let registry: Value = serde_json::from_str(include_str!("../../../kernel/src/modules.json")).unwrap();
         assert_eq!(registry["modules"]["auth"]["permission"], "manage_users");
         for removed in ["signup_policy_set", "sign_in_methods_set", "sign_in_methods_read"] { assert!(!names(&manager).contains(&removed.to_owned())); }

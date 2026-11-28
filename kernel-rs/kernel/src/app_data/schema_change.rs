@@ -136,6 +136,7 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
         }
         drop(statement);
         notify::check_columns(&transaction, name, action)?;
+        crate::documents::check_snapshot_columns(&transaction, name, action)?;
     }
     crate::modules::check_pending_work(&transaction)?;
     if let Mode::Apply(confirmation) = mode {
@@ -230,6 +231,7 @@ pub fn apply_with_transforms(
         }
         drop(statement);
         notify::check_columns(&transaction, name, action)?;
+        crate::documents::check_snapshot_columns(&transaction, name, action)?;
     }
     crate::modules::check_pending_work(&transaction)?;
     let violations: i64 = transaction.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get(0))?;
@@ -675,10 +677,13 @@ mod tests {
         assert!(reserved.iter().any(|name| name == "__konae_function_receipts"));
         assert!(reserved.iter().any(|name| name == "__konae_notify_intents"));
         assert!(reserved.iter().any(|name| name == "__konae_calls"));
+        assert!(reserved.iter().any(|name| name == "__konae_documents"));
         assert_eq!(crate::modules::data_version("functions"), Some(1));
         assert!(crate::modules::has_migration("actions", "schema-transforms"));
         assert!(crate::modules::has_migration("functions", "function-receipts"));
         assert!(crate::modules::has_migration("actions", "notify-intents"));
+        assert_eq!(crate::modules::data_version("documents"), Some(1));
+        assert!(crate::modules::has_migration("documents", "documents-v1"));
         assert_eq!(crate::modules::data_version("calls"), Some(1));
         assert!(crate::modules::has_migration("calls", "calls-app-outbox"));
         let components = crate::package::component_names();

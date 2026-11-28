@@ -165,9 +165,9 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
           runs, routes and Signals, oldest first. Locally an email shows its recipient and text,
           because nothing is sent. --json prints one object per line and --follow keeps printing.
           Only --prod reads the published Deployment.
-test      --dir <folder> status|calls|reply <call-id>|schedule <action>|scenario <file>
-          Reads local test state, supplies a JSON reply from --stdin or --file, runs a paused schedule,
-          or consumes ordered response steps from a version 1 file under tests/. It never targets production.
+test      --dir <folder> status|calls|reply <call-id>|schedule <action>|intake <source>|scenario <file>
+          Reads local test state, accepts a staged file with --path and --file, supplies a JSON reply,
+          runs a paused schedule, or consumes ordered response steps. It never targets production.
 pull      --dir <folder> [--url <installation URL>]
           Downloads app/, dist/, konae.json settings and data into <folder>/.konae/pull. Needs login
           --export-data. Use --data-only to refresh data without changing sources or their base markers.
@@ -1168,7 +1168,7 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     ...(options.confirmSchema ? { KONAE_CONFIRM_SCHEMA: options.confirmSchema } : {}),
   };
   const run = async (args: string[], input?: string) => {
-    const mutatesTestState = args[0] === "test" && (args[1] === "reply" || args[1] === "schedule");
+    const mutatesTestState = args[0] === "test" && ["reply", "schedule", "intake"].includes(args[1]);
     const release = mutatesTestState ? await acquireLocalControlLock(root) : undefined;
     let child: ReturnType<typeof Bun.spawn> | undefined;
     let interrupted: "SIGINT" | "SIGTERM" | undefined;
@@ -1654,7 +1654,7 @@ export async function main() {
   }
   if (command === "test") {
     if (args.includes("--prod")) throw Error("konae test only runs against the local test Kernel.");
-    const positional = args.filter((arg, index) => !arg.startsWith("--") && !["--dir", "--file", "--url"].includes(args[index - 1]));
+    const positional = args.filter((arg, index) => !arg.startsWith("--") && !["--dir", "--file", "--url", "--path", "--delivery-key"].includes(args[index - 1]));
     const [action, ...rest] = positional;
     const settings = await readSettings(root);
     const kernel = await localKernel(root, settings, { build: false });
@@ -1662,6 +1662,19 @@ export async function main() {
     if (action === "status" && rest.length === 0) result = await testControls(kernel, () => localStateSummary(root)).status();
     else if (action === "calls" && rest.length === 0) result = await testCalls(kernel);
     else if (action === "schedule" && rest.length === 1) result = await testSchedule(kernel, rest[0]);
+    else if (action === "intake" && rest.length === 1) {
+      const relativePath = option("path");
+      const sourceFile = option("file");
+      const deliveryKey = option("delivery-key");
+      if (!relativePath || !sourceFile) throw Error("File intake needs --path <relative-path> and --file <completed-file>.");
+      const staged = path.resolve(root, sourceFile);
+      const information = await stat(staged).catch(() => undefined);
+      if (!information?.isFile()) throw Error(`File intake source ${staged} is not a regular file.`);
+      result = JSON.parse(await kernel.run([
+        "test", "intake", rest[0], "--path", relativePath, "--file", staged,
+        ...(deliveryKey ? ["--delivery-key", deliveryKey] : []),
+      ]));
+    }
     else if (action === "reply" && rest.length === 1) {
       const file = option("file");
       const stdinFlag = args.includes("--stdin");
@@ -1672,7 +1685,7 @@ export async function main() {
     } else if (action === "scenario" && rest.length === 1) {
       const scenario = await resolveScenarioPath(root, path.resolve(root, rest[0]));
       result = await runScenario(kernel, scenario);
-    } else throw Error("Use konae test status, calls, reply <call-id> --stdin|--file <json>, schedule <action|cron:id>, or scenario <file>.");
+    } else throw Error("Use konae test status, calls, reply <call-id> --stdin|--file <json>, schedule <action|cron:id>, intake <source> --path <relative-path> --file <completed-file>, or scenario <file>.");
     console.log(JSON.stringify(result, null, 2));
     if (action === "reply" && result && typeof result === "object" && (result as { accepted?: unknown }).accepted === false) process.exitCode = 1;
     return;

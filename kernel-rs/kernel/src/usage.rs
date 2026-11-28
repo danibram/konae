@@ -1477,10 +1477,9 @@ pub fn storage(data_root: &Path, id: &str) -> Value {
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
-    let file_bytes: u64 = files
-        .iter()
-        .filter_map(|file| file["size"].as_u64())
-        .sum::<u64>()
+    let file_bytes: u64 = crate::file_store::file_index_references_in(&layout::files(data_root, id))
+        .map(|references| references.iter().map(|(_, size)| *size).sum::<u64>())
+        .unwrap_or_else(|_| files.iter().filter_map(|file| file["size"].as_u64()).sum::<u64>())
         + bytes_on_disk(&index);
     let limits = crate::file_store::FileLimits::from_env().unwrap_or_default();
     let database_exists = layout::database(data_root, id).is_file();

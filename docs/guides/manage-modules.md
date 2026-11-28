@@ -6,6 +6,14 @@ Modules hold the options and capabilities an app uses. The editor's App settings
 
 Call `modules_read` to see every module, its state, switch availability, options, permission and current behavior. Call `module_set` with the module name, the change and the state you read as `expected`. The tool refuses a stale state with `module.changed`. Read `modules_read` again before retrying. After a successful change, read `modules_read` to confirm the new state.
 
+## Turn on an app module
+
+1. On an existing Deployment, read `session_inspect.can` and call `modules_read { projectId }`. Check the module's permission and dependencies.
+2. Turn on each dependency that is off. Call `module_set { projectId, module, on: true, expected }`. Pass `modules.<name>.state` from `modules_read` as `expected`. Read back each change with `modules_read`. The build agent asks you to confirm each change in the editor.
+3. Turn on the requested module, then save and verify the app declarations. Publish, read the active release with `project_inspect`, and test the feature on the app's address.
+
+Read [Documents](../documents.md), [App MCP tools](../mcp-app-tools.md), or [File intake](../file-intake.md) for the module you want. The installation operator sets up the native Typst binary, [the FTPS listener](../ftps.md), and OAuth client registrations for external App MCP clients.
+
 The contract in `src/sdk/contract.ts` lists each switch and its agent rule. Publishing a Capsule with a cron job enables Functions and the Actions its target needs. The module tab lists the published cron jobs. Read [Server functions](../functions.md#run-a-function-on-a-cron-schedule) for the cron setup.
 
 ## Configure search listing
@@ -16,6 +24,18 @@ The module tab and `modules_read` show the canonical address currently in use, w
 
 The editor preview writes no canonical, card, `robots.txt` or sitemap. `konae dev` writes them using the local host as the address. Check search listing on `konae dev` or a published Deployment.
 
+## Receive files over FTPS
+
+The installation operator configures the FTPS listener and TLS files in `$KONAE_DATA_DIR/ftps.json`. The app declares destinations in `app/ftps.json`. The listener is not an app module, so there is no FTPS switch to turn on.
+
+Use a `member` destination when a signed-in app user uploads a file. It requires `auth` and `files`. Each credential expires after 10 minutes and accepts one confirmed upload. The resulting Files entry stays private to its owner, including when `files.fileAccess` is `app-users`.
+
+Use a `device` destination for a team or device. An owner with `manage_users` issues, rotates and revokes its permanent credential through the FTPS credential tools. Each credential names one destination and accepts multiple uploads. The Kernel records those uploads as durable Intake data. This path does not require the app's `file-intake` or `actions` modules.
+
+App declarations travel with the folder through `konae pull` and export. Listener settings, TLS files and credential hashes stay with the installation. Rotating a device credential takes effect on the running listener and does not require publish. Read [Receive files over FTPS](../ftps.md) for the declaration, the credential tools and the operator setup.
+
 ## Before the first publish
 
-Before publishing, the module tab shows each module's project state and options as read-only. The first release carries that state. After publishing, the tab reads and changes the Deployment through `modules_read` and `module_set`; changes apply at once.
+For a local app or a first CLI publish, set each required module's `on` field under `modules` in `konae.json`.
+
+In the web editor, the module tab shows the project state as read-only until the first publish. If a declaration needs a switch that is off, publish the base app first. Turn on the required modules before adding that declaration.

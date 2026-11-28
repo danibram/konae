@@ -1,0 +1,11 @@
+[
+  {"case":"member and device destinations","value":{"version":1,"destinations":{"photos":{"kind":"member"},"meters":{"kind":"device","folder":"readings"}}},"valid":true},
+  {"case":"missing destinations","value":{"version":1,"destinations":{}},"valid":false,"code":"ftps.invalid","error":"app/ftps.json must declare between 1 and 32 destinations."},
+  {"case":"unsupported version","value":{"version":2,"destinations":{"photos":{"kind":"member"}}},"valid":false,"code":"ftps.invalid","error":"app/ftps.json version must be 1."},
+  {"case":"invalid destination ID","value":{"version":1,"destinations":{"bad.id":{"kind":"device"}}},"valid":false,"code":"ftps.invalid","error":"FTPS destination ID must use 1 to 64 ASCII letters, digits, '_' or '-'."},
+  {"case":"destination ID with a trailing newline","value":{"version":1,"destinations":{"meter\n":{"kind":"device"}}},"valid":false,"code":"ftps.invalid","error":"FTPS destination ID must use 1 to 64 ASCII letters, digits, '_' or '-'."},
+  {"case":"unsupported destination kind","value":{"version":1,"destinations":{"photos":{"kind":"intake"}}},"valid":false,"code":"ftps.invalid","error":"FTPS destination photos kind must be \"member\" or \"device\"."},
+  {"case":"absolute folder","value":{"version":1,"destinations":{"meters":{"kind":"device","folder":"/readings"}}},"valid":false,"code":"ftps.invalid","error":"FTPS destination meters folder must be a normalized relative path of at most 1024 bytes."},
+  {"case":"folder traversal","value":{"version":1,"destinations":{"meters":{"kind":"device","folder":"readings/../private"}}},"valid":false,"code":"ftps.invalid","error":"FTPS destination meters folder must not contain empty, '.' or '..' components."},
+  {"case":"unknown destination field","value":{"version":1,"destinations":{"meters":{"kind":"device","source":"legacy"}}},"valid":false,"code":"ftps.invalid","error":"FTPS destination meters has an unknown field."}
+]
