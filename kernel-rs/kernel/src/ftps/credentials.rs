@@ -67,6 +67,16 @@ fn database(root: &Path, app_id: &str) -> Result<Connection> {
     let directory = crate::layout::data(root, app_id);
     std::fs::create_dir_all(&directory)?;
     let path = crate::layout::secrets(root, app_id);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     let db = Connection::open(&path).with_context(|| {
         format!(
             "Could not open private FTPS credential store {}.",
@@ -98,31 +108,12 @@ fn database(root: &Path, app_id: &str) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS __konae_ftps_app_credentials
             ON __konae_ftps_credentials(app_id, created_at);",
     )?;
-    let mut columns = db.prepare("PRAGMA table_info(__konae_ftps_credentials)")?;
-    let names = columns
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(columns);
-    if !names.iter().any(|name| name == "upload_id") {
-        db.execute(
-            "ALTER TABLE __konae_ftps_credentials ADD COLUMN upload_id TEXT",
-            [],
-        )?;
-    }
-    if !names.iter().any(|name| name == "generation") {
-        db.execute(
-            "ALTER TABLE __konae_ftps_credentials ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
-            [],
-        )?;
-    }
     let current = now_ms();
     db.execute("DELETE FROM __konae_ftps_credentials WHERE id IN (SELECT id FROM __konae_ftps_credentials WHERE expires_at IS NOT NULL AND expires_at<=?1 AND reserved_upload_id IS NULL ORDER BY expires_at LIMIT 32)", [current - 24 * 60 * 60 * 1000])?;
     db.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE id IN (SELECT id FROM __konae_ftps_credentials WHERE reserved_at IS NOT NULL AND reserved_at<?1 ORDER BY reserved_at LIMIT 32)", [current - RESERVATION_TTL_MS])?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let wal = PathBuf::from(format!("{}-wal", path.display()));
         if wal.exists() {
             std::fs::set_permissions(wal, std::fs::Permissions::from_mode(0o600))?;
@@ -415,6 +406,25 @@ pub(super) fn recover(root: &Path, app_id: &str) -> Result<usize> {
     Ok(database(root, app_id)?.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE reserved_at IS NOT NULL AND reserved_at<?1", [now_ms() - RESERVATION_TTL_MS])?)
 }
 
+pub(super) fn clear_stopped_reservations(root: &Path, app_id: &str) -> Result<usize> {
+    let path = crate::layout::secrets(root, app_id);
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let connection = Connection::open(path)?;
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='__konae_ftps_credentials' AND type='table')",
+        [], |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(0);
+    }
+    Ok(connection.execute(
+        "UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE reserved_upload_id IS NOT NULL",
+        [],
+    )?)
+}
+
 pub(super) fn list(root: &Path, app_id: &str) -> Result<Value> {
     let db = database(root, app_id)?;
     let mut statement = db.prepare("SELECT id,destination,label,created_at FROM __konae_ftps_credentials WHERE app_id=?1 AND kind='device' AND revoked_at IS NULL ORDER BY created_at DESC")?;
@@ -529,6 +539,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(recover(&root, "app").unwrap(), 1);
+        assert!(reserve(&root, "app", &device.credential.id, 1, "interrupted", None).unwrap());
+        assert_eq!(clear_stopped_reservations(&root, "app").unwrap(), 1);
+        assert!(reserve(&root, "app", &device.credential.id, 1, "after-restart", None).unwrap());
         let rotated = rotate_device(&root, "app", "app", &device.credential.id).unwrap();
         assert_eq!(rotated.credential.id, device.credential.id);
         assert_eq!(rotated.credential.username, device.credential.username);

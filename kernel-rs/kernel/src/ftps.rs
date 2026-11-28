@@ -151,6 +151,42 @@ struct StagedFile {
     file: Option<tokio::fs::File>,
 }
 
+struct UploadReservation {
+    root: PathBuf,
+    app_id: String,
+    credential_id: String,
+    upload_id: String,
+    finished: bool,
+}
+
+impl UploadReservation {
+    fn finish(&mut self, accepted: bool) {
+        self.finished = credentials::finish(
+            &self.root,
+            &self.app_id,
+            &self.credential_id,
+            &self.upload_id,
+            accepted,
+        )
+        .is_ok();
+    }
+}
+
+impl Drop for UploadReservation {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let root = std::mem::take(&mut self.root);
+        let app = std::mem::take(&mut self.app_id);
+        let credential = std::mem::take(&mut self.credential_id);
+        let upload = std::mem::take(&mut self.upload_id);
+        tokio::task::spawn_blocking(move || {
+            let _ = credentials::finish(&root, &app, &credential, &upload, false);
+        });
+    }
+}
+
 impl StagedFile {
     fn create(staging: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(staging)?;
@@ -448,6 +484,13 @@ impl Backend for BackendState {
             {
                 return Err(FsError::PermissionDenied);
             }
+            let mut reservation = UploadReservation {
+                root: root.clone(),
+                app_id: app_id.clone(),
+                credential_id: credential.id.clone(),
+                upload_id: upload_id.clone(),
+                finished: false,
+            };
             let auth_root = root.clone();
             let auth_app = app_id.clone();
             let auth_credential = credential.clone();
@@ -535,17 +578,10 @@ impl Backend for BackendState {
                 .await
                 .map(|_| ()),
             };
-            match accepted {
-                Ok(()) => {
-                    let _ = credentials::finish(&root, &app_id, &credential.id, &upload_id, true);
-                }
-                Err(error) => {
-                    let _ = credentials::finish(&root, &app_id, &credential.id, &upload_id, false);
-                    return Err(FsError::Local(format!(
-                        "FTPS destination refused the upload: {error:#}"
-                    )));
-                }
-            }
+            reservation.finish(accepted.is_ok());
+            accepted.map_err(|error| {
+                FsError::Local(format!("FTPS destination refused the upload: {error:#}"))
+            })?;
         }
         Ok(bytes)
     }
@@ -724,6 +760,9 @@ pub async fn start(state: &AppState) -> Result<Option<Runtime>> {
             )
         })?;
         credentials.insert(credential.username.clone(), Arc::new(credential.clone()));
+    }
+    for deployment in deployments.values() {
+        credentials::clear_stopped_reservations(&state.data_root, &deployment.id)?;
     }
     drop(deployments);
 
