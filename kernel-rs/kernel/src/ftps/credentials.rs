@@ -314,7 +314,6 @@ pub(super) fn verify(
     username: &str,
     password: &str,
 ) -> Result<Option<Credential>> {
-    let _ = recover(root, app_id)?;
     let credential = database(root, app_id)?.query_row("SELECT id,app_id,username,destination,kind,user_id,label,upload_id,generation,expires_at,salt,verifier FROM __konae_ftps_credentials WHERE app_id=?1 AND username=?2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?3)", params![app_id, username, now_ms()], map_credential).optional()?;
     let Some(credential) = credential else {
         return Ok(None);
@@ -400,10 +399,6 @@ pub(super) fn mark_receipt(root: &Path, app_id: &str, upload_id: &str) -> Result
         params![app_id, now_ms(), upload_id],
     )?;
     Ok(changed == 1)
-}
-
-pub(super) fn recover(root: &Path, app_id: &str) -> Result<usize> {
-    Ok(database(root, app_id)?.execute("UPDATE __konae_ftps_credentials SET reserved_upload_id=NULL,reserved_at=NULL WHERE reserved_at IS NOT NULL AND reserved_at<?1", [now_ms() - RESERVATION_TTL_MS])?)
 }
 
 pub(super) fn clear_stopped_reservations(root: &Path, app_id: &str) -> Result<usize> {
@@ -538,10 +533,19 @@ mod tests {
                 [&device.credential.id],
             )
             .unwrap();
-        assert_eq!(recover(&root, "app").unwrap(), 1);
         assert!(reserve(&root, "app", &device.credential.id, 1, "interrupted", None).unwrap());
         assert_eq!(clear_stopped_reservations(&root, "app").unwrap(), 1);
-        assert!(reserve(&root, "app", &device.credential.id, 1, "after-restart", None).unwrap());
+        assert!(
+            reserve(
+                &root,
+                "app",
+                &device.credential.id,
+                1,
+                "after-restart",
+                None
+            )
+            .unwrap()
+        );
         let rotated = rotate_device(&root, "app", "app", &device.credential.id).unwrap();
         assert_eq!(rotated.credential.id, device.credential.id);
         assert_eq!(rotated.credential.username, device.credential.username);

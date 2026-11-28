@@ -103,7 +103,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       try {
         ftpsDeclaration = parseFtpsDeclaration(files["ftps.json"]);
       } catch (error) {
-        return failure({ stage: "actions", message: describe(error), detail: "Declare version 1 destinations in app/ftps.json and use a member or device destination." }, ["sources"]);
+        return failure({ stage: "actions", message: describe(error), code: "ftps.invalid", hint: hintOf("ftps.invalid") }, ["sources"]);
       }
     }
     const filesCall = sourcesUseFiles(Object.values(files));

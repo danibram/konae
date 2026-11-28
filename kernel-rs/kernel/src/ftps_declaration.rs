@@ -28,6 +28,11 @@ pub enum DestinationKind {
 }
 
 pub fn validate_declaration(raw: &str) -> Result<Declaration> {
+    parse_declaration(raw)
+        .map_err(|error| crate::refusal::refuse("ftps.invalid", error.to_string()).into())
+}
+
+fn parse_declaration(raw: &str) -> Result<Declaration> {
     ensure!(
         raw.len() <= MAX_DECLARATION_BYTES,
         "app/ftps.json exceeds 65536 bytes."
@@ -156,11 +161,14 @@ mod tests {
                 case["case"]
             );
             if let Some(expected) = case["error"].as_str() {
+                let error = result.unwrap_err();
+                assert_eq!(error.to_string(), expected, "{}", case["case"]);
                 assert_eq!(
-                    result.unwrap_err().to_string(),
-                    expected,
-                    "{}",
-                    case["case"]
+                    error
+                        .downcast_ref::<crate::refusal::Refusal>()
+                        .unwrap()
+                        .code,
+                    case["code"].as_str().unwrap()
                 );
             }
         }

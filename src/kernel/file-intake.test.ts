@@ -77,6 +77,8 @@ test("the Validation Gate applies every shared FTPS refusal", async () => {
       "schema.sql": "",
       "ftps.json": JSON.stringify(item.value),
     }, { state: "absent" }, { modules: { auth: { on: true }, files: { on: true } } });
-    expect(result.errors.some((error) => error.message.includes("app/ftps.json") || error.message.includes("FTPS destination")), item.case).toBe(!item.valid);
+    const refusal = result.errors.find((error) => error.code === "ftps.invalid");
+    if (item.valid) expect(refusal, item.case).toBeUndefined();
+    else expect(refusal, item.case).toMatchObject({ code: item.code, message: item.error });
   }
 });

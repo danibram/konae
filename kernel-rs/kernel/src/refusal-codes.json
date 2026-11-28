@@ -5,6 +5,7 @@
   "cron.definition-invalid": { "fix": "capsule", "remedy": "Check crons.json." },
   "cron.expression-invalid": { "fix": "capsule", "remedy": "Check crons.json." },
   "cron.target-invalid": { "fix": "capsule", "remedy": "Check crons.json and functions.json." },
+  "ftps.invalid": { "fix": "capsule", "remedy": "Declare version 1 destinations of kind member or device in app/ftps.json." },
   "function.scheduled-route": { "fix": "capsule", "remedy": "Check functions.json." },
   "function.scheduled-action": { "fix": "capsule", "remedy": "Check the Function action allowlist in functions.json." },
   "action.scheduled-shape": { "fix": "capsule", "remedy": "Check the scheduled action in actions.json." },
