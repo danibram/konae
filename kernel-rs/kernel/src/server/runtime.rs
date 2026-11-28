@@ -294,6 +294,42 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                 Err(anyhow::anyhow!("File not found."))
             } else if name.starts_with("transfer_") {
                 transfer_call(&state, &principal, name, &arguments, true).await
+            } else if name == "ftps_upload_create" || name == "ftps_upload_status" {
+                match actor.as_ref() {
+                    Some(actor) if name == "ftps_upload_create" => {
+                        match crate::ftps::issue_member_upload(
+                            &state,
+                            &deployment,
+                            &actor.user_id,
+                            arguments["destination"].as_str().unwrap_or_default(),
+                        )
+                        .await
+                        {
+                            Ok(created) => match created["uploadId"].as_str() {
+                                Some(upload_id) => crate::ftps::member_upload_status(
+                                    &state,
+                                    &deployment,
+                                    &actor.user_id,
+                                    upload_id,
+                                )
+                                .await
+                                .map(|_| created),
+                                None => Ok(created),
+                            },
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Some(actor) => {
+                        crate::ftps::member_upload_status(
+                            &state,
+                            &deployment,
+                            &actor.user_id,
+                            arguments["uploadId"].as_str().unwrap_or_default(),
+                        )
+                        .await
+                    }
+                    None => Err(anyhow::anyhow!("authentication-required")),
+                }
             } else if account_tools().iter().any(|t| t["name"] == name) {
                 let client = state.guards.client_ip(peer, &headers);
                 match crate::accounts::runtime_tool(&state, &headers, client, name, &arguments).await {
@@ -312,7 +348,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                 runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
             };
             if let Some(limits::Busy(wait)) = result.as_ref().err().and_then(|e| e.downcast_ref::<limits::Busy>()) {
-                return rate_limited_tool(&id, *wait);
+                return rate_limited_tool(&id, wait);
             }
             if name == "auth_logout" && result.is_ok() {
                 clear_cookie = true;
@@ -440,6 +476,20 @@ pub fn runtime_tools() -> Vec<Value> {
             json!({"fileId":{"type":"string"}}),
             &["fileId"],
             false,
+        ),
+        tool(
+            "ftps_upload_create",
+            "Issue a short-lived FTPS credential for one member destination. It permits one completed upload.",
+            json!({"destination":{"type":"string","minLength":1,"maxLength":100}}),
+            &["destination"],
+            false,
+        ),
+        tool(
+            "ftps_upload_status",
+            "Read the status of one FTPS upload issued to this app account.",
+            json!({"uploadId":{"type":"string","minLength":1,"maxLength":100}}),
+            &["uploadId"],
+            true,
         ),
     ];
     tools.extend(transfer_tools(true));
@@ -882,6 +932,22 @@ mod tests {
         for word in named {
             assert!(served.iter().any(|name| name == word), "{word} is not a runtime tool");
         }
+    }
+
+    #[test]
+    fn ftps_upload_tools_are_signed_in_and_take_no_actor_argument() {
+        let runtime = super::runtime_tools();
+        for name in ["ftps_upload_create", "ftps_upload_status"] {
+            let tool = runtime.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+            assert!(tool["inputSchema"]["properties"].get("userId").is_none());
+        }
+        let create = runtime.iter().find(|tool| tool["name"] == "ftps_upload_create").unwrap();
+        assert_eq!(create["inputSchema"]["required"], json!(["destination"]));
+        let status = runtime.iter().find(|tool| tool["name"] == "ftps_upload_status").unwrap();
+        assert_eq!(status["inputSchema"]["required"], json!(["uploadId"]));
+        let anonymous = super::anonymous_runtime_tools();
+        assert!(anonymous.iter().all(|tool| !["ftps_upload_create", "ftps_upload_status"].contains(&tool["name"].as_str().unwrap())));
     }
 
     #[test]
