@@ -1611,7 +1611,10 @@ async fn schedule_next_call(state: &AppState, app: &str) -> Result<Option<std::t
 async fn run_app_once(state: &AppState, app_id: &str) -> Result<usize> {
     let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == app_id).cloned() else { return Ok(0) };
     let claim_lock = crate::database_lock(state, app_id).await;
-    if crate::maintenance::pause(&state.data_root, app_id).is_some() { return Ok(0); }
+    if !crate::layout::database(&state.data_root, app_id).is_file()
+        || crate::maintenance::pause(&state.data_root, app_id).is_some() {
+        return Ok(0);
+    }
     if state.execution_mode.is_test() {
         let root = state.data_root.clone();
         let id = app_id.to_owned();
