@@ -844,6 +844,13 @@ pub(crate) fn unpack_files_with_references(
             );
             restored["ownerId"] = json!(owner);
         }
+        if file.get("ownerOnly").is_some() {
+            ensure!(file["ownerOnly"].is_boolean(), "File {id} has an invalid owner-only flag.");
+            if file["ownerOnly"] == true {
+                ensure!(files::file_owner(file).is_some(), "Owner-only file {id} has no owner.");
+                restored["ownerOnly"] = json!(true);
+            }
+        }
         normalized.push(restored);
     }
     let mut additional = HashMap::<String, u64>::new();
@@ -2103,7 +2110,7 @@ mod tests {
             source.put(&deployment, id, &temp).await.unwrap();
         }
         let index = json!([
-            {"id": a, "name": "a.txt", "type": "text/plain", "size": 10, "visibility": "private", "ownerId": "u1", "createdAt": 5},
+            {"id": a, "name": "a.txt", "type": "text/plain", "size": 10, "visibility": "private", "ownerId": "u1", "ownerOnly": true, "createdAt": 5},
             {"id": b, "name": "b.bin", "size": 100_000, "visibility": "public"},
         ]);
         std::fs::write(index_dir.join("index.json"), index.to_string()).unwrap();
@@ -2138,6 +2145,7 @@ mod tests {
         let restored: Vec<Value> =
             serde_json::from_slice(&std::fs::read(target_dir.join("index.json")).unwrap()).unwrap();
         assert_eq!(restored[0]["ownerId"], "u1");
+        assert_eq!(restored[0]["ownerOnly"], true);
         assert_eq!(restored[1]["visibility"], "public");
         assert!(std::fs::read_dir(&target_dir).unwrap().all(|entry| {
             !entry

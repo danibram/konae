@@ -92,6 +92,8 @@ fn check_files(root: &Path, id: &str) -> Result<()> {
     let mut accounts = None;
     for file in &index {
     let key = file["id"].as_str().filter(|v| crate::files::valid_file_id(v)).context("Invalid indexed file ID.")?;
+        ensure!(file.get("ownerOnly").is_none_or(Value::is_boolean), "File {key} has an invalid owner-only flag.");
+        ensure!(file["ownerOnly"] != true || crate::files::file_owner(file).is_some(), "Owner-only file {key} has no owner.");
         ensure!(indexed.insert(key), "Duplicate indexed file {key}.");
         let blob = files.join(format!("{key}.blob"));
         ensure!(Some(fs::metadata(&blob)?.len()) == file["size"].as_u64(), "Indexed size differs for file {key}.");

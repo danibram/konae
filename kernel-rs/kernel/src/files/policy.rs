@@ -24,6 +24,9 @@ pub fn app_user_files(deployment: &Deployment) -> bool {
 }
 
 pub fn file_readable(deployment: &Deployment, file: &Value, actor_id: Option<&str>) -> bool {
+    if file.get("ownerOnly").and_then(Value::as_bool) == Some(true) {
+        return actor_id.is_some() && file_owner(file) == actor_id;
+    }
     if app_user_files(deployment) {
         return actor_id.is_some();
     }
