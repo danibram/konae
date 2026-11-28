@@ -127,6 +127,13 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     } else {
         None
     };
+    let ftps_source = if candidate_sources || rebuilt || fresh_sources {
+        let source = optional_text(&sources.join(crate::ftps_declaration::DECLARATION_FILE)).await?;
+        crate::ftps_declaration::pin_declaration(&mut manifest, source.as_deref())?;
+        source
+    } else {
+        None
+    };
     let visibility = if candidate_sources || rebuilt { settings.visibility.as_str() } else { released.as_ref().map(|snapshot| snapshot.visibility.as_str()).unwrap_or(&settings.visibility) };
     if let Some(object) = manifest.as_object_mut() {
         object.insert("visibility".into(), Value::String(visibility.to_owned()));
@@ -145,6 +152,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
                 files.insert("schema.sql".to_owned(), schema.clone());
                 if let Some(document) = &schema_transforms { files.insert("schema-transforms.json".to_owned(), document.clone()); }
                 if let Some(source) = intake_source { files.insert(crate::file_intake::DECLARATION_FILE.to_owned(), source); }
+                if let Some(source) = ftps_source { files.insert(crate::ftps_declaration::DECLARATION_FILE.to_owned(), source); }
                 if candidate_sources || rebuilt || fresh_sources {
                     let function_source = optional_text(&sources.join("functions.json")).await?;
                     let cron_source = optional_text(&sources.join("crons.json")).await?;

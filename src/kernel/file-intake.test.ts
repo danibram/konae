@@ -3,6 +3,8 @@ import cases from "../../kernel-rs/kernel/src/file-intake-cases.json";
 import initSqlJs from "sql.js";
 import { createCapsuleValidator } from "../agent/gate";
 import { validateFileIntake } from "./file-intake";
+import ftpsCases from "../../kernel-rs/kernel/src/ftps-cases.json";
+import { validateFtpsDeclaration } from "./ftps";
 
 describe("file intake declaration shared cases", () => {
   for (const item of cases) {
@@ -45,4 +47,36 @@ test("the Validation Gate refuses action effects on a File intake consumer", asy
   expect(result.errors.map(({ message }) => message)).toContain(
     "File intake consumer index action cannot declare guard, issue, notify or signal.",
   );
+});
+
+describe("FTPS declaration shared cases", () => {
+  for (const item of ftpsCases) {
+    test(item.case, () => {
+      if (item.valid) expect(() => validateFtpsDeclaration(item.value)).not.toThrow();
+      else expect(() => validateFtpsDeclaration(item.value)).toThrow(item.error);
+    });
+  }
+});
+
+test("the Validation Gate requires auth and files only for member destinations", async () => {
+  const gate = createCapsuleValidator(() => initSqlJs());
+  const files = { "index.html": "<!doctype html><title>FTPS</title>", "schema.sql": "", "ftps.json": JSON.stringify({ version: 1, destinations: { photos: { kind: "member" } } }) };
+  const off = await gate.validate(files, { state: "absent" }, { modules: { auth: { on: true }, files: { on: false } } });
+  expect(off.errors[0]?.message).toContain("Module files is off.");
+  const authOff = await gate.validate(files, { state: "absent" }, { modules: { auth: { on: false }, files: { on: true } } });
+  expect(authOff.errors[0]?.message).toContain("Module files requires auth, which is off.");
+  const device = await gate.validate({ ...files, "ftps.json": JSON.stringify({ version: 1, destinations: { meters: { kind: "device", folder: "readings" } } }) }, { state: "absent" }, { modules: { auth: { on: false }, files: { on: false }, actions: { on: false }, "file-intake": { on: false } } });
+  expect(device.errors.some((error) => error.message.includes("Module files is off.") || error.message.includes("Module auth is off."))).toBe(false);
+});
+
+test("the Validation Gate applies every shared FTPS refusal", async () => {
+  const gate = createCapsuleValidator(() => initSqlJs());
+  for (const item of ftpsCases) {
+    const result = await gate.validate({
+      "index.html": "<!doctype html><title>FTPS</title>",
+      "schema.sql": "",
+      "ftps.json": JSON.stringify(item.value),
+    }, { state: "absent" }, { modules: { auth: { on: true }, files: { on: true } } });
+    expect(result.errors.some((error) => error.message.includes("app/ftps.json") || error.message.includes("FTPS destination")), item.case).toBe(!item.valid);
+  }
 });

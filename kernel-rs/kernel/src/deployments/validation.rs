@@ -76,6 +76,9 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let uses_http = crate::modules::sources_use_http(action_files.iter().copied());
     let uses_calls = crate::modules::sources_use_calls(action_files.iter().copied());
     let intake_source = input.project.files.get(crate::file_intake::DECLARATION_FILE);
+    let ftps_source = input.project.files.get(crate::ftps_declaration::DECLARATION_FILE);
+    let ftps_declaration = ftps_source.map(|source| crate::ftps_declaration::validate_declaration(source)).transpose()?;
+    let uses_ftps_member = ftps_declaration.as_ref().is_some_and(|declaration| declaration.destinations.values().any(|destination| destination.kind == crate::ftps_declaration::DestinationKind::Member));
     let uses_documents = crate::modules::sources_use_documents(action_files.iter().copied());
     crate::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
     crate::calls::check_connects(&input.project.manifest)?;
@@ -94,7 +97,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     let initial_modules = input.initial_modules.as_ref().or(package_modules);
     let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
     let first_release = existing_modules.is_none();
-    let mut candidate_modules = existing_modules.unwrap_or_else(|| crate::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
+    let mut candidate_modules = existing_modules.unwrap_or_else(|| crate::modules::initial_for_release(initial_modules, uses_files || uses_ftps_member, uses_auth || uses_ftps_member || input.visibility != "public", uses_http, uses_calls));
     crate::functions::enable_cron_modules(&mut candidate_modules, functions.as_ref());
     if input.project.manifest["fileAccess"] == "app-users" {
         let files = candidate_modules.get_mut("files").expect("files is switchable");
@@ -122,7 +125,7 @@ async fn validate_release_inner(state: &AppState, input: &DeployInput, against: 
     }
     for module in crate::modules::release_use_order() {
         let used = match module.as_str() {
-            "files" => uses_files,
+            "files" => uses_files || uses_ftps_member,
             "actions" => uses_actions,
             "http" => uses_http,
             "calls" => uses_calls,

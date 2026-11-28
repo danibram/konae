@@ -667,7 +667,7 @@ pub async fn set(
                     check_dependent_requires(module, dependent, true)?;
                 }
             }
-            let used = published_app_uses_module(root, id, module, &current);
+            let used = published_app_uses_module(root, id, module, &current, settings.released.as_ref().map(|released| &released.manifest));
             if module == "http" && used {
                 let action = released_action_name(root, id, |action| action["http"].is_object()).unwrap_or_else(|| "a published action".to_owned());
                 check_in_use_action(module, &action)?;
@@ -709,11 +709,11 @@ pub async fn set(
     Ok(json!({"projectId":id,"module":module,"state":current}))
 }
 
-fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, state: &Value) -> bool {
+fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, state: &Value, released_manifest: Option<&Value>) -> bool {
     if crate::functions::published_use(root, id, module) { return true; }
     match module {
-        "files" => uses_files(root, id, state),
-        "auth" => uses_auth(root, id),
+        "files" => uses_files(root, id, state) || released_manifest.is_some_and(crate::ftps_declaration::manifest_uses_member),
+        "auth" => uses_auth(root, id) || released_manifest.is_some_and(crate::ftps_declaration::manifest_uses_member),
         "actions" => uses_actions(root, id),
         "http" => uses_http(root, id),
         "calls" => uses_calls(root, id),
@@ -1244,6 +1244,37 @@ mod tests {
         let index = crate::layout::files(&root, "app");
         std::fs::create_dir_all(&index).unwrap();
         std::fs::write(index.join("index.json"), r#"[{"id":"file-1"}]"#).unwrap();
+        let error = set(&root, "app", "files", Some(false), None, None).await.unwrap_err();
+        assert!(error.to_string().contains("Module files is in use by the published app. Remove its use before turning it off."));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_draft_ftps_change_does_not_remove_the_published_files_dependency() {
+        let root = std::env::temp_dir().join(format!("konae-ftps-files-in-use-{}", uuid::Uuid::new_v4()));
+        let mut settings = Settings::new("app", "App", "app", &json!({"visibility":"public"}));
+        settings.modules.get_mut("files").unwrap()["on"] = json!(true);
+        settings.released = Some(crate::ReleasedSettings {
+            name: settings.name.clone(),
+            slug: settings.slug.clone(),
+            visibility: "public".into(),
+            signup_policy: settings.signup_policy.clone(),
+            sign_in_methods: settings.sign_in_methods.clone(),
+            contact_email: None,
+            manifest: json!({"ftps":{"version":1,"destinations":{"photos":{"kind":"member"}}}}),
+            actions: String::new(),
+            schema_sql: String::new(),
+            schema_transforms: None,
+            server: None,
+            source_digest: None,
+            artifact_digest: None,
+            released_at: Some(1),
+        });
+        settings.write(&root).await.unwrap();
+        let sources = crate::layout::sources(&root, "app");
+        std::fs::create_dir_all(&sources).unwrap();
+        std::fs::write(sources.join("ftps.json"), r#"{"version":1,"destinations":{"meters":{"kind":"device"}}}"#).unwrap();
+        std::fs::create_dir_all(crate::layout::dist(&root, "app")).unwrap();
         let error = set(&root, "app", "files", Some(false), None, None).await.unwrap_err();
         assert!(error.to_string().contains("Module files is in use by the published app. Remove its use before turning it off."));
         std::fs::remove_dir_all(root).unwrap();

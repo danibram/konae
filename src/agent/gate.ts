@@ -12,6 +12,7 @@ import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, source
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { validateFileIntake, validateFileIntakeConsumers, type FileIntakeDeclaration } from "../kernel/file-intake";
+import { parseFtpsDeclaration, validateFtpsDeclaration } from "../kernel/ftps";
 import { isEncoded } from "../lib/source-files";
 import type {
   CapsuleFiles,
@@ -97,6 +98,14 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         return failure({ stage: "actions", message: describe(error), detail: "Declare version 1 sources and consumers in file-intake.json, then name a declared mutation action." }, ["sources"]);
       }
     }
+    let ftpsDeclaration: ReturnType<typeof validateFtpsDeclaration> | undefined;
+    if (files["ftps.json"] !== undefined) {
+      try {
+        ftpsDeclaration = parseFtpsDeclaration(files["ftps.json"]);
+      } catch (error) {
+        return failure({ stage: "actions", message: describe(error), detail: "Declare version 1 destinations in app/ftps.json and use a member or device destination." }, ["sources"]);
+      }
+    }
     const filesCall = sourcesUseFiles(Object.values(files));
     const used = {
       files: filesCall,
@@ -107,8 +116,9 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       documents: sourcesUseDocuments(files),
       "file-intake": intakeDeclaration !== undefined,
     };
+    const usesFtpsMember = Object.values(ftpsDeclaration?.destinations ?? {}).some((destination) => destination.kind === "member");
     for (const module of moduleCheckOrder) {
-      if (!used[module as keyof typeof used]) continue;
+      if (!used[module as keyof typeof used] && !(usesFtpsMember && module === "files")) continue;
       const state = modules?.[module];
       const off = state ? checkModuleChange({ rule: "on", module, state }) : null;
       if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
