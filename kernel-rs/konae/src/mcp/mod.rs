@@ -906,7 +906,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 .iter()
                 .any(|name| headers.contains_key(*name));
             if any_execution && matches!(name, "ftps_device_create" | "ftps_device_rotate") {
-                return rpc_error(id, -32000, "FTPS device passwords can only be issued from the owner's session.");
+                return rpc_error(id, -32000, "Issue FTPS device passwords from Integrations or a direct owner MCP client.");
             }
             let mut execution: Option<(String, String, String, i64, String, Option<String>, bool)> = None;
             if any_execution {
@@ -1400,19 +1400,8 @@ async fn admin_call(
         }
         "ftps_credentials_list" | "ftps_device_create" | "ftps_device_rotate" | "ftps_credential_revoke" => {
             let id = a["projectId"].as_str().unwrap_or_default();
-            owner.require("manage_users", Some(id))?;
             let deployment = owned_deployment(state, owner, id, "manage_users").await?;
-            let result = kernel::ftps::owner_credentials_call(state, &deployment, name, &a).await?;
-            if name != "ftps_credentials_list" {
-                kernel::ftps::owner_credentials_call(
-                    state,
-                    &deployment,
-                    "ftps_credentials_list",
-                    &json!({"projectId": id}),
-                )
-                .await?;
-            }
-            Ok(result)
+            kernel::ftps::owner_credentials_call(state, &deployment, name, &a).await
         }
         "notices_read" => {
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "read").await?;
@@ -2650,14 +2639,6 @@ mod tests {
         let state = Konae::for_test(state);
         let ok: Result<Value> = Ok(json!({}));
         audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), &ok);
-        let issued: Result<Value> = Ok(json!({"credentialId":"credential-1","password":"one-time-secret"}));
-        audit(&state, "owner:ana", "ftps_device_create", &json!({"projectId":"p1","destination":"meters","label":"Meter"}), &issued);
-        let audit_text: String = store(&state).unwrap().query_row(
-            "SELECT COALESCE(GROUP_CONCAT(COALESCE(target,'') || COALESCE(detail,'')), '') FROM audit",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        assert!(!audit_text.contains("one-time-secret"), "audit holds no issued password");
         let rows = AUDIT_MAX_ROWS + 3 * AUDIT_PRUNE_INTERVAL;
         {
             let db = store(&state).unwrap();
@@ -2681,6 +2662,24 @@ mod tests {
         assert_eq!(count("runtime:d1:%"), AUDIT_MAX_ROWS, "the Deployment's app users keep their newest rows");
         assert_eq!(audit_partition("runtime:d1:user-1"), ("runtime:d1:".to_owned(), "runtime:d1;".to_owned()));
         assert_eq!(audit_partition("owner:ana"), ("owner:ana".to_owned(), "owner:ana\u{1}".to_owned()));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn ftps_credential_audit_rows_do_not_contain_passwords() {
+        let root = std::env::temp_dir().join(format!("konae-ftps-audit-{}", Uuid::new_v4()));
+        let (state, _) = kernel::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(state);
+        let issued = Ok(json!({"credentialId":"credential-1","password":"one-time-secret"}));
+        audit(
+            &state, "owner:ana", "ftps_device_create",
+            &json!({"projectId":"p1","destination":"meters","label":"Meter"}), &issued,
+        );
+        let detail: String = store(&state).unwrap().query_row(
+            "SELECT COALESCE(target,'') || COALESCE(detail,'') FROM audit WHERE tool='ftps_device_create'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(!detail.contains("one-time-secret"));
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

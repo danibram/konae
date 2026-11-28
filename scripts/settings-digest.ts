@@ -18,7 +18,7 @@ function matchesLegacyModuleDefaults(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const modules = value as Record<string, unknown>;
   const switchable = sdkContract.modules.filter((module) => module.switch);
-  const legacyOptional = new Set(["auth", "actions", "http", "calls", "functions"]);
+  const legacyOptional = new Set(["auth", "actions", "http", "calls", "functions", "documents", "mcp", "file-intake"]);
   const omitted = switchable.filter((module) => legacyOptional.has(module.name) && !Object.hasOwn(modules, module.name)).length;
   if (Object.keys(modules).length !== switchable.length - omitted) return false;
   if (!Object.keys(modules).every((name) => switchable.some((module) => module.name === name))) return false;
