@@ -438,6 +438,9 @@ describe("chunked package", () => {
     const source = await publish("pkg_leak");
     const writer = runtime(source.hostname, await account(source.hostname, "signup", "writer@leak.test"));
     await writer.call("actions_invoke", { name: "notes.create", input: { title: "first" } });
+    const attachment = await writer.upload(new TextEncoder().encode("The package includes this file."));
+    await writer.call("files_upload", { transferId: attachment.transferId, name: "note.txt", type: "text/plain" });
+    await writer.cancel(attachment.transferId);
     await owner.call("database_execute", { projectId: source.id, operation: "sql", input: { sql: "INSERT INTO notes(title,user_id) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300) SELECT hex(randomblob(500)),'bulk' FROM c" } });
     const exported = await owner.call<Exported>("project_export", { projectId: source.id });
     expect(exported.downloads.database.size).toBeGreaterThan(4 * 64 * 1024);
