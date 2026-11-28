@@ -72,7 +72,7 @@ flowchart TB
     PROVIDERS["SMTP / Resend · HTTP services"]
     STORAGE["Local disk / S3"]
   end
-  DEVICE --> FTP -->|"app and source credential"| INTAKE
+  DEVICE --> FTP -->|"device destination credential"| INTAKE
   RUNNER --> JS
   RUNNER -.-> TYPST
   MAIL --> PROVIDERS
@@ -129,7 +129,7 @@ Each new module must expose its operation name, outcome and resource use through
 | Notify | Mutation result, verified recipient, mail transport | Request an email after an accepted mutation |
 | Documents | Actions, transactions, blobs, dispatcher, Typst | Freeze document input, render it and authorize downloads |
 | File intake | Transactions, blobs, dispatcher | Accept a version and record its change for declared consumers |
-| FTPS adapter | File intake | Translate a device transfer into an accepted app version |
+| FTPS adapter | Files or durable Intake | Store a member upload as a private Files object or accept a device upload at one declared destination |
 | Export, import, copies and cleanup | Every module's data inventory | Preserve live state and pending work, identify referenced bytes |
 | Usage and Signals | Execution outcomes and declared signals | Report what happened without controlling domain decisions |
 
@@ -275,12 +275,12 @@ A dependency follows a declared operation. A Function that calls a Server Action
 | Proposed operation | What happens |
 | --- | --- |
 | Issue a document | An Actions mutation returns the document ID, recipient and snapshot. Before commit, Documents records the pending issue on the same SQLite connection and pins the template, fonts, assets and compiler version. Rollback cancels both writes. After commit a worker renders the PDF. Retries publish one result per issue ID. Downloads run the app's access query for the current actor and serve the stored PDF. |
-| Receive a file | One FTPS listener maps each credential to one app and source. Intake stages the bytes, then commits the version and a pending change before acknowledging the transfer. A new path records a creation. Replacing its contents records an update. Each event identifies the source, path and immutable version. The source declares how to recognize a retransmission after a lost acknowledgement. |
+| Receive a file | One FTPS listener maps each credential to one app destination. A member destination requires auth and Files, issues a 10-minute credential for one confirmed upload, and keeps the Files object private to its owner. A device destination issues a permanent rotatable credential for one destination and records uploads as durable Intake data without enabling `file-intake` or `actions`. The legacy listener still accepts credentials bound to a published File intake source. |
 | Process a file | The app declares a consumer for the source. The dispatcher can redeliver after a crash. The consumer reads that version and records its result once per version and consumer. A JavaScript parser would require a narrowly scoped Function input for those bytes. Intake and Documents themselves both work with Functions off. |
 
-File intake v1 implements the source and consumer records with reserved app tables, immutable shared-store blobs and a declared Actions mutation. The mutation receives version metadata and fixed app input, not bytes or host access. See [File intake v1](file-intake.md) for declarations, replay and local acceptance.
+File intake v1 implements declared sources and consumers with reserved app tables, immutable shared-store blobs and a declared Actions mutation. The FTPS device destination uses durable Intake records without that app module or consumer. See [File intake v1](file-intake.md) for the legacy declaration and [FTPS](ftps.md) for destination rules.
 
-Keep module records in Kernel-controlled tables. When a mutation promises an effect, give the module a typed way to append its record to that mutation's transaction. App SQL must have no direct write access to those tables. After a move, existing PDFs remain readable and pending work resumes once its required renderer is available. New device uploads resume once the operator binds the FTPS source.
+Keep module records in Kernel-controlled tables. When a mutation promises an effect, give the module a typed way to append its record to that mutation's transaction. App SQL must have no direct write access to those tables. After a move, existing PDFs remain readable and pending work resumes once its required renderer is available. Configure the listener at the destination installation and issue device credentials there.
 
 ### Compatibility across Kernel versions
 

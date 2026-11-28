@@ -39,7 +39,7 @@ Run `konae dev --dir ./my-app` once to prepare the app. Stop the development ser
 konae test --dir ./my-app intake camera --path incoming/photo.jpg --file /tmp/photo.jpg --delivery-key camera-00042
 ```
 
-Run the command again with the same file, path and delivery key. The second response should have the same `versionId` and `created: false`. Start `konae dev` again to pick up any pending consumers. Verify each consumer's effect through an authorized query of the app rows. On a deployment, publish the source before the operator binds it to the [FTPS listener](./ftps.md).
+Run the command again with the same file, path and delivery key. The second response should have the same `versionId` and `created: false`. Start `konae dev` again to pick up any pending consumers. Verify each consumer's effect through an authorized query of the app rows. The legacy FTPS route needs a published source before the operator binds it to the [listener](./ftps.md). New FTPS destinations use `app/ftps.json` instead.
 
 The local command uses the same `accept_staged` operation that a trusted FTPS adapter calls. It runs under the local operator's OS account against the test data that `konae dev` prepares. The adapter resolves the current Deployment, authenticates its credential, binds that credential to one app and declared source, and then passes the completed staged file, normalized relative path and optional delivery key. The operation rechecks the current Deployment and pinned source declaration after it acquires the app write lock.
 
@@ -53,4 +53,4 @@ Each version is a durable intake event. Consumer jobs store the version metadata
 
 The `file-intake` module registers its reserved app tables and its blob inventory. Package export includes the database records and private blob bytes through the existing database and files components. The inventory counts those bytes with Files under the same app quota, even when the Files module is off. Import restores the references and wakes pending jobs. Kernel startup also recovers leased jobs and wakes each served app.
 
-The FTPS listener and credential binding belong to the separate adapter. File intake defines no transport or network listener.
+The legacy FTPS adapter can bind installation credentials to a published File intake source. New FTPS destinations use `app/ftps.json` and do not require the `file-intake` module. Read [Receive files over FTPS](./ftps.md) for both paths. File intake itself defines no transport or network listener.

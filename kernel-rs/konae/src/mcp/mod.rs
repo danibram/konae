@@ -2185,6 +2185,9 @@ mod tests {
         let guide = admin_call(&state, &publisher, "owner:o", "platform_guide", json!({"topic":"pieces"})).await.unwrap();
         let setup = &guide["moduleSetup"];
         assert!(setup["ftps"]["operator"].as_str().unwrap().contains("ftps.json"));
+        assert!(setup["ftps"]["declare"].as_str().unwrap().contains("kind device"));
+        assert!(setup["ftps"]["credentials"].as_str().unwrap().contains("ftps_device_rotate"));
+        assert!(setup["ftps"]["portable"].as_str().unwrap().contains("konae pull and export"));
         for module in ["documents", "mcp", "file-intake"] {
             let expected = after["modules"][module]["state"].clone();
             let args = json!({"projectId":"app_modules", "module":module, "on":true, "expected":expected});

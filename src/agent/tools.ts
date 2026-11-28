@@ -34,7 +34,7 @@ const references: Record<string, string> = {
   "/reference/ftps.md": ftpsGuide,
   "/reference/mcp-app-tools.md": appMcpGuide,
 };
-const jsonDeclarations = ["actions.json", "functions.json", "crons.json", "file-intake.json"];
+const jsonDeclarations = ["actions.json", "functions.json", "crons.json", "file-intake.json", "ftps.json"];
 const gateFiles = ["schema.sql", ...jsonDeclarations];
 const gatePaths = gateFiles.map((file) => `/workspace/${file}`).join(", ");
 

@@ -332,7 +332,7 @@ describe("validate_capsule", () => {
       ["documents", "/_konae/documents/<issue-key>"],
       ["mcp-app-tools", "mcp-app-clients.json"],
       ["file-intake", "app/file-intake.json"],
-      ["ftps", "kernel ftps status"],
+      ["ftps", "ftps_device_create"],
     ]) {
       const reference = await call(tools, "read", { path: `/reference/${guide}.md` });
       expect(textOf(reference)).toContain(marker);
@@ -342,6 +342,18 @@ describe("validate_capsule", () => {
       content: JSON.stringify({ version: 1, sources: [{ id: "device", version: 1 }], consumers: [] }),
     });
     expect(textOf(written)).toContain("Call validate_capsule now.");
+  });
+
+  test("reads and writes ftps.json through the editor tools and prompts for validation", async () => {
+    const { tools } = setup({});
+    const written = await call(tools, "write", {
+      path: "/workspace/ftps.json",
+      content: JSON.stringify({ version: 1, destinations: { meters: { kind: "device", folder: "readings" } } }),
+    });
+    expect(textOf(written)).toContain("Call validate_capsule now.");
+    const read = await call(tools, "read", { path: "/workspace/ftps.json" });
+    expect(JSON.parse(textOf(read))).toEqual({ version: 1, destinations: { meters: { kind: "device", folder: "readings" } } });
+    expect(tool(tools, "write").description).toContain("ftps.json");
   });
 
   test("creates, edits, reads back and validates a cron through the editor tools", async () => {

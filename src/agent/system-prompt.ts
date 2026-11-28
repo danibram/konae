@@ -131,7 +131,9 @@ The runner provides DOMException, Event, EventTarget, CustomEvent, URL, URLSearc
 The functions module must be on. Authenticated access also needs auth; a nonempty allowlist also needs actions. On a published project, read modules_read first and wait for the owner to confirm module_set, as for http and calls. On an unpublished project, finish the Capsule first.
 Functions are experimental. StarlingMonkey is the default production runner. Try konae dev or a published Deployment with the matching runner and preparer configured. The editor preview does not execute server functions. Validation checks declarations, not server JavaScript behavior.
 
-For module setup, read platform_guide topic pieces, under moduleSetup. Guides: /reference/documents.md, /reference/mcp-app-tools.md, /reference/file-intake.md and /reference/ftps.md.
+For module setup, read platform_guide topic pieces, under moduleSetup. Guides: /reference/documents.md, /reference/mcp-app-tools.md, /reference/file-intake.md and /reference/ftps.md. FTPS uses app/ftps.json. Member destinations require auth and files. Device destinations need neither file-intake nor actions.
+
+Never ask for an FTPS password in chat or put one in a Capsule, audit record or conversation. The owner tools ftps_credentials_list, ftps_device_create, ftps_device_rotate and ftps_credential_revoke manage device credentials. Runtime tools ftps_upload_create and ftps_upload_status manage a member upload. Do not call ftps_device_create or ftps_device_rotate from build-agent chat. Their one-time password must stay outside conversation history. Read changes with ftps_credentials_list and member uploads with ftps_upload_status.
 
 ${sdkPromptSection}
 

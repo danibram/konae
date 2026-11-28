@@ -21,7 +21,7 @@ This is the table the `pieces` topic of `platform_guide` returns, and the one in
 | Issue a private PDF | Documents, an `issue` mutation and a named download query | A public Files upload |
 | Give an external MCP client read access to app rows | App MCP and an authenticated query with an `mcp` declaration | Owner MCP credentials |
 | Accept file versions from a device or test fixture | File intake with a declared source and optional Actions consumer | A browser Files upload |
-| Receive device uploads over FTPS | The installation's FTPS listener bound to a published File intake source | An app module switch for the listener |
+| Receive files over FTPS | `app/ftps.json` destinations and the installation's FTPS listener | A File intake source for the new device path |
 | Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` with `module_set` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
@@ -43,7 +43,7 @@ The app folder is the app: `konae.json`, `app/`, `dist/` and `data/` with its da
 - `crons.json` and scheduled Function access are on [Server functions](./functions.md#run-a-function-on-a-cron-schedule).
 - Signup Policy, invitations and roles kept by the app are on [Accounts and access](./accounts-and-access.md).
 - [Manage app modules](./guides/manage-modules.md) covers the editor, the owner MCP and the first publish.
-- [Documents](./documents.md), [App MCP tools](./mcp-app-tools.md), and [File intake](./file-intake.md) describe the app declarations and their verification steps. [FTPS](./ftps.md) covers the installation listener.
+- [Documents](./documents.md), [App MCP tools](./mcp-app-tools.md), and [File intake](./file-intake.md) describe their app declarations and verification steps. [FTPS](./ftps.md) covers app destinations, credentials and the installation listener.
 - Export and import are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) guide.
 - `miniapp.files` and the `files.fileAccess` module option are in the [upload files](./guides/upload-files.md) guide.
 

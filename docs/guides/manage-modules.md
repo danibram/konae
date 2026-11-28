@@ -24,6 +24,16 @@ The module tab and `modules_read` show the canonical address currently in use, w
 
 The editor preview writes no canonical, card, `robots.txt` or sitemap. `konae dev` writes them using the local host as the address. Check search listing on `konae dev` or a published Deployment.
 
+## Receive files over FTPS
+
+The installation operator configures the FTPS listener and TLS files in `$KONAE_DATA_DIR/ftps.json`. The app declares destinations in `app/ftps.json`. The listener is not an app module, so there is no FTPS switch to turn on.
+
+Use a `member` destination when a signed-in app user uploads a file. It requires `auth` and `files`. Each credential expires after 10 minutes and accepts one confirmed upload. The resulting Files entry stays private to its owner, including when `files.fileAccess` is `app-users`.
+
+Use a `device` destination for a team or device. An owner with `manage_users` issues, rotates and revokes its permanent credential through the FTPS credential tools. Each credential names one destination and accepts multiple uploads. The Kernel records those uploads as durable Intake data. This path does not require the app's `file-intake` or `actions` modules.
+
+App declarations travel with the folder through `konae pull` and export. Listener settings, TLS files and credential hashes stay with the installation. Rotating a device credential takes effect on the running listener and does not require publish. Read [Receive files over FTPS](../ftps.md) for the declaration, the credential tools and the operator setup.
+
 ## Before the first publish
 
 For a local app or a first CLI publish, set each required module's `on` field under `modules` in `konae.json`.

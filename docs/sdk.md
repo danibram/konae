@@ -700,6 +700,6 @@ Accepts immutable file versions from declared sources and queues declared app co
 
 Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
-- Read docs/file-intake.md to rehearse acceptance and docs/ftps.md to bind a receiver.
+- Read docs/file-intake.md for legacy intake acceptance and docs/ftps.md for FTPS destinations and listener setup.
 
 Declared with `sources` in `file-intake.json`. Declare the sources the app accepts and optional SQL consumers. Consumers receive version metadata.

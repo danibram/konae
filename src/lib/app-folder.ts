@@ -266,7 +266,9 @@ For local runs or a first CLI publish, turn app modules on under \`modules\` in 
 
 - Documents needs \`actions\` and \`auth\`. Declare an \`issue\` mutation and a named download query in \`app/actions.json\`. Verify the PDF with the app account that may read it.
 - App MCP needs \`actions\` and \`auth\`. Declare \`mcp.description\` on an authenticated query in \`app/actions.json\`. The operator registers clients in \`mcp-app-clients.json\` in the Kernel data directory.
-- File intake needs \`actions\`. Declare sources and SQL consumers in \`app/file-intake.json\`. Verify a source with \`konae test intake <source> --path <path> --file <file>\`. The operator binds FTPS credentials to a published source in \`ftps.json\` in the Kernel data directory.
+- File intake needs \`actions\`. Declare sources and SQL consumers in \`app/file-intake.json\`. Verify a source with \`konae test intake <source> --path <path> --file <file>\`. The legacy FTPS path binds credentials to a published source in \`$KONAE_DATA_DIR/ftps.json\`.
+- FTPS destinations live in \`app/ftps.json\`; they do not use a module switch. Member destinations need \`auth\` and \`files\`, and their Files uploads stay owner-only. Device destinations accept durable Intake uploads without \`file-intake\` or \`actions\`. The operator configures the listener and TLS in \`$KONAE_DATA_DIR/ftps.json\`. Existing credentials bound to File intake remain a legacy path.
+- Never ask for an FTPS password in chat or write one into app files. Device credentials belong to the owner and bind to one destination. Rotate or revoke them with the FTPS credential tools.
 
 For the full setup and verification steps, read \`platform_guide\` topic \`pieces\`, under \`moduleSetup\`.
 

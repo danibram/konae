@@ -80,7 +80,7 @@ The defaults suit one machine. Before another machine can reach the installation
 ## Configure Documents, FTPS and App MCP
 
 - [Documents](./documents.md#renderer-setup-and-limits) uses the Typst version bundled in the images. Native Kernels can set `KONAE_DOCUMENTS_TYPST_BIN` to the executable path.
-- [FTPS](./ftps.md) reads `ftps.json` from `KONAE_DATA_DIR` at startup. Bind each credential to a published File intake source. The listener needs its own certificate, control port and passive ports.
+- [FTPS](./ftps.md) reads listener and TLS settings from `$KONAE_DATA_DIR/ftps.json`. The operator exposes the control port and full passive range. App destinations live in `app/ftps.json`; destination and credential changes take effect on the running listener. Existing credentials bound to File intake remain supported as a legacy path.
 - [App MCP](./mcp-app-tools.md#connect-an-external-client) reads public client registrations from `mcp-app-clients.json` in `KONAE_DATA_DIR`. Each app user signs in and grants specific Action tools.
 
 ## Function workers
