@@ -24,6 +24,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod credentials;
+
 use crate::{AppState, Deployment};
 
 const SETTINGS_FILE: &str = "ftps.json";
