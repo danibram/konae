@@ -39,6 +39,10 @@ struct Settings {
     passive_ports: [u16; 2],
     #[serde(default)]
     passive_host: Option<String>,
+    #[serde(default)]
+    advertised_host: Option<String>,
+    #[serde(default)]
+    advertised_port: Option<u16>,
     certificate: PathBuf,
     private_key: PathBuf,
     #[serde(default = "default_max_upload_bytes")]
@@ -61,6 +65,8 @@ impl fmt::Debug for Settings {
             .field("bind", &self.bind)
             .field("passive_ports", &self.passive_ports)
             .field("passive_host", &self.passive_host)
+            .field("advertised_host", &self.advertised_host)
+            .field("advertised_port", &self.advertised_port)
             .field("certificate", &self.certificate)
             .field("private_key", &"[redacted]")
             .field("max_upload_bytes", &self.max_upload_bytes)
@@ -582,6 +588,17 @@ fn validate(settings: &Settings) -> Result<()> {
         !settings.bind.is_empty(),
         "FTPS bind address cannot be empty."
     );
+    ensure!(
+        settings
+            .advertised_host
+            .as_deref()
+            .is_none_or(|host| !host.trim().is_empty()),
+        "FTPS advertisedHost cannot be empty."
+    );
+    ensure!(
+        settings.advertised_port.is_none_or(|port| port > 0),
+        "FTPS advertisedPort must be a non-zero port."
+    );
     let ports = settings.passive_ports;
     ensure!(
         ports[0] > 0 && ports[0] <= ports[1],
@@ -704,6 +721,8 @@ pub fn configured_status(data_root: &Path) -> Result<serde_json::Value> {
         "enabled": true,
         "bind": settings.bind,
         "passivePorts": settings.passive_ports,
+        "advertisedHost": settings.advertised_host,
+        "advertisedPort": settings.advertised_port,
         "credentials": settings.credentials.len(),
         "maxUploadBytes": settings.max_upload_bytes,
     }))
@@ -728,6 +747,8 @@ mod tests {
             bind: "127.0.0.1:2121".into(),
             passive_ports: [31000, 31010],
             passive_host: None,
+            advertised_host: None,
+            advertised_port: None,
             certificate: "cert.pem".into(),
             private_key: "secret-key.pem".into(),
             max_upload_bytes: 100,
@@ -740,5 +761,31 @@ mod tests {
         };
         assert!(!format!("{settings:?}").contains("password-secret"));
         assert!(!format!("{settings:?}").contains("secret-key.pem"));
+    }
+
+    #[test]
+    fn legacy_settings_allow_optional_advertised_address() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "bind": "127.0.0.1:2121",
+            "passivePorts": [31000, 31010],
+            "certificate": "cert.pem",
+            "privateKey": "key.pem",
+            "credentials": [{
+                "username": "meter",
+                "password": "secret",
+                "appId": "app_meter",
+                "sourceId": "meter-source"
+            }]
+        }))
+        .unwrap();
+        validate(&settings).unwrap();
+        assert_eq!(settings.advertised_host, None);
+        assert_eq!(settings.advertised_port, None);
+
+        let invalid = Settings {
+            advertised_host: Some("  ".into()),
+            ..settings
+        };
+        assert!(validate(&invalid).is_err());
     }
 }
