@@ -502,6 +502,7 @@ pub async fn start(state: &AppState) -> Result<Option<Runtime>> {
         )
     })?;
     let address = listener.local_addr()?;
+    let (advertised_host, advertised_port) = advertised_endpoint(&settings, address);
     let shutdown = CancellationToken::new();
     let signal = shutdown.clone();
     let backend = Arc::new(BackendState {
@@ -511,7 +512,9 @@ pub async fn start(state: &AppState) -> Result<Option<Runtime>> {
         max_upload_bytes: settings.max_upload_bytes,
     });
     tokio::spawn(async move {
-        eprintln!("FTPS listener is accepting explicit TLS connections at {address}.");
+        eprintln!(
+            "FTPS listener is accepting explicit TLS connections at {address}, advertised as {advertised_host}:{advertised_port}."
+        );
         let sessions_limit = Arc::new(Semaphore::new(MAX_SESSIONS));
         let mut sessions = JoinSet::new();
         loop {
