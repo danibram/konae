@@ -227,6 +227,95 @@ pub async fn accept_staged(
     relative_path: &str,
     delivery_key: Option<&str>,
 ) -> Result<AcceptOutcome> {
+    accept(
+        state,
+        deployment,
+        IntakeSource::Declared(source_id),
+        staged_bytes,
+        relative_path,
+        delivery_key,
+        || Ok(()),
+    )
+    .await
+}
+
+pub async fn accept_ftps_staged(
+    state: &AppState,
+    deployment: &Deployment,
+    destination: &str,
+    staged_bytes: &Path,
+    relative_path: &str,
+    upload_id: &str,
+    authorize: impl FnOnce() -> Result<()> + Send,
+) -> Result<AcceptOutcome> {
+    accept(
+        state,
+        deployment,
+        IntakeSource::Ftps(destination),
+        staged_bytes,
+        relative_path,
+        Some(upload_id),
+        authorize,
+    )
+    .await
+}
+
+enum IntakeSource<'a> {
+    Declared(&'a str),
+    Ftps(&'a str),
+}
+
+impl IntakeSource<'_> {
+    fn resolve(
+        &self,
+        admitted: &Deployment,
+        active: &Deployment,
+    ) -> Result<(Source, Vec<Consumer>)> {
+        match self {
+            Self::Declared(id) => {
+                ensure!(
+                    crate::modules::is_on(&active.modules, "file-intake"),
+                    "Turn on the file-intake module before accepting files."
+                );
+                let declaration = declaration(active)?;
+                let source = declaration
+                    .sources
+                    .into_iter()
+                    .find(|source| source.id == *id)
+                    .with_context(|| {
+                        format!("App {} has no declared file intake source {id}.", active.id)
+                    })?;
+                Ok((source, declaration.consumers))
+            }
+            Self::Ftps(id) => {
+                let destination = &active.manifest["ftps"]["destinations"][*id];
+                ensure!(
+                    destination["kind"] == "device"
+                        && destination == &admitted.manifest["ftps"]["destinations"][*id],
+                    "The published FTPS destination changed."
+                );
+                Ok((
+                    Source {
+                        id: format!("ftps:{id}"),
+                        version: 1,
+                        replay: String::new(),
+                    },
+                    Vec::new(),
+                ))
+            }
+        }
+    }
+}
+
+async fn accept(
+    state: &AppState,
+    deployment: &Deployment,
+    intake_source: IntakeSource<'_>,
+    staged_bytes: &Path,
+    relative_path: &str,
+    delivery_key: Option<&str>,
+    authorize: impl FnOnce() -> Result<()> + Send,
+) -> Result<AcceptOutcome> {
     let path = normalize_relative_path(relative_path)?;
     let metadata = tokio::fs::metadata(staged_bytes)
         .await
@@ -241,12 +330,16 @@ pub async fn accept_staged(
     let staging = state.data_root.join("transfers");
     tokio::fs::create_dir_all(&staging).await?;
     let frozen_path = staging.join(format!(".intake-{}", uuid::Uuid::new_v4()));
-    let mut target = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&frozen_path)
-        .await?;
-    let _frozen = StagedInput(frozen_path.clone());
+    let open_path = frozen_path.clone();
+    let (_frozen, file) = tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&open_path)?;
+        Ok::<_, std::io::Error>((StagedInput(open_path), file))
+    })
+    .await??;
+    let mut target = tokio::fs::File::from_std(file);
     let mut source_file = tokio::fs::File::open(staged_bytes)
         .await?
         .take(metadata.len().saturating_add(1));
@@ -278,21 +371,8 @@ pub async fn accept_staged(
         })
         .cloned()
         .context("File intake caller did not resolve the current app Deployment.")?;
-    ensure!(
-        crate::modules::is_on(&active.modules, "file-intake"),
-        "Turn on the file-intake module before accepting files."
-    );
-    let declaration = declaration(&active)?;
-    let source = declaration
-        .sources
-        .iter()
-        .find(|source| source.id == source_id)
-        .with_context(|| {
-            format!(
-                "App {} has no declared file intake source {source_id}.",
-                deployment.id
-            )
-        })?;
+    let (source, consumers) = intake_source.resolve(deployment, &active)?;
+    let source_id = source.id.as_str();
     if let Some(key) = delivery_key {
         ensure!(
             !key.is_empty() && key.len() <= 512 && !key.bytes().any(|byte| byte.is_ascii_control()),
@@ -310,6 +390,7 @@ pub async fn accept_staged(
             params![source_id, key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
         if let Some((version_id, old_digest, old_path)) = previous {
+            authorize()?;
             ensure!(
                 old_digest == digest && old_path == path,
                 "File intake delivery key was reused for different bytes or a different path."
@@ -326,6 +407,7 @@ pub async fn accept_staged(
         ).optional()?;
         if let Some((version_id, old_digest)) = previous {
             if old_digest == digest {
+                authorize()?;
                 return Ok(AcceptOutcome {
                     version_id,
                     created: false,
@@ -343,38 +425,39 @@ pub async fn accept_staged(
         "File intake exceeds the app's {} byte file quota.",
         state.files.limits.quota_bytes
     );
-    let consumers = declaration
-        .consumers
-        .iter()
+    let consumers = consumers
+        .into_iter()
         .filter(|consumer| consumer.source == source_id)
         .collect::<Vec<_>>();
-    let pending: usize = connection.query_row(
-        "SELECT count(*) FROM __konae_intake_jobs WHERE state IN ('pending','leased')",
-        [],
-        |row| row.get(0),
-    )?;
-    ensure!(
-        pending.saturating_add(consumers.len()) <= MAX_PENDING_JOBS_PER_APP,
-        "File intake already has 1000 pending consumer jobs for this app."
-    );
-    let program = serde_json::from_str::<Value>(&active.actions)?;
     let mut jobs = Vec::with_capacity(consumers.len());
-    for consumer in consumers {
-        let input = serde_json::to_string(&consumer.input)?;
-        let action = program
-            .get("actions")
-            .and_then(Value::as_object)
-            .and_then(|actions| actions.get(&consumer.action))
-            .with_context(|| {
-                format!(
-                    "File intake consumer {} names missing action {}.",
-                    consumer.id, consumer.action
-                )
-            })?;
-        let action_json = serde_json::to_string(action)?;
-        let parsed = serde_json::from_str(&action_json)?;
-        validate_consumer_action(&consumer.id, &consumer.action, &parsed)?;
-        jobs.push((consumer, input, action_json));
+    if !consumers.is_empty() {
+        let pending: usize = connection.query_row(
+            "SELECT count(*) FROM __konae_intake_jobs WHERE state IN ('pending','leased')",
+            [],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            pending.saturating_add(consumers.len()) <= MAX_PENDING_JOBS_PER_APP,
+            "File intake already has 1000 pending consumer jobs for this app."
+        );
+        let program = serde_json::from_str::<Value>(&active.actions)?;
+        for consumer in consumers {
+            let input = serde_json::to_string(&consumer.input)?;
+            let action = program
+                .get("actions")
+                .and_then(Value::as_object)
+                .and_then(|actions| actions.get(&consumer.action))
+                .with_context(|| {
+                    format!(
+                        "File intake consumer {} names missing action {}.",
+                        consumer.id, consumer.action
+                    )
+                })?;
+            let action_json = serde_json::to_string(action)?;
+            let parsed = serde_json::from_str(&action_json)?;
+            validate_consumer_action(&consumer.id, &consumer.action, &parsed)?;
+            jobs.push((consumer, input, action_json));
+        }
     }
     let version_id = uuid::Uuid::new_v4().to_string();
     let store = &state.files.store;
@@ -382,7 +465,9 @@ pub async fn accept_staged(
         .put(&deployment.id, &version_id, &frozen_path)
         .await
         .context("The intake blob could not be staged.")?;
-    let committed = (|| -> rusqlite::Result<()> {
+    let has_jobs = !jobs.is_empty();
+    let committed = (|| -> Result<()> {
+        authorize()?;
         let transaction = connection.unchecked_transaction()?;
         let now = crate::now_ms() as i64;
         transaction.execute(
@@ -405,7 +490,8 @@ pub async fn accept_staged(
                 params![uuid::Uuid::new_v4().to_string(), version_id, consumer.id, consumer.action, input, action, now],
             )?;
         }
-        transaction.commit()
+        transaction.commit()?;
+        Ok(())
     })();
     if let Err(error) = committed {
         if let Err(failure) = store.delete(&deployment.id, &version_id).await {
@@ -415,13 +501,15 @@ pub async fn accept_staged(
         }
         return Err(error).context("The intake version could not be committed.");
     }
-    state
-        .dispatcher
-        .wake(
-            crate::execution::WorkResource::FileIntake,
-            deployment.id.clone(),
-        )
-        .await;
+    if has_jobs {
+        state
+            .dispatcher
+            .wake(
+                crate::execution::WorkResource::FileIntake,
+                deployment.id.clone(),
+            )
+            .await;
+    }
     Ok(AcceptOutcome {
         version_id,
         created: true,

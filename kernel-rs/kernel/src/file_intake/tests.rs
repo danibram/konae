@@ -48,6 +48,79 @@ fn path_normalization_refuses_escape_and_empty_parts() {
 }
 
 #[tokio::test]
+async fn a_device_destination_accepts_distinct_deliveries_without_actions_or_intake() {
+    let root = std::env::temp_dir().join(format!("konae-device-{}", uuid::Uuid::new_v4()));
+    let (state, _) = crate::tests::login_test_state(&root, "public").await;
+    let mut deployment = state
+        .deployments
+        .read()
+        .await
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    deployment.modules.remove("file-intake");
+    deployment.modules.remove("actions");
+    deployment.actions.clear();
+    deployment.manifest["ftps"] = serde_json::json!({
+        "version": 1,
+        "destinations": {"meter": {"kind": "device", "folder": "incoming"}}
+    });
+    state
+        .deployments
+        .write()
+        .await
+        .insert(deployment.hostname.clone(), deployment.clone());
+    let staged = root.join("test.csv");
+    tokio::fs::write(&staged, b"meter,102").await.unwrap();
+
+    let accept = |upload_id, authorized| {
+        super::accept_ftps_staged(
+            &state,
+            &deployment,
+            "meter",
+            &staged,
+            "incoming/test.csv",
+            upload_id,
+            move || {
+                anyhow::ensure!(authorized, "The credential was revoked.");
+                Ok(())
+            },
+        )
+    };
+    let denied = accept("revoked", false).await.unwrap_err();
+    assert!(format!("{denied:#}").contains("The credential was revoked."));
+    assert!(
+        crate::modules::blob_references(&root, &deployment.id)
+            .unwrap()
+            .is_empty()
+    );
+
+    let first = accept("first", true).await.unwrap();
+    let replay = accept("first", true).await.unwrap();
+    let second = accept("second", true).await.unwrap();
+    assert!(first.created && second.created);
+    assert!(!replay.created);
+    assert_eq!(first.version_id, replay.version_id);
+    assert_ne!(first.version_id, second.version_id);
+    assert_eq!(
+        crate::modules::blob_references(&root, &deployment.id)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    {
+        let mut deployments = state.deployments.write().await;
+        let active = deployments.get_mut(&deployment.hostname).unwrap();
+        active.manifest["ftps"]["destinations"]["meter"]["folder"] = serde_json::json!("elsewhere");
+    }
+    let stale = accept("stale", true).await.unwrap_err();
+    assert_eq!(stale.to_string(), "The published FTPS destination changed.");
+    tokio::fs::remove_dir_all(&root).await.unwrap();
+}
+
+#[tokio::test]
 async fn accept_replays_replacements_and_commits_one_action_effect_per_version() {
     use rusqlite::Connection;
     use std::io::Write;

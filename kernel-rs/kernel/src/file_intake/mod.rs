@@ -2,7 +2,9 @@ mod accept;
 mod worker;
 
 pub use accept::DECLARATION_FILE;
-pub use accept::{AcceptOutcome, accept_staged, validate_consumers, validate_declaration};
+pub use accept::{
+    AcceptOutcome, accept_ftps_staged, accept_staged, validate_consumers, validate_declaration,
+};
 
 pub(crate) fn pin_declaration(
     manifest: &mut serde_json::Value,
